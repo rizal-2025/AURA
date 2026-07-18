@@ -38,9 +38,8 @@ User:
         response = await provider.chat(prompt)
 
         try:
-            return json.loads(response)
+            data = json.loads(response)
+            return data.get("intent", "general")
 
         except Exception:
-            return {
-                "intent": "general"
-            }
+            return "general"

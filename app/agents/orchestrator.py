@@ -1,0 +1,87 @@
+from app.agents.workflow import AgentWorkflow
+from app.brain.classifier import IntentClassifier
+from app.brain.memory_manager import MemoryManager
+from app.brain.planner import Planner
+from app.core.logger import logger
+from app.memory.session import memory
+from app.services.ai.factory import get_ai_provider
+
+
+class AgentOrchestrator:
+
+    def __init__(self):
+        self.ai = get_ai_provider()
+        self.intent_classifier = IntentClassifier()
+        self.planner = Planner()
+        self.memory_manager = MemoryManager()
+        self.workflow = AgentWorkflow(memory_manager=self.memory_manager)
+
+    async def handle(
+        self,
+        session_id: str,
+        message: str,
+        db,
+    ):
+
+        session = self.memory_manager.get_session(session_id)
+        session_payload = dict(session)
+        session_payload["session_id"] = session_id
+
+        logger.info(f"SESSION ID: {session_id}")
+        logger.info(f"SESSION: {session}")
+
+        if session_payload.get("intent"):
+            intent = session_payload["intent"]
+            confidence = session_payload.get("intent_confidence", 0.0)
+        else:
+            intent_result = await self.intent_classifier.classify(message)
+            intent = intent_result.get("intent", "general")
+            confidence = intent_result.get("confidence", 0.0)
+
+            self.memory_manager.update_session(
+                session_id,
+                {
+                    "intent": intent,
+                    "intent_confidence": confidence,
+                }
+            )
+
+        logger.info(f"MEMORY: {self.memory_manager.get_session(session_id)}")
+
+        if intent in {"reservation", "check_reservation", "cancel_reservation", "greeting", "general_question"}:
+            session = self.memory_manager.get_session(session_id)
+            session_payload = dict(session)
+            session_payload["session_id"] = session_id
+            plan = await self.planner.plan(
+                intent_result={
+                    "intent": intent,
+                    "confidence": confidence,
+                },
+                conversation_state=session_payload,
+            )
+
+            workflow_result = await self.workflow.execute(
+                plan,
+                session_payload,
+                message,
+                session_id=session_id,
+            )
+
+            response_text = workflow_result.get("response", "")
+
+            if workflow_result.get("status") == "complete":
+                self.memory_manager.update_session(
+                    session_id,
+                    {"completed": True},
+                )
+            elif workflow_result.get("status") == "awaiting_input":
+                self.memory_manager.update_session(
+                    session_id,
+                    {
+                        workflow_result.get("field"): None,
+                    },
+                )
+
+            return response_text
+
+        return await self.ai.chat(message)

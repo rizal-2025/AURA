@@ -1,42 +1,26 @@
 from fastapi import APIRouter
-
 from app.schemas.chat import ChatRequest, ChatResponse
-from app.services.ai.factory import get_ai_provider
-from app.services.intent.classifier import IntentClassifier
-from app.services.reservation.extractor import ReservationExtractor
+from app.agents.orchestrator import AgentOrchestrator
+from fastapi import Depends
+from sqlalchemy.orm import Session
+from app.db.database import get_db
 
-router = APIRouter(
-    prefix="/chat",
-    tags=["Chat"]
-)
+router = APIRouter()
 
-provider = get_ai_provider()
+agent = AgentOrchestrator()
 
 
-@router.post(
-    "",
-    response_model=ChatResponse
-)
-async def chat(request: ChatRequest):
+@router.post("/chat", response_model=ChatResponse)
 
-    reply = await provider.chat(request.message)
+async def chat(
+    request: ChatRequest,
+    db: Session = Depends(get_db),
+):
 
-    return ChatResponse(
-        reply=reply
+    reply = await agent.handle(
+        session_id=request.session_id,
+        message=request.message,
+        db=db,
     )
 
-@router.post("/intent")
-async def detect_intent(request: ChatRequest):
-
-    classifier = IntentClassifier()
-
-    result = await classifier.classify(request.message)
-
-    return result
-
-@router.post("/reservation")
-async def reservation(request: ChatRequest):
-
-    extractor = ReservationExtractor()
-
-    return await extractor.extract(request.message)
+    return ChatResponse(reply=reply)

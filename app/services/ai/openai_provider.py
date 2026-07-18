@@ -8,13 +8,13 @@ class OpenAIProvider(AIProvider):
 
     def __init__(self):
         self.client = AsyncOpenAI(
-            api_key=settings.OPENAI_API_KEY
+            api_key=settings.OPENAI_API_KEY or "dummy-key"
         )
 
     async def chat(self, message: str) -> str:
 
         response = await self.client.responses.create(
-            model="gpt-5",
+            model=settings.OPENAI_MODEL,
             input=message
         )
 
