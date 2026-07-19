@@ -16,6 +16,7 @@ class MemoryManager:
                 "date": None,
                 "time": None,
                 "completed": False,
+                "editing_field": None,
             }
         return self._sessions[session_id]
 

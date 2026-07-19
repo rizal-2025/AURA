@@ -1,3 +1,4 @@
+import re
 import uuid
 from typing import Any
 
@@ -12,8 +13,34 @@ from app.services.reservation.service import ReservationService
 from app.utils.datetime_parser import DatetimeParser
 
 
+CONFIRM = "CONFIRM"
+REJECT = "REJECT"
+EDIT_FIELD = "EDIT_FIELD"
+
+
 class ReservationAgent:
     """Handle reservation-related workflow steps."""
+
+    EDITABLE_FIELDS = ("name", "people", "date", "time")
+    POSITIVE_CONFIRMATION_ANSWERS = {
+        "ya",
+        "iya",
+        "yes",
+        "benar",
+        "betul",
+        "oke",
+        "ok",
+        "okay",
+    }
+    NEGATIVE_CONFIRMATION_ANSWERS = {
+        "tidak",
+        "bukan",
+        "salah",
+        "no",
+        "nope",
+        "nggak",
+        "gak",
+    }
 
     def __init__(self, memory_manager: MemoryManager | None = None):
         self.memory_manager = memory_manager or MemoryManager()
@@ -128,13 +155,27 @@ class ReservationAgent:
         }
 
     async def handle_confirmation(self, user_message: str, session_id: str) -> dict[str, Any]:
-        normalized = user_message.strip().lower()
         session = self.memory_manager.get_session(session_id)
+        editing_field = session.get("editing_field")
 
-        positive_answers = {"ya", "iya", "yes", "benar", "betul", "oke", "ok", "okay"}
-        negative_answers = {"tidak", "bukan", "salah", "no", "nope", "nggak", "gak"}
+        if editing_field in self.EDITABLE_FIELDS:
+            value = self._infer_value_for_field(editing_field, user_message)
+            if value is not None:
+                updated_session = self._apply_confirmation_edit(
+                    session_id,
+                    editing_field,
+                    value,
+                )
+                return self._confirmation_response(updated_session)
 
-        if normalized in positive_answers:
+            return {
+                "status": "awaiting_confirmation",
+                "response": self._question_for_edit_field(editing_field),
+            }
+
+        intent, field = self._detect_confirmation_intent(user_message)
+
+        if intent == CONFIRM:
             reservation_data = ReservationCreate(
                 name=session.get("name"),
                 people=session.get("people"),
@@ -153,6 +194,7 @@ class ReservationAgent:
                 "awaiting_confirmation": False,
                 "reservation_id": reservation_id,
             })
+            self.memory_manager.get_session(session_id)["editing_field"] = None
             return {
                 "status": "completed",
                 "response": (
@@ -162,18 +204,129 @@ class ReservationAgent:
                 ),
             }
 
-        if normalized in negative_answers:
+        if intent == REJECT:
             self.memory_manager.update_session(session_id, {
-                "awaiting_confirmation": False,
+                "awaiting_confirmation": True,
             })
+            self.memory_manager.get_session(session_id)["editing_field"] = None
             return {
                 "status": "rejected",
                 "response": "Silakan kirim data yang ingin diperbaiki. Field mana yang ingin diperbaiki?",
             }
 
+        if intent == EDIT_FIELD and field:
+            value = await self._extract_direct_edit_value(field, user_message)
+            if value is not None:
+                updated_session = self._apply_confirmation_edit(session_id, field, value)
+                return self._confirmation_response(updated_session)
+
+            self.memory_manager.update_session(session_id, {
+                "awaiting_confirmation": True,
+                "editing_field": field,
+            })
+            return {
+                "status": "awaiting_confirmation",
+                "response": self._question_for_edit_field(field),
+            }
+
         return {
             "status": "awaiting_confirmation",
             "response": self._confirmation_message(session),
+        }
+
+    def _detect_confirmation_intent(self, user_message: str) -> tuple[str | None, str | None]:
+        normalized = user_message.strip().lower()
+
+        if normalized in self.POSITIVE_CONFIRMATION_ANSWERS:
+            return CONFIRM, None
+
+        if normalized in self.NEGATIVE_CONFIRMATION_ANSWERS:
+            return REJECT, None
+
+        if not any(keyword in normalized for keyword in ("ubah", "ganti", "edit", "perbaiki", "koreksi")):
+            return None, None
+
+        return EDIT_FIELD, self._detect_edit_field(normalized)
+
+    def _detect_edit_field(self, user_message: str) -> str | None:
+        aliases = {
+            "name": ("atas nama", "nama", "name"),
+            "people": ("jumlah orang", "jumlah", "orang", "people"),
+            "date": ("tanggal", "hari", "date"),
+            "time": ("jam", "pukul", "waktu", "time"),
+        }
+
+        for field in self.EDITABLE_FIELDS:
+            if any(alias in user_message for alias in aliases[field]):
+                return field
+
+        return None
+
+    async def _extract_direct_edit_value(self, field_name: str, user_message: str) -> Any:
+        extracted = await self.entity_extractor.extract(user_message)
+        extracted_value = extracted.get(field_name)
+        if extracted_value is not None:
+            return self._normalize_edit_value(field_name, extracted_value)
+
+        if field_name == "name":
+            return self._extract_direct_name_value(user_message)
+
+        if field_name == "people":
+            match = re.search(r"(?:menjadi|jadi|ke)\s*(\d+)\b", user_message.lower())
+            if match:
+                return int(match.group(1))
+            return None
+
+        if field_name == "date":
+            parsed_date = DatetimeParser.parse_date(user_message)
+            if parsed_date:
+                return parsed_date
+
+            match = re.search(r"\b\d{4}-\d{2}-\d{2}\b", user_message)
+            return match.group(0) if match else None
+
+        if field_name == "time":
+            parsed_time = DatetimeParser.parse_time(user_message)
+            if parsed_time:
+                return parsed_time
+
+            match = re.search(r"\b([01]?\d|2[0-3]):([0-5]\d)\b", user_message)
+            return match.group(0) if match else None
+
+        return None
+
+    def _extract_direct_name_value(self, user_message: str) -> str | None:
+        patterns = (
+            r"(?:ubah|ganti|edit|perbaiki|koreksi)\s+(?:nama|atas nama)(?:\s+(?:menjadi|jadi|ke))?\s+(.+)$",
+            r"(?:nama|atas nama)\s+(?:menjadi|jadi|ke)\s+(.+)$",
+        )
+
+        for pattern in patterns:
+            match = re.search(pattern, user_message, re.IGNORECASE)
+            if match:
+                value = match.group(1).strip(" .,!?:;")
+                return value.title() if value else None
+
+        return None
+
+    def _normalize_edit_value(self, field_name: str, value: Any) -> Any:
+        if field_name == "date":
+            return DatetimeParser.parse_date(str(value)) or value
+        if field_name == "time":
+            return DatetimeParser.parse_time(str(value)) or value
+        return value
+
+    def _apply_confirmation_edit(self, session_id: str, field_name: str, value: Any) -> dict[str, Any]:
+        self.memory_manager.update_session(session_id, {field_name: value})
+        updated_session = self.memory_manager.get_session(session_id)
+        updated_session["editing_field"] = None
+        updated_session["awaiting_confirmation"] = True
+        return updated_session
+
+    def _confirmation_response(self, session_state: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "status": "awaiting_confirmation",
+            "response": self._confirmation_message(session_state),
         }
 
     def _infer_pending_field(self, session_state: dict[str, Any]) -> str | None:
@@ -188,7 +341,7 @@ class ReservationAgent:
         if field_name == "name":
             return text.title() if text else None
         if field_name == "people":
-            match = __import__("re").search(r"(\d+)", text)
+            match = re.search(r"(\d+)", text)
             return int(match.group(1)) if match else None
         if field_name == "date":
             return DatetimeParser.parse_date(text) or text
@@ -204,8 +357,17 @@ class ReservationAgent:
             f"Tanggal: {session_state.get('date', '-')}\n"
             f"Jam: {session_state.get('time', '-')}\n\n"
             "Apakah data ini sudah benar?\n"
-            "Balas: Ya / Tidak"
+            "Balas: Ya / Tidak, atau sebutkan field yang ingin diubah."
         )
+
+    def _question_for_edit_field(self, field_name: str) -> str:
+        questions = {
+            "name": "Baik, nama menjadi siapa?",
+            "people": "Baik, jumlah orang menjadi berapa?",
+            "date": "Baik, tanggal menjadi kapan?",
+            "time": "Baik, jam menjadi berapa?",
+        }
+        return questions.get(field_name, "Field mana yang ingin diubah?")
 
     def _question_for_field(self, field_name: str) -> str:
         questions = {

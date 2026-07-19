@@ -24,6 +24,8 @@ class TestMemoryManager(unittest.TestCase):
         self.assertIn("people", state)
         self.assertIn("date", state)
         self.assertIn("time", state)
+        self.assertIn("editing_field", state)
+        self.assertIsNone(state["editing_field"])
         self.assertEqual(state["completed"], False)
 
 

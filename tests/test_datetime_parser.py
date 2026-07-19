@@ -1,8 +1,19 @@
 import unittest
+from datetime import datetime
+from unittest.mock import patch
+
 from app.utils.datetime_parser import DatetimeParser
 
 
 class TestDatetimeParser(unittest.TestCase):
+    def setUp(self):
+        self.datetime_patcher = patch("app.utils.datetime_parser.datetime")
+        self.mock_datetime = self.datetime_patcher.start()
+        self.mock_datetime.today.return_value = datetime(2026, 7, 18)
+
+    def tearDown(self):
+        self.datetime_patcher.stop()
+
     def test_besok(self):
         self.assertEqual(DatetimeParser.parse_date("besok"), "2026-07-19")
 
