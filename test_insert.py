@@ -17,6 +17,7 @@ reservation = ReservationCreate(
 saved = repo.create(
     db=db,
     reservation=reservation,
+    customer_id="manual-test-session",
 )
 
 print(saved.id)

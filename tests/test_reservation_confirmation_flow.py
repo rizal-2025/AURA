@@ -38,13 +38,17 @@ class TestReservationConfirmationFlow(unittest.TestCase):
             agent.reservation_service,
             "create_reservation",
             return_value=MagicMock(),
-        ):
+        ) as create_reservation:
             result = asyncio.run(
                 agent.handle_confirmation("ya", "s1")
             )
 
         self.assertIn("Reservasi berhasil dibuat", result["response"])
         self.assertEqual(memory.get_session("s1")["completed"], True)
+        self.assertEqual(
+            create_reservation.call_args.kwargs["customer_id"],
+            "s1",
+        )
 
     def test_rejection_flow(self):
         memory = MemoryManager()
@@ -251,6 +255,10 @@ class TestReservationConfirmationFlow(unittest.TestCase):
         saved_data = create_reservation.call_args.args[1]
         session = memory.get_session("s-edit")
         self.assertEqual(saved_data.people, 7)
+        self.assertEqual(
+            create_reservation.call_args.kwargs["customer_id"],
+            "s-edit",
+        )
         self.assertEqual(result["status"], "completed")
         self.assertTrue(session["completed"])
         self.assertFalse(session["awaiting_confirmation"])
@@ -298,6 +306,10 @@ class TestReservationConfirmationFlow(unittest.TestCase):
         saved_data = create_reservation.call_args.args[1]
         session = memory.get_session(session_id)
         self.assertEqual(saved_data.people, 7)
+        self.assertEqual(
+            create_reservation.call_args.kwargs["customer_id"],
+            session_id,
+        )
         self.assertEqual(confirmed["status"], "completed")
         self.assertTrue(session["completed"])
         self.assertFalse(session["awaiting_confirmation"])

@@ -2,6 +2,31 @@
 
 Semua perubahan penting pada AURA dicatat di dokumen ini. Repository belum memiliki tag rilis, sehingga entri berikut mengikuti riwayat commit proyek.
 
+## 2026-07-20 - Reservation Customer Ownership (V1.4)
+
+### Added
+
+- Kolom nullable `customer_id` pada model reservasi untuk menyimpan identitas sementara dari `ChatRequest.session_id`.
+- Filter ownership pada daftar, pemilihan, update, dan pembatalan reservasi; ID milik pelanggan lain mendapat respons aman yang sama seperti ID tidak ditemukan.
+- Pembentukan reservasi percakapan menyimpan `session_id` sebagai `customer_id`; endpoint `POST /reservation/` menggunakan header wajib `X-Session-ID` untuk tujuan yang sama.
+- Skrip migrasi idempoten `migrations/add_customer_id_to_reservations.py` yang hanya menambahkan kolom bila belum ada.
+- Regression test untuk ownership saat create, isolasi dua session, filter Read, penolakan Update/Cancel lintas pelanggan, dan record legacy `NULL`.
+
+### Migration
+
+Jalankan sekali dari root project:
+
+```powershell
+.\.venv\Scripts\python.exe migrations\add_customer_id_to_reservations.py
+```
+
+Skrip memverifikasi tabel `reservations` sudah ada, lalu memakai `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`. Skrip tidak membuat ulang tabel, menghapus record, atau mem-backfill data lama.
+
+### Notes
+
+- Record lama tetap memiliki `customer_id = NULL` dan diperlakukan sebagai record legacy: tidak ditampilkan melalui `reservasi saya`, tetapi tidak dihapus.
+- `session_id` adalah identitas sementara untuk V1.4, bukan pengganti autentikasi pelanggan permanen.
+
 ## 2026-07-20 - Reservation Management (CANCEL)
 
 ### Added
@@ -13,7 +38,7 @@ Semua perubahan penting pada AURA dicatat di dokumen ini. Repository belum memil
 
 ### Notes
 
-- Daftar reservasi masih bersifat global karena schema belum memiliki `user_id` atau `session_id`.
+- Batas daftar global ini digantikan oleh filter ownership berbasis `customer_id` pada V1.4.
 - V1.3 tidak mengubah schema database, API `MemoryManager`, atau alur Create, Read, dan Update yang sudah ada.
 
 ## 2026-07-19 - Reservation Management (UPDATE)
@@ -40,7 +65,7 @@ Semua perubahan penting pada AURA dicatat di dokumen ini. Repository belum memil
 
 ### Notes
 
-- Tabel saat ini belum menyimpan identitas pemilik reservasi, sehingga V1.1 menampilkan lima reservasi terbaru secara global.
+- Mulai V1.4, daftar V1.1 difilter berdasarkan `customer_id` dari session aktif.
 
 ## 2026-07-18 - Complete Reservation V1 workflow
 

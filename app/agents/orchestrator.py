@@ -72,7 +72,7 @@ class AgentOrchestrator:
             return await self._cancel_reservation(db, session_id, message)
 
         if self._is_view_reservation_request(message, session_payload):
-            return await self._view_reservations(db)
+            return await self._view_reservations(db, session_id)
 
         if session_payload.get("intent"):
             intent = session_payload["intent"]
@@ -83,7 +83,7 @@ class AgentOrchestrator:
             confidence = intent_result.get("confidence", 0.0)
 
             if intent == "view_reservation":
-                return await self._view_reservations(db)
+                return await self._view_reservations(db, session_id)
 
             if intent == "update_reservation":
                 return await self._update_reservation(db, session_id, message)
@@ -184,8 +184,8 @@ class AgentOrchestrator:
         normalized_message = " ".join(message.lower().strip().split())
         return normalized_message in self.CANCEL_RESERVATION_PHRASES
 
-    async def _view_reservations(self, db) -> str:
-        result = await self.view_reservation_agent.run(db)
+    async def _view_reservations(self, db, session_id: str) -> str:
+        result = await self.view_reservation_agent.run(db, session_id)
         return result.get("response", "")
 
     async def _update_reservation(self, db, session_id: str, message: str) -> str:

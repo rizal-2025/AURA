@@ -24,6 +24,11 @@ class Reservation(Base):
 
     time: Mapped[str] = mapped_column(String(10))
 
+    customer_id: Mapped[str | None] = mapped_column(
+        String(255),
+        nullable=True,
+    )
+
     status: Mapped[str] = mapped_column(
         String(20),
         default="pending",

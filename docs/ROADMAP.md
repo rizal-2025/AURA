@@ -21,6 +21,7 @@ Dokumen ini merangkum status pengembangan berdasarkan baseline kode AURA saat in
 - Reservation Management (READ): intent `view_reservation` untuk menampilkan maksimal lima reservasi terbaru.
 - Reservation Management (UPDATE): intent `update_reservation` untuk mengubah nama, jumlah orang, tanggal, atau jam pada reservasi tersimpan.
 - Reservation Management (CANCEL): intent `cancel_reservation` untuk memilih salah satu dari lima reservasi terbaru, mengonfirmasi pembatalan, lalu mengubah status menjadi `cancelled` tanpa menghapus record.
+- Reservation Customer Ownership (V1.4): setiap reservasi baru menyimpan `customer_id` dari session sementara; Read, Update, dan Cancel terisolasi per pelanggan, sementara record legacy `NULL` tetap dipertahankan tetapi tidak diekspos.
 
 ### Fondasi pendukung
 
@@ -34,7 +35,7 @@ Dokumen ini merangkum status pengembangan berdasarkan baseline kode AURA saat in
 - Mengganti agent placeholder untuk cek reservasi, greeting, dan pertanyaan umum dengan perilaku yang benar-benar fungsional.
 - Menyatukan daftar intent pada classifier, planner, dan workflow; melengkapi handler khusus untuk menu, promo, FAQ, dan keluhan.
 - Menambahkan validasi bisnis untuk jumlah orang, format/tanggal/waktu reservasi, serta penanganan respons AI yang tidak valid.
-- Membuat sesi dan profil preferensi persisten serta mendukung `user_id` melalui API agar personalisasi dapat dipakai end-to-end.
+- Mengganti identitas session sementara dengan autentikasi dan identitas pelanggan persisten agar ownership dapat dipakai secara aman lintas perangkat dan instance.
 - Memperkuat reliabilitas provider AI dengan timeout, retry, dan error handling yang jelas.
 - Menambah pengujian end-to-end yang terisolasi, termasuk database uji dan tanggal/waktu yang deterministik.
 

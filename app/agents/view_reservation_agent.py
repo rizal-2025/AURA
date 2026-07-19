@@ -11,8 +11,16 @@ class ViewReservationAgent:
     def __init__(self, reservation_service: ReservationService | None = None):
         self.reservation_service = reservation_service or ReservationService()
 
-    async def run(self, db: Session) -> dict[str, Any]:
-        reservations = self.reservation_service.list_recent_reservations(db, limit=5)
+    async def run(
+        self,
+        db: Session,
+        session_id: str,
+    ) -> dict[str, Any]:
+        reservations = self.reservation_service.list_recent_reservations(
+            db,
+            customer_id=session_id,
+            limit=5,
+        )
         recent_reservations = reservations[:5]
 
         if not recent_reservations:

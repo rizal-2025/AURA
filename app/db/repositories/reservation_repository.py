@@ -11,10 +11,12 @@ class ReservationRepository:
     def list_recent(
         self,
         db: Session,
+        customer_id: str,
         limit: int = 5,
     ):
         return (
             db.query(Reservation)
+            .filter(Reservation.customer_id == customer_id)
             .order_by(Reservation.id.desc())
             .limit(limit)
             .all()
@@ -24,10 +26,12 @@ class ReservationRepository:
         self,
         db: Session,
         reservation_id: int,
+        customer_id: str,
     ):
         return (
             db.query(Reservation)
             .filter(Reservation.id == reservation_id)
+            .filter(Reservation.customer_id == customer_id)
             .first()
         )
 
@@ -37,11 +41,12 @@ class ReservationRepository:
         reservation_id: int,
         field_name: str,
         new_value,
+        customer_id: str,
     ):
         if field_name not in self.EDITABLE_FIELDS:
             raise ValueError(f"Field '{field_name}' cannot be updated.")
 
-        reservation = self.get_by_id(db, reservation_id)
+        reservation = self.get_by_id(db, reservation_id, customer_id)
         if reservation is None:
             return None
 
@@ -54,8 +59,9 @@ class ReservationRepository:
         self,
         db: Session,
         reservation_id: int,
+        customer_id: str,
     ):
-        reservation = self.get_by_id(db, reservation_id)
+        reservation = self.get_by_id(db, reservation_id, customer_id)
         if reservation is None or str(reservation.status).lower() == "cancelled":
             return None
 
@@ -68,13 +74,17 @@ class ReservationRepository:
         self,
         db: Session,
         reservation: ReservationCreate,
+        customer_id: str,
     ):
+        if not customer_id:
+            raise ValueError("customer_id is required when creating a reservation.")
 
         data = Reservation(
             name=reservation.name,
             people=reservation.people,
             date=reservation.date,
             time=reservation.time,
+            customer_id=customer_id,
         )
 
         db.add(data)

@@ -13,22 +13,29 @@ class ReservationService:
         self,
         db: Session,
         data: ReservationCreate,
+        customer_id: str,
     ):
-        return self.repository.create(db, data)
+        return self.repository.create(db, data, customer_id=customer_id)
 
     def list_recent_reservations(
         self,
         db: Session,
+        customer_id: str,
         limit: int = 5,
     ):
-        return self.repository.list_recent(db, limit=limit)
+        return self.repository.list_recent(
+            db,
+            customer_id=customer_id,
+            limit=limit,
+        )
 
     def get_reservation_by_id(
         self,
         db: Session,
         reservation_id: int,
+        customer_id: str,
     ):
-        return self.repository.get_by_id(db, reservation_id)
+        return self.repository.get_by_id(db, reservation_id, customer_id)
 
     def update_reservation_field(
         self,
@@ -36,17 +43,24 @@ class ReservationService:
         reservation_id: int,
         field_name: str,
         new_value,
+        customer_id: str,
     ):
         return self.repository.update_reservation_field(
             db,
             reservation_id,
             field_name,
             new_value,
+            customer_id,
         )
 
     def cancel_reservation(
         self,
         db: Session,
         reservation_id: int,
+        customer_id: str,
     ):
-        return self.repository.cancel_reservation(db, reservation_id)
+        return self.repository.cancel_reservation(
+            db,
+            reservation_id,
+            customer_id,
+        )

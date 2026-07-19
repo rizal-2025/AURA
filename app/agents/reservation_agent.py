@@ -184,7 +184,11 @@ class ReservationAgent:
             )
             db = SessionLocal()
             try:
-                reservation = self.reservation_service.create_reservation(db, reservation_data)
+                reservation = self.reservation_service.create_reservation(
+                    db,
+                    reservation_data,
+                    customer_id=session_id,
+                )
             finally:
                 db.close()
 

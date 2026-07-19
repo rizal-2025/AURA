@@ -41,22 +41,31 @@ class UpdateReservationAgent:
         stage = session.get("update_reservation_stage")
 
         if stage is None:
-            return self._start_update(db, session)
+            return self._start_update(db, session, session_id)
 
         if stage == self.SELECT_RESERVATION_ID:
-            return self._select_reservation(db, session, user_message)
+            return self._select_reservation(db, session, user_message, session_id)
 
         if stage == self.SELECT_FIELD:
             return self._select_field(session, user_message)
 
         if stage == self.INPUT_VALUE:
-            return self._update_field(db, session, user_message)
+            return self._update_field(db, session, user_message, session_id)
 
         self._clear_update_state(session)
-        return self._start_update(db, session)
+        return self._start_update(db, session, session_id)
 
-    def _start_update(self, db: Session, session: dict[str, Any]) -> dict[str, Any]:
-        reservations = self.reservation_service.list_recent_reservations(db, limit=5)
+    def _start_update(
+        self,
+        db: Session,
+        session: dict[str, Any],
+        customer_id: str,
+    ) -> dict[str, Any]:
+        reservations = self.reservation_service.list_recent_reservations(
+            db,
+            customer_id=customer_id,
+            limit=5,
+        )
         recent_reservations = reservations[:5]
 
         self._clear_update_state(session)
@@ -84,6 +93,7 @@ class UpdateReservationAgent:
         db: Session,
         session: dict[str, Any],
         user_message: str,
+        customer_id: str,
     ) -> dict[str, Any]:
         reservation_id = self._parse_reservation_id(user_message)
         if reservation_id is None:
@@ -92,7 +102,11 @@ class UpdateReservationAgent:
                 "response": "Masukkan ID reservasi yang valid.",
             }
 
-        reservation = self.reservation_service.get_reservation_by_id(db, reservation_id)
+        reservation = self.reservation_service.get_reservation_by_id(
+            db,
+            reservation_id,
+            customer_id=customer_id,
+        )
         if reservation is None:
             return {
                 "status": "awaiting_update",
@@ -138,6 +152,7 @@ class UpdateReservationAgent:
         db: Session,
         session: dict[str, Any],
         user_message: str,
+        customer_id: str,
     ) -> dict[str, Any]:
         reservation_id = session.get("reservation_id")
         field_name = session.get("editing_field")
@@ -161,6 +176,7 @@ class UpdateReservationAgent:
             reservation_id,
             field_name,
             new_value,
+            customer_id=customer_id,
         )
         if updated_reservation is None:
             self._clear_update_state(session)
