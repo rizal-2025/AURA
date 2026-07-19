@@ -16,7 +16,7 @@ FastAPI juga menyediakan spesifikasi OpenAPI dan antarmuka dokumentasi interakti
 ## Orkestrasi chat berbasis AI
 
 - **Provider AI yang dapat dipilih:** AURA dapat memakai Ollama atau OpenAI melalui factory provider yang sama.
-- **Klasifikasi intent:** pesan dapat diklasifikasikan sebagai `reservation`, `view_reservation`, `update_reservation`, `menu`, `promo`, `faq`, `complaint`, atau `general`, beserta nilai confidence dari classifier utama.
+- **Klasifikasi intent:** pesan dapat diklasifikasikan sebagai `reservation`, `view_reservation`, `update_reservation`, `cancel_reservation`, `menu`, `promo`, `faq`, `complaint`, atau `general`, beserta nilai confidence dari classifier utama.
 - **Planner dan workflow:** intent serta state percakapan diubah menjadi langkah kerja sebelum dijalankan oleh agent yang sesuai.
 - **Fallback jawaban umum:** intent di luar jalur workflow reservasi diteruskan ke provider AI untuk menghasilkan respons.
 
@@ -46,6 +46,14 @@ FastAPI juga menyediakan spesifikasi OpenAPI dan antarmuka dokumentasi interakti
 - **Validasi alur:** ID reservasi dan nama field yang tidak valid ditolak tanpa menjalankan update.
 - **Batasan kepemilikan:** tanpa identitas pengguna pada schema, pilihan ID berasal dari daftar reservasi terbaru secara global.
 
+## Reservation Management (CANCEL) - V1.3
+
+- **Mulai pembatalan:** intent `cancel_reservation` menangani `batalkan reservasi saya`, `cancel reservasi`, `saya ingin membatalkan reservasi`, dan `cancel my reservation`.
+- **Pilih dan konfirmasi:** pengguna memilih ID dari maksimal lima reservasi terbaru, melihat ringkasan, lalu menjawab **Ya/Tidak** untuk mengonfirmasi pembatalan.
+- **Status tanpa penghapusan:** jawaban **Ya** mengubah status record menjadi `cancelled`; jawaban **Tidak** mengakhiri operasi tanpa perubahan database.
+- **Validasi:** ID yang tidak ditemukan serta reservasi dengan status `cancelled` ditolak; record yang telah dibatalkan tidak dapat dibatalkan kembali.
+- **Batasan kepemilikan:** schema belum memiliki `user_id` atau `session_id`, sehingga daftar dan pilihan ID masih berasal dari reservasi terbaru secara global.
+
 ## Data dan memori
 
 - **Persistensi reservasi:** model `Reservation`, repository, dan service memisahkan penyimpanan database dari layer API/agent.
@@ -61,7 +69,7 @@ FastAPI juga menyediakan spesifikasi OpenAPI dan antarmuka dokumentasi interakti
 
 ## Fondasi yang belum merupakan fitur penuh
 
-- Agent untuk cek reservasi, pembatalan reservasi, greeting, dan pertanyaan umum masih berupa placeholder; routing-nya ada, tetapi belum menjalankan logika bisnis penuh.
+- Agent untuk cek reservasi, greeting, dan pertanyaan umum masih berupa placeholder; routing-nya ada, tetapi belum menjalankan logika bisnis penuh.
 - Strategi planner untuk menu, promo, FAQ, dan keluhan sudah didefinisikan, tetapi belum memiliki handler chat khusus end-to-end.
 - `DatabaseTool` belum menjalankan query ke database; saat ini hanya tool contoh.
 - Sesi dan long-term memory masih berada di memori proses, sehingga belum persisten setelah aplikasi restart atau dibagikan antar-instance.

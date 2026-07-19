@@ -1,4 +1,5 @@
 from app.agents.workflow import AgentWorkflow
+from app.agents.cancel_reservation_agent import CancelReservationAgent
 from app.agents.update_reservation_agent import UpdateReservationAgent
 from app.agents.view_reservation_agent import ViewReservationAgent
 from app.brain.classifier import IntentClassifier
@@ -23,6 +24,12 @@ class AgentOrchestrator:
         "update reservasi saya",
         "update my reservation",
     }
+    CANCEL_RESERVATION_PHRASES = {
+        "batalkan reservasi saya",
+        "cancel reservasi",
+        "saya ingin membatalkan reservasi",
+        "cancel my reservation",
+    }
 
     def __init__(self):
         self.ai = get_ai_provider()
@@ -32,6 +39,9 @@ class AgentOrchestrator:
         self.workflow = AgentWorkflow(memory_manager=self.memory_manager)
         self.view_reservation_agent = ViewReservationAgent()
         self.update_reservation_agent = UpdateReservationAgent(
+            memory_manager=self.memory_manager,
+        )
+        self.cancel_reservation_agent = CancelReservationAgent(
             memory_manager=self.memory_manager,
         )
 
@@ -52,8 +62,14 @@ class AgentOrchestrator:
         if self._is_update_reservation_active(session_payload):
             return await self._update_reservation(db, session_id, message)
 
+        if self._is_cancel_reservation_active(session_payload):
+            return await self._cancel_reservation(db, session_id, message)
+
         if self._is_update_reservation_request(message, session_payload):
             return await self._update_reservation(db, session_id, message)
+
+        if self._is_cancel_reservation_request(message, session_payload):
+            return await self._cancel_reservation(db, session_id, message)
 
         if self._is_view_reservation_request(message, session_payload):
             return await self._view_reservations(db)
@@ -71,6 +87,9 @@ class AgentOrchestrator:
 
             if intent == "update_reservation":
                 return await self._update_reservation(db, session_id, message)
+
+            if intent == "cancel_reservation":
+                return await self._cancel_reservation(db, session_id, message)
 
             self.memory_manager.update_session(
                 session_id,
@@ -148,6 +167,23 @@ class AgentOrchestrator:
         normalized_message = " ".join(message.lower().strip().split())
         return normalized_message in self.UPDATE_RESERVATION_PHRASES
 
+    def _is_cancel_reservation_active(self, session_state: dict) -> bool:
+        return (
+            not session_state.get("awaiting_confirmation")
+            and bool(session_state.get("cancel_reservation_stage"))
+        )
+
+    def _is_cancel_reservation_request(
+        self,
+        message: str,
+        session_state: dict,
+    ) -> bool:
+        if session_state.get("awaiting_confirmation"):
+            return False
+
+        normalized_message = " ".join(message.lower().strip().split())
+        return normalized_message in self.CANCEL_RESERVATION_PHRASES
+
     async def _view_reservations(self, db) -> str:
         result = await self.view_reservation_agent.run(db)
         return result.get("response", "")
@@ -163,5 +199,18 @@ class AgentOrchestrator:
             session.get("reservation_id"),
             session.get("update_reservation_stage"),
             session.get("editing_field"),
+        )
+        return result.get("response", "")
+
+    async def _cancel_reservation(self, db, session_id: str, message: str) -> str:
+        result = await self.cancel_reservation_agent.run(db, session_id, message)
+        session = self.memory_manager.get_session(session_id)
+        logger.info(
+            "CANCEL RESERVATION STATE: session_id=%s status=%s "
+            "reservation_id=%s stage=%s",
+            session_id,
+            result.get("status"),
+            session.get("cancel_reservation_id"),
+            session.get("cancel_reservation_stage"),
         )
         return result.get("response", "")

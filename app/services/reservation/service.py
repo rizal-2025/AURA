@@ -43,3 +43,10 @@ class ReservationService:
             field_name,
             new_value,
         )
+
+    def cancel_reservation(
+        self,
+        db: Session,
+        reservation_id: int,
+    ):
+        return self.repository.cancel_reservation(db, reservation_id)

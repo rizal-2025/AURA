@@ -20,6 +20,7 @@ Dokumen ini merangkum status pengembangan berdasarkan baseline kode AURA saat in
 - Endpoint REST untuk membuat reservasi langsung tanpa percakapan.
 - Reservation Management (READ): intent `view_reservation` untuk menampilkan maksimal lima reservasi terbaru.
 - Reservation Management (UPDATE): intent `update_reservation` untuk mengubah nama, jumlah orang, tanggal, atau jam pada reservasi tersimpan.
+- Reservation Management (CANCEL): intent `cancel_reservation` untuk memilih salah satu dari lima reservasi terbaru, mengonfirmasi pembatalan, lalu mengubah status menjadi `cancelled` tanpa menghapus record.
 
 ### Fondasi pendukung
 
@@ -29,8 +30,8 @@ Dokumen ini merangkum status pengembangan berdasarkan baseline kode AURA saat in
 
 ## Next Version
 
-- Menyelesaikan siklus reservasi setelah dibuat: cek status per pengguna, jadwal ulang lanjutan, dan batalkan reservasi.
-- Mengganti agent placeholder untuk cek reservasi, pembatalan, greeting, dan pertanyaan umum dengan perilaku yang benar-benar fungsional.
+- Menyelesaikan siklus reservasi setelah dibuat: cek status per pengguna dan jadwal ulang lanjutan.
+- Mengganti agent placeholder untuk cek reservasi, greeting, dan pertanyaan umum dengan perilaku yang benar-benar fungsional.
 - Menyatukan daftar intent pada classifier, planner, dan workflow; melengkapi handler khusus untuk menu, promo, FAQ, dan keluhan.
 - Menambahkan validasi bisnis untuk jumlah orang, format/tanggal/waktu reservasi, serta penanganan respons AI yang tidak valid.
 - Membuat sesi dan profil preferensi persisten serta mendukung `user_id` melalui API agar personalisasi dapat dipakai end-to-end.

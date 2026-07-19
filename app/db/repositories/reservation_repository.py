@@ -50,6 +50,20 @@ class ReservationRepository:
         db.refresh(reservation)
         return reservation
 
+    def cancel_reservation(
+        self,
+        db: Session,
+        reservation_id: int,
+    ):
+        reservation = self.get_by_id(db, reservation_id)
+        if reservation is None or str(reservation.status).lower() == "cancelled":
+            return None
+
+        reservation.status = "cancelled"
+        db.commit()
+        db.refresh(reservation)
+        return reservation
+
     def create(
         self,
         db: Session,

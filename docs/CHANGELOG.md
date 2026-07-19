@@ -2,6 +2,20 @@
 
 Semua perubahan penting pada AURA dicatat di dokumen ini. Repository belum memiliki tag rilis, sehingga entri berikut mengikuti riwayat commit proyek.
 
+## 2026-07-20 - Reservation Management (CANCEL)
+
+### Added
+
+- Intent `cancel_reservation` dan `CancelReservationAgent` untuk membatalkan reservasi tersimpan melalui percakapan.
+- Alur daftar lima reservasi terbaru, pemilihan ID, ringkasan, dan konfirmasi **Ya/Tidak** sebelum pembatalan.
+- Operasi repository/service yang mengubah status reservasi menjadi `cancelled` tanpa menghapus record.
+- Regression test untuk pembatalan sukses, ID tidak valid, penolakan pengguna, record yang sudah dibatalkan, state lintas pesan, dan kompatibilitas confirmation flow.
+
+### Notes
+
+- Daftar reservasi masih bersifat global karena schema belum memiliki `user_id` atau `session_id`.
+- V1.3 tidak mengubah schema database, API `MemoryManager`, atau alur Create, Read, dan Update yang sudah ada.
+
 ## 2026-07-19 - Reservation Management (UPDATE)
 
 ### Added

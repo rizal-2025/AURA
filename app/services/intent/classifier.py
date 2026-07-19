@@ -19,6 +19,7 @@ Pilihan intent:
 - reservation
 - view_reservation
 - update_reservation
+- cancel_reservation
 - menu
 - promo
 - faq
