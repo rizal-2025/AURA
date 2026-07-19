@@ -17,6 +17,7 @@ Tugasmu memilih SATU intent.
 Pilihan intent:
 
 - reservation
+- view_reservation
 - menu
 - promo
 - faq

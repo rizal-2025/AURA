@@ -16,7 +16,7 @@ FastAPI juga menyediakan spesifikasi OpenAPI dan antarmuka dokumentasi interakti
 ## Orkestrasi chat berbasis AI
 
 - **Provider AI yang dapat dipilih:** AURA dapat memakai Ollama atau OpenAI melalui factory provider yang sama.
-- **Klasifikasi intent:** pesan dapat diklasifikasikan sebagai `reservation`, `menu`, `promo`, `faq`, `complaint`, atau `general`, beserta nilai confidence dari classifier utama.
+- **Klasifikasi intent:** pesan dapat diklasifikasikan sebagai `reservation`, `view_reservation`, `menu`, `promo`, `faq`, `complaint`, atau `general`, beserta nilai confidence dari classifier utama.
 - **Planner dan workflow:** intent serta state percakapan diubah menjadi langkah kerja sebelum dijalankan oleh agent yang sesuai.
 - **Fallback jawaban umum:** intent di luar jalur workflow reservasi diteruskan ke provider AI untuk menghasilkan respons.
 
@@ -30,6 +30,13 @@ FastAPI juga menyediakan spesifikasi OpenAPI dan antarmuka dokumentasi interakti
 - **Konfirmasi:** setelah semua field lengkap, AURA menampilkan ringkasan dan meminta jawaban **Ya** atau **Tidak**.
 - **Penyimpanan:** jawaban positif membuat reservasi melalui service dan repository database; record baru memiliki status awal `pending`.
 - **Nomor reservasi sesi:** setelah konfirmasi berhasil, AURA menyimpan UUID sebagai nomor reservasi pada state sesi dan menampilkannya pada respons.
+
+## Reservation Management (READ) - V1.1
+
+- **Lihat reservasi:** intent `view_reservation` menangani frasa seperti `lihat reservasi saya`, `reservasi saya`, `daftar reservasi`, dan `show my reservation`.
+- **Daftar terbaru:** handler mengambil maksimal lima record dari tabel `reservations`, diurutkan berdasarkan ID menurun.
+- **Format respons:** setiap record menampilkan ID, nama, jumlah orang, tanggal, jam, dan status.
+- **Batasan kepemilikan:** schema saat ini belum memiliki `user_id` atau `session_id`, sehingga daftar V1.1 berisi lima reservasi terbaru secara global, bukan hasil filter per pengguna.
 
 ## Data dan memori
 

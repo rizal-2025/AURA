@@ -1,4 +1,5 @@
 from app.agents.workflow import AgentWorkflow
+from app.agents.view_reservation_agent import ViewReservationAgent
 from app.brain.classifier import IntentClassifier
 from app.brain.memory_manager import MemoryManager
 from app.brain.planner import Planner
@@ -9,12 +10,20 @@ from app.services.ai.factory import get_ai_provider
 
 class AgentOrchestrator:
 
+    VIEW_RESERVATION_PHRASES = {
+        "lihat reservasi saya",
+        "reservasi saya",
+        "daftar reservasi",
+        "show my reservation",
+    }
+
     def __init__(self):
         self.ai = get_ai_provider()
         self.intent_classifier = IntentClassifier()
         self.planner = Planner()
         self.memory_manager = MemoryManager()
         self.workflow = AgentWorkflow(memory_manager=self.memory_manager)
+        self.view_reservation_agent = ViewReservationAgent()
 
     async def handle(
         self,
@@ -30,6 +39,9 @@ class AgentOrchestrator:
         logger.info(f"SESSION ID: {session_id}")
         logger.info(f"SESSION: {session}")
 
+        if self._is_view_reservation_request(message, session_payload):
+            return await self._view_reservations(db)
+
         if session_payload.get("intent"):
             intent = session_payload["intent"]
             confidence = session_payload.get("intent_confidence", 0.0)
@@ -37,6 +49,9 @@ class AgentOrchestrator:
             intent_result = await self.intent_classifier.classify(message)
             intent = intent_result.get("intent", "general")
             confidence = intent_result.get("confidence", 0.0)
+
+            if intent == "view_reservation":
+                return await self._view_reservations(db)
 
             self.memory_manager.update_session(
                 session_id,
@@ -85,3 +100,18 @@ class AgentOrchestrator:
             return response_text
 
         return await self.ai.chat(message)
+
+    def _is_view_reservation_request(
+        self,
+        message: str,
+        session_state: dict,
+    ) -> bool:
+        if session_state.get("awaiting_confirmation"):
+            return False
+
+        normalized_message = " ".join(message.lower().strip().split())
+        return normalized_message in self.VIEW_RESERVATION_PHRASES
+
+    async def _view_reservations(self, db) -> str:
+        result = await self.view_reservation_agent.run(db)
+        return result.get("response", "")

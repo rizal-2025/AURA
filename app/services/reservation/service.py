@@ -15,3 +15,10 @@ class ReservationService:
         data: ReservationCreate,
     ):
         return self.repository.create(db, data)
+
+    def list_recent_reservations(
+        self,
+        db: Session,
+        limit: int = 5,
+    ):
+        return self.repository.list_recent(db, limit=limit)

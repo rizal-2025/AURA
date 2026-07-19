@@ -2,6 +2,19 @@
 
 Semua perubahan penting pada AURA dicatat di dokumen ini. Repository belum memiliki tag rilis, sehingga entri berikut mengikuti riwayat commit proyek.
 
+## 2026-07-19 - Reservation Management (READ)
+
+### Added
+
+- Intent `view_reservation` untuk permintaan daftar reservasi, termasuk frasa Indonesia dan Inggris yang umum.
+- Handler baca khusus yang mengambil maksimal lima record terbaru dari PostgreSQL dengan urutan `id DESC`.
+- Format respons berisi ID, nama, jumlah orang, tanggal, jam, dan status reservasi.
+- Regression test untuk routing intent, urutan/limit query, format respons, dan kondisi data kosong.
+
+### Notes
+
+- Tabel saat ini belum menyimpan identitas pemilik reservasi, sehingga V1.1 menampilkan lima reservasi terbaru secara global.
+
 ## 2026-07-18 - Complete Reservation V1 workflow
 
 ### Added

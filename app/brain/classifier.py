@@ -53,6 +53,7 @@ Pesan user:
     def _get_supported_intents(self) -> list[str]:
         return [
             "reservation",
+            "view_reservation",
             "menu",
             "promo",
             "faq",
