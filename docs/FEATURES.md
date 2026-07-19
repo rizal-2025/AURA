@@ -16,7 +16,7 @@ FastAPI juga menyediakan spesifikasi OpenAPI dan antarmuka dokumentasi interakti
 ## Orkestrasi chat berbasis AI
 
 - **Provider AI yang dapat dipilih:** AURA dapat memakai Ollama atau OpenAI melalui factory provider yang sama.
-- **Klasifikasi intent:** pesan dapat diklasifikasikan sebagai `reservation`, `view_reservation`, `menu`, `promo`, `faq`, `complaint`, atau `general`, beserta nilai confidence dari classifier utama.
+- **Klasifikasi intent:** pesan dapat diklasifikasikan sebagai `reservation`, `view_reservation`, `update_reservation`, `menu`, `promo`, `faq`, `complaint`, atau `general`, beserta nilai confidence dari classifier utama.
 - **Planner dan workflow:** intent serta state percakapan diubah menjadi langkah kerja sebelum dijalankan oleh agent yang sesuai.
 - **Fallback jawaban umum:** intent di luar jalur workflow reservasi diteruskan ke provider AI untuk menghasilkan respons.
 
@@ -37,6 +37,14 @@ FastAPI juga menyediakan spesifikasi OpenAPI dan antarmuka dokumentasi interakti
 - **Daftar terbaru:** handler mengambil maksimal lima record dari tabel `reservations`, diurutkan berdasarkan ID menurun.
 - **Format respons:** setiap record menampilkan ID, nama, jumlah orang, tanggal, jam, dan status.
 - **Batasan kepemilikan:** schema saat ini belum memiliki `user_id` atau `session_id`, sehingga daftar V1.1 berisi lima reservasi terbaru secara global, bukan hasil filter per pengguna.
+
+## Reservation Management (UPDATE) - V1.2
+
+- **Mulai update:** intent `update_reservation` menangani permintaan seperti `ubah reservasi saya` dan menampilkan maksimal lima reservasi terbaru.
+- **Pilih record dan field:** pengguna memilih ID reservasi, lalu memilih `name`, `people`, `date`, atau `time`.
+- **Pembaruan database:** nilai baru dinormalisasi untuk tanggal/waktu bila diperlukan, lalu disimpan melalui UPDATE PostgreSQL dan ditampilkan kembali sebagai ringkasan.
+- **Validasi alur:** ID reservasi dan nama field yang tidak valid ditolak tanpa menjalankan update.
+- **Batasan kepemilikan:** tanpa identitas pengguna pada schema, pilihan ID berasal dari daftar reservasi terbaru secara global.
 
 ## Data dan memori
 

@@ -22,3 +22,24 @@ class ReservationService:
         limit: int = 5,
     ):
         return self.repository.list_recent(db, limit=limit)
+
+    def get_reservation_by_id(
+        self,
+        db: Session,
+        reservation_id: int,
+    ):
+        return self.repository.get_by_id(db, reservation_id)
+
+    def update_reservation_field(
+        self,
+        db: Session,
+        reservation_id: int,
+        field_name: str,
+        new_value,
+    ):
+        return self.repository.update_reservation_field(
+            db,
+            reservation_id,
+            field_name,
+            new_value,
+        )

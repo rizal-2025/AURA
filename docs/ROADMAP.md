@@ -19,6 +19,7 @@ Dokumen ini merangkum status pengembangan berdasarkan baseline kode AURA saat in
 - Persistensi reservasi ke database melalui SQLAlchemy, service, dan repository.
 - Endpoint REST untuk membuat reservasi langsung tanpa percakapan.
 - Reservation Management (READ): intent `view_reservation` untuk menampilkan maksimal lima reservasi terbaru.
+- Reservation Management (UPDATE): intent `update_reservation` untuk mengubah nama, jumlah orang, tanggal, atau jam pada reservasi tersimpan.
 
 ### Fondasi pendukung
 
@@ -28,7 +29,7 @@ Dokumen ini merangkum status pengembangan berdasarkan baseline kode AURA saat in
 
 ## Next Version
 
-- Menyelesaikan siklus reservasi setelah dibuat: cek status per pengguna, ubah/jadwal ulang, dan batalkan reservasi.
+- Menyelesaikan siklus reservasi setelah dibuat: cek status per pengguna, jadwal ulang lanjutan, dan batalkan reservasi.
 - Mengganti agent placeholder untuk cek reservasi, pembatalan, greeting, dan pertanyaan umum dengan perilaku yang benar-benar fungsional.
 - Menyatukan daftar intent pada classifier, planner, dan workflow; melengkapi handler khusus untuk menu, promo, FAQ, dan keluhan.
 - Menambahkan validasi bisnis untuk jumlah orang, format/tanggal/waktu reservasi, serta penanganan respons AI yang tidak valid.

@@ -2,6 +2,19 @@
 
 Semua perubahan penting pada AURA dicatat di dokumen ini. Repository belum memiliki tag rilis, sehingga entri berikut mengikuti riwayat commit proyek.
 
+## 2026-07-19 - Reservation Management (UPDATE)
+
+### Added
+
+- Intent `update_reservation` dan `UpdateReservationAgent` untuk mengubah reservasi yang telah tersimpan.
+- Alur pilih ID reservasi, pilih field, masukkan nilai baru, lalu tampilkan ringkasan record yang diperbarui.
+- Operasi repository/service untuk membaca record berdasarkan ID dan melakukan UPDATE pada field `name`, `people`, `date`, atau `time`.
+- Regression test untuk update sukses, ID/field tidak valid, serta pembaruan people, date, dan time.
+
+### Notes
+
+- Update memakai session memory yang sudah ada tanpa mengubah API `MemoryManager`, confirmation flow, atau schema database.
+
 ## 2026-07-19 - Reservation Management (READ)
 
 ### Added

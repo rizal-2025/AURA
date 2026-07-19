@@ -6,6 +6,8 @@ from app.schemas.reservation import ReservationCreate
 
 class ReservationRepository:
 
+    EDITABLE_FIELDS = {"name", "people", "date", "time"}
+
     def list_recent(
         self,
         db: Session,
@@ -17,6 +19,36 @@ class ReservationRepository:
             .limit(limit)
             .all()
         )
+
+    def get_by_id(
+        self,
+        db: Session,
+        reservation_id: int,
+    ):
+        return (
+            db.query(Reservation)
+            .filter(Reservation.id == reservation_id)
+            .first()
+        )
+
+    def update_reservation_field(
+        self,
+        db: Session,
+        reservation_id: int,
+        field_name: str,
+        new_value,
+    ):
+        if field_name not in self.EDITABLE_FIELDS:
+            raise ValueError(f"Field '{field_name}' cannot be updated.")
+
+        reservation = self.get_by_id(db, reservation_id)
+        if reservation is None:
+            return None
+
+        setattr(reservation, field_name, new_value)
+        db.commit()
+        db.refresh(reservation)
+        return reservation
 
     def create(
         self,

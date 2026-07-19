@@ -54,6 +54,7 @@ Pesan user:
         return [
             "reservation",
             "view_reservation",
+            "update_reservation",
             "menu",
             "promo",
             "faq",
