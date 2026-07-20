@@ -50,6 +50,7 @@ class AgentOrchestrator:
         session_id: str,
         message: str,
         db,
+        owner_customer_id=None,
     ):
 
         session = self.memory_manager.get_session(session_id)
@@ -118,6 +119,7 @@ class AgentOrchestrator:
                 session_payload,
                 message,
                 session_id=session_id,
+                owner_customer_id=owner_customer_id,
             )
 
             response_text = workflow_result.get("response", "")

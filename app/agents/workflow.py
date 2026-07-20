@@ -23,7 +23,14 @@ class AgentWorkflow:
             "general_question": GeneralQuestionAgent(),
         }
 
-    async def execute(self, plan: dict[str, Any], session_state: dict[str, Any], user_message: str, session_id: str | None = None) -> dict[str, Any]:
+    async def execute(
+        self,
+        plan: dict[str, Any],
+        session_state: dict[str, Any],
+        user_message: str,
+        session_id: str | None = None,
+        owner_customer_id=None,
+    ) -> dict[str, Any]:
         intent = plan.get("intent", "general")
         steps = plan.get("steps", [])
 
@@ -39,5 +46,14 @@ class AgentWorkflow:
                 "status": "unsupported_agent",
                 "response": "Tidak ada agent yang tersedia untuk intent ini.",
             }
+
+        if intent == "reservation":
+            return await agent.run(
+                steps,
+                session_state,
+                user_message,
+                session_id=session_id,
+                owner_customer_id=owner_customer_id,
+            )
 
         return await agent.run(steps, session_state, user_message, session_id=session_id)

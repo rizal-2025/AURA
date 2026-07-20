@@ -13,9 +13,15 @@ class ReservationService:
         self,
         db: Session,
         data: ReservationCreate,
-        customer_id: str,
+        customer_id: str | None = None,
+        owner_customer_id=None,
     ):
-        return self.repository.create(db, data, customer_id=customer_id)
+        return self.repository.create(
+            db,
+            data,
+            customer_id=customer_id,
+            owner_customer_id=owner_customer_id,
+        )
 
     def list_recent_reservations(
         self,

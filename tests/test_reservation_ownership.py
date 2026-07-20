@@ -2,6 +2,7 @@ import asyncio
 import unittest
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
+from uuid import uuid4
 
 from app.agents.update_reservation_agent import UpdateReservationAgent
 from app.agents.view_reservation_agent import ViewReservationAgent
@@ -129,7 +130,36 @@ class TestReservationOwnership(unittest.TestCase):
         db.add.assert_not_called()
         db.commit.assert_not_called()
 
-    def test_direct_create_uses_session_identity(self):
+    def test_repository_create_sets_secure_owner_without_legacy_customer_id(self):
+        data = ReservationCreate(
+            name="Rizal",
+            people=4,
+            date="2026-07-22",
+            time="19:00",
+        )
+        owner_customer_id = uuid4()
+        db = MagicMock()
+        created_reservation = MagicMock()
+
+        with patch(
+            "app.db.repositories.reservation_repository.Reservation",
+            return_value=created_reservation,
+        ) as reservation_model:
+            ReservationRepository().create(
+                db,
+                data,
+                owner_customer_id=owner_customer_id,
+            )
+
+        reservation_model.assert_called_once_with(
+            name="Rizal",
+            people=4,
+            date="2026-07-22",
+            time="19:00",
+            owner_customer_id=owner_customer_id,
+        )
+
+    def test_direct_create_uses_authenticated_owner_identity(self):
         data = ReservationCreate(
             name="Rizal",
             people=4,
@@ -138,6 +168,7 @@ class TestReservationOwnership(unittest.TestCase):
         )
         db = MagicMock()
         created_reservation = MagicMock()
+        owner_customer_id = uuid4()
 
         with patch(
             "app.api.reservation.service.create_reservation",
@@ -146,14 +177,14 @@ class TestReservationOwnership(unittest.TestCase):
             result = create_reservation_endpoint(
                 data,
                 db=db,
-                session_id="session-a",
+                current_customer=SimpleNamespace(id=owner_customer_id),
             )
 
         self.assertIs(result, created_reservation)
         create_reservation.assert_called_once_with(
             db,
             data,
-            customer_id="session-a",
+            owner_customer_id=owner_customer_id,
         )
 
     def test_two_session_ids_remain_isolated(self):

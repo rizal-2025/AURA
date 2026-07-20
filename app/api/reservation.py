@@ -1,9 +1,10 @@
 from fastapi import APIRouter
 from fastapi import Depends
-from fastapi import Header
 from sqlalchemy.orm import Session
 
+from app.api.dependencies import get_current_customer
 from app.db.database import get_db
+from app.db.models.customer import Customer
 from app.schemas.reservation import ReservationCreate, ReservationResponse
 from app.services.reservation.service import ReservationService
 
@@ -16,10 +17,10 @@ service = ReservationService()
 def create(
     reservation: ReservationCreate,
     db: Session = Depends(get_db),
-    session_id: str = Header(alias="X-Session-ID"),
+    current_customer: Customer = Depends(get_current_customer),
 ):
     return service.create_reservation(
         db,
         reservation,
-        customer_id=session_id,
+        owner_customer_id=current_customer.id,
     )

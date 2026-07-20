@@ -74,17 +74,27 @@ class ReservationRepository:
         self,
         db: Session,
         reservation: ReservationCreate,
-        customer_id: str,
+        customer_id: str | None = None,
+        owner_customer_id=None,
     ):
-        if not customer_id:
-            raise ValueError("customer_id is required when creating a reservation.")
+        if not customer_id and owner_customer_id is None:
+            raise ValueError(
+                "customer_id or owner_customer_id is required when creating a reservation."
+            )
+
+        reservation_fields = {
+            "name": reservation.name,
+            "people": reservation.people,
+            "date": reservation.date,
+            "time": reservation.time,
+        }
+        if customer_id is not None:
+            reservation_fields["customer_id"] = customer_id
+        if owner_customer_id is not None:
+            reservation_fields["owner_customer_id"] = owner_customer_id
 
         data = Reservation(
-            name=reservation.name,
-            people=reservation.people,
-            date=reservation.date,
-            time=reservation.time,
-            customer_id=customer_id,
+            **reservation_fields,
         )
 
         db.add(data)

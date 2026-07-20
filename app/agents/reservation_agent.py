@@ -50,10 +50,21 @@ class ReservationAgent:
         self.context_resolver = ContextResolver()
         self.long_term_memory = LongTermMemoryManager()
 
-    async def run(self, steps: list[dict[str, Any]], session_state: dict[str, Any], user_message: str, session_id: str | None = None) -> dict[str, Any]:
+    async def run(
+        self,
+        steps: list[dict[str, Any]],
+        session_state: dict[str, Any],
+        user_message: str,
+        session_id: str | None = None,
+        owner_customer_id=None,
+    ) -> dict[str, Any]:
         current_session_id = session_id or str(session_state.get("session_id") or "default")
         if session_state.get("awaiting_confirmation"):
-            return await self.handle_confirmation(user_message, current_session_id)
+            return await self.handle_confirmation(
+                user_message,
+                current_session_id,
+                owner_customer_id=owner_customer_id,
+            )
 
         step = steps[0] if steps else None
         if step is None:
@@ -154,7 +165,12 @@ class ReservationAgent:
             "response": f"Langkah tidak dikenal: {action}",
         }
 
-    async def handle_confirmation(self, user_message: str, session_id: str) -> dict[str, Any]:
+    async def handle_confirmation(
+        self,
+        user_message: str,
+        session_id: str,
+        owner_customer_id=None,
+    ) -> dict[str, Any]:
         session = self.memory_manager.get_session(session_id)
         editing_field = session.get("editing_field")
 
@@ -176,6 +192,12 @@ class ReservationAgent:
         intent, field = self._detect_confirmation_intent(user_message)
 
         if intent == CONFIRM:
+            if owner_customer_id is None:
+                return {
+                    "status": "awaiting_confirmation",
+                    "response": "Identitas pelanggan tidak tersedia. Silakan coba lagi.",
+                }
+
             reservation_data = ReservationCreate(
                 name=session.get("name"),
                 people=session.get("people"),
@@ -187,7 +209,7 @@ class ReservationAgent:
                 reservation = self.reservation_service.create_reservation(
                     db,
                     reservation_data,
-                    customer_id=session_id,
+                    owner_customer_id=owner_customer_id,
                 )
             finally:
                 db.close()
