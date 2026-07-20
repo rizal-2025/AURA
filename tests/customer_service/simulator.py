@@ -53,6 +53,7 @@ class ConversationSimulator:
             intents.append(detected_intent or "general")
 
         state = dict(chat_agent.memory_manager.get_session(memory_key))
+        handoff_state = state.get("handoff_state")
         # The bearer token is deliberately local to this call and is never
         # returned, printed, or placed in the scenario result.
         return ConversationResult(
@@ -60,4 +61,10 @@ class ConversationSimulator:
             intents=intents,
             state=state,
             errors=errors,
+            handoff=bool(state.get("handoff_required")),
+            ticket_category=(
+                handoff_state.get("category")
+                if isinstance(handoff_state, dict)
+                else None
+            ),
         )

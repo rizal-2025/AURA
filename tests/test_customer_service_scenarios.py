@@ -1,5 +1,6 @@
 import json
 import unittest
+from contextlib import nullcontext
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
@@ -10,6 +11,7 @@ from fastapi.testclient import TestClient
 from app.api.chat import agent as chat_agent
 from app.core.config import settings
 from app.core.conversation_memory import build_authenticated_memory_key
+from app.core.security import create_customer_access_token
 from app.db.database import get_db
 from app.main import app
 from tests.customer_service.simulator import ConversationSimulator
@@ -62,6 +64,7 @@ class ScenarioReservationService:
 
 class TestCustomerServiceScenarios(unittest.TestCase):
     CURRENT_SCENARIOS = _load_scenarios("reservation_intents.json")
+    HANDOFF_SCENARIOS = _load_scenarios("future_handoff.json")
 
     def setUp(self):
         self.original_secret = settings.AUTH_JWT_SECRET
@@ -105,12 +108,19 @@ class TestCustomerServiceScenarios(unittest.TestCase):
             "chat",
             AsyncMock(return_value="Bantuan umum tersedia."),
         )
+        self.classifier_reply_patch = patch.object(
+            chat_agent.intent_classifier.ai,
+            "chat",
+            AsyncMock(return_value='{"intent": "general", "confidence": 0.0}'),
+        )
         self.extractor_patch.start()
         self.general_reply_patch.start()
+        self.classifier_reply_patch.start()
 
     def tearDown(self):
         self.extractor_patch.stop()
         self.general_reply_patch.stop()
+        self.classifier_reply_patch.stop()
         app.dependency_overrides.clear()
         chat_agent.view_reservation_agent.reservation_service = self.original_view_service
         chat_agent.update_reservation_agent.reservation_service = self.original_update_service
@@ -145,6 +155,40 @@ class TestCustomerServiceScenarios(unittest.TestCase):
                 self.assertEqual(result.handoff, scenario["expected_handoff"], context)
                 self.assertEqual(result.ticket_category, scenario["expected_ticket_category"], context)
 
+    def test_phase_b_handoff_scenarios(self):
+        for scenario in self.HANDOFF_SCENARIOS:
+            with self.subTest(scenario=scenario["name"]):
+                if scenario.get("simulate_internal_error"):
+                    context_manager = patch.object(
+                        self.service,
+                        "list_recent_reservations",
+                        side_effect=RuntimeError("simulated service failure"),
+                    )
+                elif scenario.get("simulate_low_confidence"):
+                    context_manager = patch.object(
+                        chat_agent.intent_classifier,
+                        "classify",
+                        AsyncMock(return_value={"intent": "ambiguous", "confidence": 0.1}),
+                    )
+                else:
+                    context_manager = nullcontext()
+
+                with context_manager:
+                    result = self.simulator.run(scenario)
+
+                message = scenario["customer_messages"][-1]
+                turn = len(scenario["customer_messages"])
+                context = f"scenario={scenario['name']} turn={turn} message={message!r}"
+                handoff_state = result.state.get("handoff_state") or {}
+                self.assertEqual(result.errors, [], f"{context}; errors={result.errors}")
+                self.assertEqual(result.intents[-1], scenario["expected_intent"], context)
+                for expected_reply in scenario["expected_reply_contains"]:
+                    self.assertIn(expected_reply, result.replies[-1], context)
+                self.assertTrue(result.handoff, context)
+                self.assertEqual(result.ticket_category, scenario["expected_ticket_category"], context)
+                self.assertEqual(handoff_state.get("category"), scenario["expected_state"]["category"], context)
+                self.assertTrue(handoff_state.get("created_at"), context)
+
     def test_identical_session_id_remains_isolated_between_customers(self):
         scenario_a = dict(self.CURRENT_SCENARIOS[0], session_id="shared-scenario-session")
         scenario_b = dict(self.CURRENT_SCENARIOS[0], authenticated_customer="customer_b", session_id="shared-scenario-session")
@@ -159,20 +203,76 @@ class TestCustomerServiceScenarios(unittest.TestCase):
         self.assertIn("Customer B", result_b.replies[-1])
         self.assertNotIn("shared-scenario-session", chat_agent.memory_manager._sessions)
 
+    def test_handoff_locks_automation_but_other_customer_is_unaffected(self):
+        session_id = "handoff-lock-session"
+        token_a, _ = create_customer_access_token(self.customer_a.id, self.customer_a.token_version)
+        token_b, _ = create_customer_access_token(self.customer_b.id, self.customer_b.token_version)
+        headers_a = {"Authorization": f"Bearer {token_a}"}
+        headers_b = {"Authorization": f"Bearer {token_b}"}
 
-def _add_future_handoff_skip_test(scenario: dict) -> None:
-    reason = scenario["skip_reason"]
+        initial = self.client.post(
+            "/chat",
+            json={"session_id": session_id, "message": "saya ingin bicara dengan Rizal"},
+            headers=headers_a,
+        )
+        locked = self.client.post(
+            "/chat",
+            json={"session_id": session_id, "message": "ubah reservasi saya"},
+            headers=headers_a,
+        )
+        status = self.client.post(
+            "/chat",
+            json={"session_id": session_id, "message": "status handoff"},
+            headers=headers_a,
+        )
+        unaffected = self.client.post(
+            "/chat",
+            json={"session_id": session_id, "message": "lihat reservasi saya"},
+            headers=headers_b,
+        )
 
-    @unittest.skip(reason)
-    def test_scenario(self):
-        self.fail(f"Handoff scenario unexpectedly executed: {scenario['name']}")
+        self.assertIn("meneruskan percakapan", initial.json()["reply"])
+        self.assertIn("menunggu bantuan petugas", locked.json()["reply"])
+        self.assertIn("menunggu bantuan petugas", status.json()["reply"])
+        self.assertIn("Customer B", unaffected.json()["reply"])
+        state_a = chat_agent.memory_manager.get_session(
+            build_authenticated_memory_key(self.customer_a.id, session_id),
+        )
+        self.assertTrue(state_a["handoff_required"])
+        self.assertNotIn("notifikasi", initial.json()["reply"].lower())
 
-    test_scenario.__name__ = f"test_{scenario['name']}"
-    setattr(TestCustomerServiceScenarios, test_scenario.__name__, test_scenario)
+    def test_handoff_counters_reset_and_remain_scoped_to_workflow_stage(self):
+        reset_scenario = {
+            "authenticated_customer": "customer_a",
+            "session_id": "handoff-reset",
+            "customer_messages": ["zxqv", "lihat reservasi saya", "qwer"],
+        }
+        reset_result = self.simulator.run(reset_scenario)
+        self.assertFalse(reset_result.handoff)
+        self.assertEqual(reset_result.state.get("misunderstanding_count"), 1)
 
+        invalid_scope_scenario = {
+            "authenticated_customer": "customer_a",
+            "session_id": "handoff-invalid-scope",
+            "customer_messages": ["ubah reservasi saya", "abc", "abc", "1", "bukan field"],
+        }
+        invalid_result = self.simulator.run(invalid_scope_scenario)
+        self.assertFalse(invalid_result.handoff)
+        self.assertEqual(invalid_result.state.get("invalid_input_count"), 1)
 
-for _scenario in _load_scenarios("future_handoff.json"):
-    _add_future_handoff_skip_test(_scenario)
+    def test_ambiguous_action_requires_clarification_then_handoff(self):
+        scenario = {
+            "authenticated_customer": "customer_a",
+            "session_id": "handoff-ambiguous",
+            "customer_messages": [
+                "ubah atau batalkan reservasi saya",
+                "ubah atau batalkan reservasi saya",
+            ],
+        }
+        result = self.simulator.run(scenario)
+        self.assertTrue(result.handoff)
+        self.assertEqual(result.ticket_category, "ambiguous_intent")
+        self.assertIn("perlu diteruskan kepada petugas", result.replies[-1])
 
 
 if __name__ == "__main__":

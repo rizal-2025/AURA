@@ -110,6 +110,7 @@ class UpdateReservationAgent:
             return {
                 "status": "awaiting_update",
                 "response": "Masukkan ID reservasi yang valid.",
+                "invalid_input": True,
             }
 
         reservation = self.reservation_service.get_reservation_by_id(
@@ -121,6 +122,7 @@ class UpdateReservationAgent:
             return {
                 "status": "awaiting_update",
                 "response": "ID reservasi tidak ditemukan. Pilih ID yang tersedia.",
+                "invalid_input": True,
             }
 
         session.update(
@@ -144,6 +146,7 @@ class UpdateReservationAgent:
             return {
                 "status": "awaiting_update",
                 "response": "Field tidak valid. Pilih: name, people, date, atau time.",
+                "invalid_input": True,
             }
 
         session.update(
@@ -179,6 +182,7 @@ class UpdateReservationAgent:
             return {
                 "status": "awaiting_update",
                 "response": self._invalid_value_response(field_name),
+                "invalid_input": True,
             }
 
         updated_reservation = self.reservation_service.update_reservation_field(

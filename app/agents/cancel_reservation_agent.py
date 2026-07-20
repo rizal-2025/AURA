@@ -116,6 +116,7 @@ class CancelReservationAgent:
             return {
                 "status": "awaiting_cancellation",
                 "response": "Masukkan ID reservasi yang valid.",
+                "invalid_input": True,
             }
 
         reservation = self.reservation_service.get_reservation_by_id(
@@ -127,6 +128,7 @@ class CancelReservationAgent:
             return {
                 "status": "awaiting_cancellation",
                 "response": "ID reservasi tidak ditemukan. Pilih ID yang tersedia.",
+                "invalid_input": True,
             }
 
         if self._is_cancelled(reservation):

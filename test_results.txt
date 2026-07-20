@@ -1,0 +1,363 @@
+C:\Users\Welcome\Documents\AURA\.venv\Lib\site-packages\fastapi\testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
+  from starlette.testclient import TestClient as TestClient  # noqa
+test_reservation_workflow_collects_fields_and_completes (test_agent_workflow.TestAgentWorkflow.test_reservation_workflow_collects_fields_and_completes) ... ok
+test_returns_ollama_provider_when_configured (test_ai_factory.TestAIProviderFactory.test_returns_ollama_provider_when_configured) ... ok
+test_returns_openai_provider_when_configured (test_ai_factory.TestAIProviderFactory.test_returns_openai_provider_when_configured) ... ok
+test_authenticated_key_scopes_same_client_session_to_each_owner (test_authenticated_conversation_memory.TestAuthenticatedConversationMemory.test_authenticated_key_scopes_same_client_session_to_each_owner) ... ok
+test_missing_owner_is_rejected_before_memory_is_accessed (test_authenticated_conversation_memory.TestAuthenticatedConversationMemory.test_missing_owner_is_rejected_before_memory_is_accessed) ... ok
+test_classifies_natural_reservation_action_variations_without_ai (test_brain_classifier.TestBrainIntentClassifier.test_classifies_natural_reservation_action_variations_without_ai) ... ok
+test_classify_returns_intent_and_confidence (test_brain_classifier.TestBrainIntentClassifier.test_classify_returns_intent_and_confidence) ... ok
+test_negated_informational_and_mixed_actions_remain_general (test_brain_classifier.TestBrainIntentClassifier.test_negated_informational_and_mixed_actions_remain_general) ... ok
+test_normalizes_safe_indonesian_affixes (test_brain_classifier.TestBrainIntentClassifier.test_normalizes_safe_indonesian_affixes) ... ok
+test_returns_general_steps_for_unknown_intent (test_brain_planner.TestBrainPlanner.test_returns_general_steps_for_unknown_intent) ... ok
+test_returns_steps_for_reservation_intent (test_brain_planner.TestBrainPlanner.test_returns_steps_for_reservation_intent) ... ok
+test_already_cancelled_reservation_is_rejected (test_cancel_reservation.TestCancelReservation.test_already_cancelled_reservation_is_rejected) ... ok
+test_classifier_declares_cancel_reservation_intent (test_cancel_reservation.TestCancelReservation.test_classifier_declares_cancel_reservation_intent) ... ok
+test_invalid_reservation_id (test_cancel_reservation.TestCancelReservation.test_invalid_reservation_id) ... ok
+test_legacy_reservation_is_not_listed_or_selectable (test_cancel_reservation.TestCancelReservation.test_legacy_reservation_is_not_listed_or_selectable) ... ok
+test_orchestrator_keeps_create_confirmation_priority_over_cancel_state (test_cancel_reservation.TestCancelReservation.test_orchestrator_keeps_create_confirmation_priority_over_cancel_state) ... 2026-07-20 21:00:10,238 | INFO | AURA | SESSION TRANSITION: intent=reservation awaiting_confirmation=True update_stage=None cancel_stage=confirm_cancellation
+2026-07-20 21:00:10,238 | INFO | AURA | WORKFLOW TRANSITION: intent=reservation confidence_available=True
+ok
+test_orchestrator_routes_classified_cancel_intent (test_cancel_reservation.TestCancelReservation.test_orchestrator_routes_classified_cancel_intent) ... 2026-07-20 21:00:10,852 | INFO | AURA | SESSION TRANSITION: intent=None awaiting_confirmation=False update_stage=None cancel_stage=None
+2026-07-20 21:00:10,853 | INFO | AURA | CANCEL RESERVATION STATE: status=awaiting_cancellation stage=None
+ok
+test_orchestrator_routes_each_cancel_phrase (test_cancel_reservation.TestCancelReservation.test_orchestrator_routes_each_cancel_phrase) ... 2026-07-20 21:00:11,471 | INFO | AURA | SESSION TRANSITION: intent=reservation awaiting_confirmation=False update_stage=None cancel_stage=None
+2026-07-20 21:00:11,471 | INFO | AURA | CANCEL RESERVATION STATE: status=awaiting_cancellation stage=None
+2026-07-20 21:00:12,084 | INFO | AURA | SESSION TRANSITION: intent=reservation awaiting_confirmation=False update_stage=None cancel_stage=None
+2026-07-20 21:00:12,085 | INFO | AURA | CANCEL RESERVATION STATE: status=awaiting_cancellation stage=None
+2026-07-20 21:00:12,695 | INFO | AURA | SESSION TRANSITION: intent=reservation awaiting_confirmation=False update_stage=None cancel_stage=None
+2026-07-20 21:00:12,695 | INFO | AURA | CANCEL RESERVATION STATE: status=awaiting_cancellation stage=None
+2026-07-20 21:00:13,304 | INFO | AURA | SESSION TRANSITION: intent=reservation awaiting_confirmation=False update_stage=None cancel_stage=None
+2026-07-20 21:00:13,304 | INFO | AURA | CANCEL RESERVATION STATE: status=awaiting_cancellation stage=None
+ok
+test_repository_atomic_cancel_rejects_non_owner_or_cancelled_record (test_cancel_reservation.TestCancelReservation.test_repository_atomic_cancel_rejects_non_owner_or_cancelled_record) ... ok
+test_repository_cancels_by_updating_status_without_deleting (test_cancel_reservation.TestCancelReservation.test_repository_cancels_by_updating_status_without_deleting) ... ok
+test_state_persists_across_messages (test_cancel_reservation.TestCancelReservation.test_state_persists_across_messages) ... ok
+test_successful_cancellation (test_cancel_reservation.TestCancelReservation.test_successful_cancellation) ... ok
+test_user_cannot_cancel_another_customers_reservation (test_cancel_reservation.TestCancelReservation.test_user_cannot_cancel_another_customers_reservation) ... ok
+test_user_rejects_cancellation (test_cancel_reservation.TestCancelReservation.test_user_rejects_cancellation) ... ok
+test_chat_uses_workflow_for_reservation_intent (test_chat_integration.TestChatIntegration.test_chat_uses_workflow_for_reservation_intent) ... ok
+test_ignores_empty_extraction (test_context_resolver.TestContextResolver.test_ignores_empty_extraction) ... ok
+test_updates_multiple_fields_when_not_a_change_request (test_context_resolver.TestContextResolver.test_updates_multiple_fields_when_not_a_change_request) ... ok
+test_updates_only_time_for_change_request (test_context_resolver.TestContextResolver.test_updates_only_time_for_change_request) ... ok
+test_initial_state_returns_ask_name (test_conversation_state_manager.TestConversationStateManager.test_initial_state_returns_ask_name) ... ok
+test_marks_question_to_avoid_repetition (test_conversation_state_manager.TestConversationStateManager.test_marks_question_to_avoid_repetition) ... ok
+test_returns_complete_when_flow_is_already_finished (test_conversation_state_manager.TestConversationStateManager.test_returns_complete_when_flow_is_already_finished) ... ok
+test_returns_confirm_when_all_fields_present (test_conversation_state_manager.TestConversationStateManager.test_returns_confirm_when_all_fields_present) ... ok
+test_skips_already_asked_field (test_conversation_state_manager.TestConversationStateManager.test_skips_already_asked_field) ... ok
+test_ambiguous_action_requires_clarification_then_handoff (test_customer_service_scenarios.TestCustomerServiceScenarios.test_ambiguous_action_requires_clarification_then_handoff) ... 2026-07-20 21:00:13,404 | INFO | httpx | HTTP Request: POST http://testserver/chat "HTTP/1.1 200 OK"
+2026-07-20 21:00:13,413 | INFO | httpx | HTTP Request: POST http://testserver/chat "HTTP/1.1 200 OK"
+ok
+test_current_customer_service_scenarios (test_customer_service_scenarios.TestCustomerServiceScenarios.test_current_customer_service_scenarios) ... 2026-07-20 21:00:13,420 | INFO | AURA | SESSION TRANSITION: intent=None awaiting_confirmation=False update_stage=None cancel_stage=None
+2026-07-20 21:00:13,421 | INFO | AURA | UPDATE RESERVATION STATE: status=awaiting_update stage=select_reservation_id editing_field=None
+2026-07-20 21:00:13,423 | INFO | httpx | HTTP Request: POST http://testserver/chat "HTTP/1.1 200 OK"
+2026-07-20 21:00:13,432 | INFO | AURA | SESSION TRANSITION: intent=None awaiting_confirmation=False update_stage=None cancel_stage=None
+2026-07-20 21:00:13,432 | INFO | AURA | UPDATE RESERVATION STATE: status=awaiting_update stage=select_reservation_id editing_field=None
+2026-07-20 21:00:13,435 | INFO | httpx | HTTP Request: POST http://testserver/chat "HTTP/1.1 200 OK"
+2026-07-20 21:00:13,443 | INFO | AURA | SESSION TRANSITION: intent=None awaiting_confirmation=False update_stage=None cancel_stage=None
+2026-07-20 21:00:13,444 | INFO | AURA | UPDATE RESERVATION STATE: status=awaiting_update stage=select_reservation_id editing_field=None
+2026-07-20 21:00:13,447 | INFO | httpx | HTTP Request: POST http://testserver/chat "HTTP/1.1 200 OK"
+2026-07-20 21:00:13,455 | INFO | AURA | SESSION TRANSITION: intent=None awaiting_confirmation=False update_stage=None cancel_stage=None
+2026-07-20 21:00:13,456 | INFO | AURA | UPDATE RESERVATION STATE: status=awaiting_update stage=select_reservation_id editing_field=None
+2026-07-20 21:00:13,458 | INFO | httpx | HTTP Request: POST http://testserver/chat "HTTP/1.1 200 OK"
+2026-07-20 21:00:13,466 | INFO | AURA | SESSION TRANSITION: intent=None awaiting_confirmation=False update_stage=None cancel_stage=None
+2026-07-20 21:00:13,467 | INFO | AURA | UPDATE RESERVATION STATE: status=awaiting_update stage=select_reservation_id editing_field=None
+2026-07-20 21:00:13,470 | INFO | httpx | HTTP Request: POST http://testserver/chat "HTTP/1.1 200 OK"
+2026-07-20 21:00:13,478 | INFO | AURA | SESSION TRANSITION: intent=None awaiting_confirmation=False update_stage=None cancel_stage=None
+2026-07-20 21:00:13,478 | INFO | AURA | CANCEL RESERVATION STATE: status=awaiting_cancellation stage=select_reservation_id
+2026-07-20 21:00:13,481 | INFO | httpx | HTTP Request: POST http://testserver/chat "HTTP/1.1 200 OK"
+2026-07-20 21:00:13,490 | INFO | AURA | SESSION TRANSITION: intent=None awaiting_confirmation=False update_stage=None cancel_stage=None
+2026-07-20 21:00:13,490 | INFO | AURA | CANCEL RESERVATION STATE: status=awaiting_cancellation stage=select_reservation_id
+2026-07-20 21:00:13,493 | INFO | httpx | HTTP Request: POST http://testserver/chat "HTTP/1.1 200 OK"
+2026-07-20 21:00:13,502 | INFO | AURA | SESSION TRANSITION: intent=None awaiting_confirmation=False update_stage=None cancel_stage=None
+2026-07-20 21:00:13,505 | INFO | httpx | HTTP Request: POST http://testserver/chat "HTTP/1.1 200 OK"
+2026-07-20 21:00:13,513 | INFO | AURA | SESSION TRANSITION: intent=None awaiting_confirmation=False update_stage=None cancel_stage=None
+2026-07-20 21:00:13,518 | INFO | httpx | HTTP Request: POST http://testserver/chat "HTTP/1.1 200 OK"
+2026-07-20 21:00:13,526 | INFO | AURA | SESSION TRANSITION: intent=None awaiting_confirmation=False update_stage=None cancel_stage=None
+2026-07-20 21:00:13,527 | INFO | AURA | WORKFLOW TRANSITION: intent=reservation confidence_available=True
+2026-07-20 21:00:13,530 | INFO | httpx | HTTP Request: POST http://testserver/chat "HTTP/1.1 200 OK"
+2026-07-20 21:00:13,538 | INFO | AURA | SESSION TRANSITION: intent=None awaiting_confirmation=False update_stage=None cancel_stage=None
+2026-07-20 21:00:13,539 | INFO | AURA | WORKFLOW TRANSITION: intent=reservation confidence_available=True
+2026-07-20 21:00:13,542 | INFO | httpx | HTTP Request: POST http://testserver/chat "HTTP/1.1 200 OK"
+2026-07-20 21:00:13,551 | INFO | AURA | SESSION TRANSITION: intent=None awaiting_confirmation=False update_stage=None cancel_stage=None
+2026-07-20 21:00:13,552 | INFO | AURA | WORKFLOW TRANSITION: intent=general confidence_available=True
+2026-07-20 21:00:13,555 | INFO | httpx | HTTP Request: POST http://testserver/chat "HTTP/1.1 200 OK"
+2026-07-20 21:00:13,563 | INFO | AURA | SESSION TRANSITION: intent=None awaiting_confirmation=False update_stage=None cancel_stage=None
+2026-07-20 21:00:13,564 | INFO | AURA | WORKFLOW TRANSITION: intent=general confidence_available=True
+2026-07-20 21:00:13,567 | INFO | httpx | HTTP Request: POST http://testserver/chat "HTTP/1.1 200 OK"
+2026-07-20 21:00:13,575 | INFO | AURA | SESSION TRANSITION: intent=None awaiting_confirmation=False update_stage=None cancel_stage=None
+2026-07-20 21:00:13,577 | INFO | AURA | WORKFLOW TRANSITION: intent=general confidence_available=True
+2026-07-20 21:00:13,580 | INFO | httpx | HTTP Request: POST http://testserver/chat "HTTP/1.1 200 OK"
+2026-07-20 21:00:13,588 | INFO | AURA | SESSION TRANSITION: intent=None awaiting_confirmation=False update_stage=None cancel_stage=None
+2026-07-20 21:00:13,589 | INFO | AURA | WORKFLOW TRANSITION: intent=general confidence_available=True
+2026-07-20 21:00:13,592 | INFO | httpx | HTTP Request: POST http://testserver/chat "HTTP/1.1 200 OK"
+ok
+test_handoff_counters_reset_and_remain_scoped_to_workflow_stage (test_customer_service_scenarios.TestCustomerServiceScenarios.test_handoff_counters_reset_and_remain_scoped_to_workflow_stage) ... 2026-07-20 21:00:13,603 | INFO | AURA | SESSION TRANSITION: intent=None awaiting_confirmation=False update_stage=None cancel_stage=None
+2026-07-20 21:00:13,606 | INFO | httpx | HTTP Request: POST http://testserver/chat "HTTP/1.1 200 OK"
+2026-07-20 21:00:13,614 | INFO | AURA | SESSION TRANSITION: intent=None awaiting_confirmation=False update_stage=None cancel_stage=None
+2026-07-20 21:00:13,618 | INFO | httpx | HTTP Request: POST http://testserver/chat "HTTP/1.1 200 OK"
+2026-07-20 21:00:13,625 | INFO | AURA | SESSION TRANSITION: intent=None awaiting_confirmation=False update_stage=None cancel_stage=None
+2026-07-20 21:00:13,629 | INFO | httpx | HTTP Request: POST http://testserver/chat "HTTP/1.1 200 OK"
+2026-07-20 21:00:13,637 | INFO | AURA | SESSION TRANSITION: intent=None awaiting_confirmation=False update_stage=None cancel_stage=None
+2026-07-20 21:00:13,637 | INFO | AURA | UPDATE RESERVATION STATE: status=awaiting_update stage=select_reservation_id editing_field=None
+2026-07-20 21:00:13,640 | INFO | httpx | HTTP Request: POST http://testserver/chat "HTTP/1.1 200 OK"
+2026-07-20 21:00:13,648 | INFO | AURA | SESSION TRANSITION: intent=None awaiting_confirmation=False update_stage=select_reservation_id cancel_stage=None
+2026-07-20 21:00:13,648 | INFO | AURA | UPDATE RESERVATION STATE: status=awaiting_update stage=select_reservation_id editing_field=None
+2026-07-20 21:00:13,651 | INFO | httpx | HTTP Request: POST http://testserver/chat "HTTP/1.1 200 OK"
+2026-07-20 21:00:13,659 | INFO | AURA | SESSION TRANSITION: intent=None awaiting_confirmation=False update_stage=select_reservation_id cancel_stage=None
+2026-07-20 21:00:13,659 | INFO | AURA | UPDATE RESERVATION STATE: status=awaiting_update stage=select_reservation_id editing_field=None
+2026-07-20 21:00:13,662 | INFO | httpx | HTTP Request: POST http://testserver/chat "HTTP/1.1 200 OK"
+2026-07-20 21:00:13,670 | INFO | AURA | SESSION TRANSITION: intent=None awaiting_confirmation=False update_stage=select_reservation_id cancel_stage=None
+2026-07-20 21:00:13,670 | INFO | AURA | UPDATE RESERVATION STATE: status=awaiting_update stage=select_field editing_field=None
+2026-07-20 21:00:13,673 | INFO | httpx | HTTP Request: POST http://testserver/chat "HTTP/1.1 200 OK"
+2026-07-20 21:00:13,680 | INFO | AURA | SESSION TRANSITION: intent=None awaiting_confirmation=False update_stage=select_field cancel_stage=None
+2026-07-20 21:00:13,680 | INFO | AURA | UPDATE RESERVATION STATE: status=awaiting_update stage=select_field editing_field=None
+2026-07-20 21:00:13,684 | INFO | httpx | HTTP Request: POST http://testserver/chat "HTTP/1.1 200 OK"
+ok
+test_handoff_locks_automation_but_other_customer_is_unaffected (test_customer_service_scenarios.TestCustomerServiceScenarios.test_handoff_locks_automation_but_other_customer_is_unaffected) ... 2026-07-20 21:00:13,697 | INFO | httpx | HTTP Request: POST http://testserver/chat "HTTP/1.1 200 OK"
+2026-07-20 21:00:13,707 | INFO | httpx | HTTP Request: POST http://testserver/chat "HTTP/1.1 200 OK"
+2026-07-20 21:00:13,717 | INFO | httpx | HTTP Request: POST http://testserver/chat "HTTP/1.1 200 OK"
+2026-07-20 21:00:13,725 | INFO | AURA | SESSION TRANSITION: intent=None awaiting_confirmation=False update_stage=None cancel_stage=None
+2026-07-20 21:00:13,728 | INFO | httpx | HTTP Request: POST http://testserver/chat "HTTP/1.1 200 OK"
+ok
+test_identical_session_id_remains_isolated_between_customers (test_customer_service_scenarios.TestCustomerServiceScenarios.test_identical_session_id_remains_isolated_between_customers) ... 2026-07-20 21:00:13,738 | INFO | AURA | SESSION TRANSITION: intent=None awaiting_confirmation=False update_stage=None cancel_stage=None
+2026-07-20 21:00:13,738 | INFO | AURA | UPDATE RESERVATION STATE: status=awaiting_update stage=select_reservation_id editing_field=None
+2026-07-20 21:00:13,741 | INFO | httpx | HTTP Request: POST http://testserver/chat "HTTP/1.1 200 OK"
+2026-07-20 21:00:13,749 | INFO | AURA | SESSION TRANSITION: intent=None awaiting_confirmation=False update_stage=None cancel_stage=None
+2026-07-20 21:00:13,750 | INFO | AURA | UPDATE RESERVATION STATE: status=awaiting_update stage=select_reservation_id editing_field=None
+2026-07-20 21:00:13,753 | INFO | httpx | HTTP Request: POST http://testserver/chat "HTTP/1.1 200 OK"
+ok
+test_phase_b_handoff_scenarios (test_customer_service_scenarios.TestCustomerServiceScenarios.test_phase_b_handoff_scenarios) ... 2026-07-20 21:00:13,765 | INFO | httpx | HTTP Request: POST http://testserver/chat "HTTP/1.1 200 OK"
+2026-07-20 21:00:13,773 | INFO | AURA | SESSION TRANSITION: intent=None awaiting_confirmation=False update_stage=None cancel_stage=None
+2026-07-20 21:00:13,777 | INFO | httpx | HTTP Request: POST http://testserver/chat "HTTP/1.1 200 OK"
+2026-07-20 21:00:13,785 | INFO | AURA | SESSION TRANSITION: intent=None awaiting_confirmation=False update_stage=None cancel_stage=None
+2026-07-20 21:00:13,789 | INFO | httpx | HTTP Request: POST http://testserver/chat "HTTP/1.1 200 OK"
+2026-07-20 21:00:13,798 | INFO | AURA | SESSION TRANSITION: intent=None awaiting_confirmation=False update_stage=None cancel_stage=None
+2026-07-20 21:00:13,798 | INFO | AURA | UPDATE RESERVATION STATE: status=awaiting_update stage=select_reservation_id editing_field=None
+2026-07-20 21:00:13,802 | INFO | httpx | HTTP Request: POST http://testserver/chat "HTTP/1.1 200 OK"
+2026-07-20 21:00:13,810 | INFO | AURA | SESSION TRANSITION: intent=None awaiting_confirmation=False update_stage=select_reservation_id cancel_stage=None
+2026-07-20 21:00:13,810 | INFO | AURA | UPDATE RESERVATION STATE: status=awaiting_update stage=select_reservation_id editing_field=None
+2026-07-20 21:00:13,813 | INFO | httpx | HTTP Request: POST http://testserver/chat "HTTP/1.1 200 OK"
+2026-07-20 21:00:13,819 | INFO | AURA | SESSION TRANSITION: intent=None awaiting_confirmation=False update_stage=select_reservation_id cancel_stage=None
+2026-07-20 21:00:13,819 | INFO | AURA | UPDATE RESERVATION STATE: status=awaiting_update stage=select_reservation_id editing_field=None
+2026-07-20 21:00:13,822 | INFO | httpx | HTTP Request: POST http://testserver/chat "HTTP/1.1 200 OK"
+2026-07-20 21:00:13,828 | INFO | AURA | SESSION TRANSITION: intent=None awaiting_confirmation=False update_stage=select_reservation_id cancel_stage=None
+2026-07-20 21:00:13,830 | INFO | httpx | HTTP Request: POST http://testserver/chat "HTTP/1.1 200 OK"
+2026-07-20 21:00:13,837 | INFO | AURA | SESSION TRANSITION: intent=None awaiting_confirmation=False update_stage=None cancel_stage=None
+2026-07-20 21:00:13,837 | ERROR | AURA | HANDOFF TRANSITION: category=internal_error
+2026-07-20 21:00:13,840 | INFO | httpx | HTTP Request: POST http://testserver/chat "HTTP/1.1 200 OK"
+2026-07-20 21:00:13,847 | INFO | httpx | HTTP Request: POST http://testserver/chat "HTTP/1.1 200 OK"
+2026-07-20 21:00:13,852 | INFO | AURA | SESSION TRANSITION: intent=None awaiting_confirmation=False update_stage=None cancel_stage=None
+2026-07-20 21:00:13,854 | INFO | httpx | HTTP Request: POST http://testserver/chat "HTTP/1.1 200 OK"
+2026-07-20 21:00:13,859 | INFO | AURA | SESSION TRANSITION: intent=None awaiting_confirmation=False update_stage=None cancel_stage=None
+2026-07-20 21:00:13,861 | INFO | httpx | HTTP Request: POST http://testserver/chat "HTTP/1.1 200 OK"
+ok
+test_besok (test_datetime_parser.TestDatetimeParser.test_besok) ... ok
+test_jumat (test_datetime_parser.TestDatetimeParser.test_jumat) ... ok
+test_lusa (test_datetime_parser.TestDatetimeParser.test_lusa) ... ok
+test_time_12_malam (test_datetime_parser.TestDatetimeParser.test_time_12_malam) ... ok
+test_time_12_siang (test_datetime_parser.TestDatetimeParser.test_time_12_siang) ... ok
+test_time_7_malam (test_datetime_parser.TestDatetimeParser.test_time_7_malam) ... ok
+test_time_7_pagi (test_datetime_parser.TestDatetimeParser.test_time_7_pagi) ... ok
+test_time_setengah_delapan_malam (test_datetime_parser.TestDatetimeParser.test_time_setengah_delapan_malam) ... ok
+test_clear_profile_removes_preferences (test_long_term_memory.TestLongTermMemoryManager.test_clear_profile_removes_preferences) ... ok
+test_saves_and_returns_profile (test_long_term_memory.TestLongTermMemoryManager.test_saves_and_returns_profile) ... ok
+test_suggests_context_for_existing_user (test_long_term_memory.TestLongTermMemoryManager.test_suggests_context_for_existing_user) ... ok
+test_create_and_update_session (test_memory_manager.TestMemoryManager.test_create_and_update_session) ... ok
+test_session_defaults_are_initialized (test_memory_manager.TestMemoryManager.test_session_defaults_are_initialized) ... ok
+test_orchestrator_uses_workflow_for_non_reservation_intents (test_multi_intent_router.TestMultiIntentRouter.test_orchestrator_uses_workflow_for_non_reservation_intents) ... 2026-07-20 21:00:14,553 | INFO | AURA | SESSION TRANSITION: intent=None awaiting_confirmation=False update_stage=None cancel_stage=None
+2026-07-20 21:00:14,553 | INFO | AURA | WORKFLOW TRANSITION: intent=greeting confidence_available=True
+ok
+test_workflow_routes_cancel_reservation_to_stub_agent (test_multi_intent_router.TestMultiIntentRouter.test_workflow_routes_cancel_reservation_to_stub_agent) ... ok
+test_workflow_routes_check_reservation_to_stub_agent (test_multi_intent_router.TestMultiIntentRouter.test_workflow_routes_check_reservation_to_stub_agent) ... ok
+test_workflow_routes_general_question_to_stub_agent (test_multi_intent_router.TestMultiIntentRouter.test_workflow_routes_general_question_to_stub_agent) ... ok
+test_workflow_routes_greeting_to_stub_agent (test_multi_intent_router.TestMultiIntentRouter.test_workflow_routes_greeting_to_stub_agent) ... ok
+test_workflow_routes_reservation_to_reservation_agent (test_multi_intent_router.TestMultiIntentRouter.test_workflow_routes_reservation_to_reservation_agent) ... ok
+test_confirmation_success_flow (test_reservation_confirmation_flow.TestReservationConfirmationFlow.test_confirmation_success_flow) ... ok
+test_direct_edit (test_reservation_confirmation_flow.TestReservationConfirmationFlow.test_direct_edit) ... ok
+test_edit_date (test_reservation_confirmation_flow.TestReservationConfirmationFlow.test_edit_date) ... ok
+test_edit_name (test_reservation_confirmation_flow.TestReservationConfirmationFlow.test_edit_name) ... ok
+test_edit_people (test_reservation_confirmation_flow.TestReservationConfirmationFlow.test_edit_people) ... ok
+test_edit_then_confirm (test_reservation_confirmation_flow.TestReservationConfirmationFlow.test_edit_then_confirm) ... ok
+test_edit_time (test_reservation_confirmation_flow.TestReservationConfirmationFlow.test_edit_time) ... ok
+test_memory_state_updates (test_reservation_confirmation_flow.TestReservationConfirmationFlow.test_memory_state_updates) ... ok
+test_orchestrator_accepts_confirmation_and_completes_reservation (test_reservation_confirmation_flow.TestReservationConfirmationFlow.test_orchestrator_accepts_confirmation_and_completes_reservation) ... 2026-07-20 21:00:15,305 | INFO | AURA | SESSION TRANSITION: intent=None awaiting_confirmation=True update_stage=None cancel_stage=None
+2026-07-20 21:00:15,305 | INFO | AURA | WORKFLOW TRANSITION: intent=reservation confidence_available=True
+ok
+test_orchestrator_keeps_confirmation_mode_after_rejection (test_reservation_confirmation_flow.TestReservationConfirmationFlow.test_orchestrator_keeps_confirmation_mode_after_rejection) ... 2026-07-20 21:00:15,925 | INFO | AURA | SESSION TRANSITION: intent=None awaiting_confirmation=True update_stage=None cancel_stage=None
+2026-07-20 21:00:15,925 | INFO | AURA | WORKFLOW TRANSITION: intent=reservation confidence_available=True
+ok
+test_rejection_edit_people_then_confirm_saves_updated_value (test_reservation_confirmation_flow.TestReservationConfirmationFlow.test_rejection_edit_people_then_confirm_saves_updated_value) ... ok
+test_rejection_flow (test_reservation_confirmation_flow.TestReservationConfirmationFlow.test_rejection_flow) ... ok
+test_update_after_rejection (test_reservation_confirmation_flow.TestReservationConfirmationFlow.test_update_after_rejection) ... ok
+test_agent_uses_extractor_and_memory (test_reservation_entity_extractor.TestReservationEntityExtractor.test_agent_uses_extractor_and_memory) ... ok
+test_extracts_complete_entities (test_reservation_entity_extractor.TestReservationEntityExtractor.test_extracts_complete_entities) ... ok
+test_extracts_partial_entities (test_reservation_entity_extractor.TestReservationEntityExtractor.test_extracts_partial_entities) ... ok
+test_returns_empty_when_no_entities (test_reservation_entity_extractor.TestReservationEntityExtractor.test_returns_empty_when_no_entities) ... ok
+test_active_update_and_cancel_states_take_priority_over_new_text (test_reservation_intent_routing.TestReservationIntentRouting.test_active_update_and_cancel_states_take_priority_over_new_text) ... 2026-07-20 21:00:16,576 | INFO | AURA | SESSION TRANSITION: intent=None awaiting_confirmation=False update_stage=select_field cancel_stage=None
+2026-07-20 21:00:16,577 | INFO | AURA | UPDATE RESERVATION STATE: status=awaiting_update stage=select_field editing_field=None
+2026-07-20 21:00:16,577 | INFO | AURA | SESSION TRANSITION: intent=None awaiting_confirmation=False update_stage=None cancel_stage=select_reservation_id
+2026-07-20 21:00:16,577 | INFO | AURA | CANCEL RESERVATION STATE: status=awaiting_cancellation stage=select_reservation_id
+ok
+test_flexible_update_phrase_routes_to_update_agent (test_reservation_intent_routing.TestReservationIntentRouting.test_flexible_update_phrase_routes_to_update_agent) ... 2026-07-20 21:00:17,204 | INFO | AURA | SESSION TRANSITION: intent=None awaiting_confirmation=False update_stage=None cancel_stage=None
+2026-07-20 21:00:17,205 | INFO | AURA | UPDATE RESERVATION STATE: status=awaiting_update stage=None editing_field=None
+ok
+test_customer_id_model_column_is_nullable (test_reservation_ownership.TestReservationOwnership.test_customer_id_model_column_is_nullable) ... ok
+test_direct_create_uses_authenticated_owner_identity (test_reservation_ownership.TestReservationOwnership.test_direct_create_uses_authenticated_owner_identity) ... ok
+test_legacy_null_record_is_not_exposed_to_view (test_reservation_ownership.TestReservationOwnership.test_legacy_null_record_is_not_exposed_to_view) ... ok
+test_management_agents_reject_missing_owner_before_service_call (test_reservation_ownership.TestReservationOwnership.test_management_agents_reject_missing_owner_before_service_call) ... ok
+test_repository_blocks_legacy_only_create (test_reservation_ownership.TestReservationOwnership.test_repository_blocks_legacy_only_create) ... ok
+test_repository_create_sets_secure_owner_without_legacy_customer_id (test_reservation_ownership.TestReservationOwnership.test_repository_create_sets_secure_owner_without_legacy_customer_id) ... ok
+test_repository_rejects_new_reservation_without_authenticated_owner (test_reservation_ownership.TestReservationOwnership.test_repository_rejects_new_reservation_without_authenticated_owner) ... ok
+test_secure_repository_operations_reject_missing_owner_before_query (test_reservation_ownership.TestReservationOwnership.test_secure_repository_operations_reject_missing_owner_before_query) ... ok
+test_secure_service_operations_reject_missing_owner_before_repository_call (test_reservation_ownership.TestReservationOwnership.test_secure_service_operations_reject_missing_owner_before_repository_call) ... ok
+test_two_session_ids_remain_isolated (test_reservation_ownership.TestReservationOwnership.test_two_session_ids_remain_isolated) ... ok
+test_reservation_state_is_isolated_per_session (test_reservation_state_persistence.TestReservationStatePersistence.test_reservation_state_is_isolated_per_session) ... 2026-07-20 21:00:17,831 | INFO | AURA | SESSION TRANSITION: intent=None awaiting_confirmation=False update_stage=None cancel_stage=None
+2026-07-20 21:00:17,831 | INFO | AURA | WORKFLOW TRANSITION: intent=reservation confidence_available=True
+2026-07-20 21:00:17,832 | INFO | AURA | SESSION TRANSITION: intent=reservation awaiting_confirmation=False update_stage=None cancel_stage=None
+2026-07-20 21:00:17,832 | INFO | AURA | WORKFLOW TRANSITION: intent=reservation confidence_available=True
+2026-07-20 21:00:17,832 | INFO | AURA | SESSION TRANSITION: intent=None awaiting_confirmation=False update_stage=None cancel_stage=None
+2026-07-20 21:00:17,832 | INFO | AURA | WORKFLOW TRANSITION: intent=reservation confidence_available=True
+ok
+test_reservation_state_persists_across_requests_for_same_session (test_reservation_state_persistence.TestReservationStatePersistence.test_reservation_state_persists_across_requests_for_same_session) ... 2026-07-20 21:00:18,447 | INFO | AURA | SESSION TRANSITION: intent=None awaiting_confirmation=False update_stage=None cancel_stage=None
+2026-07-20 21:00:18,447 | INFO | AURA | WORKFLOW TRANSITION: intent=reservation confidence_available=True
+2026-07-20 21:00:18,448 | INFO | AURA | SESSION TRANSITION: intent=reservation awaiting_confirmation=False update_stage=None cancel_stage=None
+2026-07-20 21:00:18,448 | INFO | AURA | WORKFLOW TRANSITION: intent=reservation confidence_available=True
+ok
+test_customer_model_has_secure_owner_fields (test_secure_customer_identity.TestSecureCustomerIdentity.test_customer_model_has_secure_owner_fields) ... ok
+test_expired_token_is_rejected (test_secure_customer_identity.TestSecureCustomerIdentity.test_expired_token_is_rejected) ... ok
+test_forged_token_is_rejected (test_secure_customer_identity.TestSecureCustomerIdentity.test_forged_token_is_rejected) ... ok
+test_guest_customer_and_token_creation (test_secure_customer_identity.TestSecureCustomerIdentity.test_guest_customer_and_token_creation) ... ok
+test_guest_customer_is_not_persisted_when_secret_is_missing (test_secure_customer_identity.TestSecureCustomerIdentity.test_guest_customer_is_not_persisted_when_secret_is_missing) ... ok
+test_guest_endpoint_returns_safe_error_for_invalid_runtime_expiry (test_secure_customer_identity.TestSecureCustomerIdentity.test_guest_endpoint_returns_safe_error_for_invalid_runtime_expiry) ... ok
+test_inactive_customer_is_rejected (test_secure_customer_identity.TestSecureCustomerIdentity.test_inactive_customer_is_rejected) ... ok
+test_migration_is_idempotent_and_preserves_existing_reservations (test_secure_customer_identity.TestSecureCustomerIdentity.test_migration_is_idempotent_and_preserves_existing_reservations) ... ok
+test_missing_token_is_rejected (test_secure_customer_identity.TestSecureCustomerIdentity.test_missing_token_is_rejected) ... ok
+test_short_jwt_secret_is_rejected_by_configuration (test_secure_customer_identity.TestSecureCustomerIdentity.test_short_jwt_secret_is_rejected_by_configuration) ... ok
+test_sql_echo_is_disabled_by_default (test_secure_customer_identity.TestSecureCustomerIdentity.test_sql_echo_is_disabled_by_default) ... ok
+test_token_version_mismatch_is_rejected (test_secure_customer_identity.TestSecureCustomerIdentity.test_token_version_mismatch_is_rejected) ... ok
+test_valid_integer_jwt_expiry_is_accepted (test_secure_customer_identity.TestSecureCustomerIdentity.test_valid_integer_jwt_expiry_is_accepted) ... ok
+test_valid_token_returns_active_customer (test_secure_customer_identity.TestSecureCustomerIdentity.test_valid_token_returns_active_customer) ... ok
+test_wrong_audience_is_rejected (test_secure_customer_identity.TestSecureCustomerIdentity.test_wrong_audience_is_rejected) ... ok
+test_wrong_issuer_is_rejected (test_secure_customer_identity.TestSecureCustomerIdentity.test_wrong_issuer_is_rejected) ... ok
+test_zero_or_negative_jwt_expiry_is_rejected_by_configuration (test_secure_customer_identity.TestSecureCustomerIdentity.test_zero_or_negative_jwt_expiry_is_rejected_by_configuration) ... ok
+test_chat_rejects_invalid_token (test_secure_reservation_create.TestSecureReservationCreate.test_chat_rejects_invalid_token) ... 2026-07-20 21:00:18,474 | INFO | httpx | HTTP Request: POST http://testserver/chat "HTTP/1.1 401 Unauthorized"
+ok
+test_chat_rejects_missing_token (test_secure_reservation_create.TestSecureReservationCreate.test_chat_rejects_missing_token) ... 2026-07-20 21:00:18,478 | INFO | httpx | HTTP Request: POST http://testserver/chat "HTTP/1.1 401 Unauthorized"
+ok
+test_custom_aura_logs_do_not_include_bearer_token_or_secret (test_secure_reservation_create.TestSecureReservationCreate.test_custom_aura_logs_do_not_include_bearer_token_or_secret) ... 2026-07-20 21:00:18,486 | INFO | httpx | HTTP Request: POST http://testserver/chat "HTTP/1.1 200 OK"
+ok
+test_different_customer_tokens_create_distinct_owners (test_secure_reservation_create.TestSecureReservationCreate.test_different_customer_tokens_create_distinct_owners) ... 2026-07-20 21:00:18,490 | INFO | AURA | SESSION TRANSITION: intent=reservation awaiting_confirmation=True update_stage=None cancel_stage=None
+2026-07-20 21:00:18,490 | INFO | AURA | WORKFLOW TRANSITION: intent=reservation confidence_available=True
+2026-07-20 21:00:18,491 | INFO | httpx | HTTP Request: POST http://testserver/chat "HTTP/1.1 200 OK"
+2026-07-20 21:00:18,494 | INFO | AURA | SESSION TRANSITION: intent=reservation awaiting_confirmation=True update_stage=None cancel_stage=None
+2026-07-20 21:00:18,494 | INFO | AURA | WORKFLOW TRANSITION: intent=reservation confidence_available=True
+2026-07-20 21:00:18,496 | INFO | httpx | HTTP Request: POST http://testserver/chat "HTTP/1.1 200 OK"
+ok
+test_direct_reservation_ignores_x_session_id_for_secure_owner (test_secure_reservation_create.TestSecureReservationCreate.test_direct_reservation_ignores_x_session_id_for_secure_owner) ... 2026-07-20 21:00:18,503 | INFO | httpx | HTTP Request: POST http://testserver/reservation/ "HTTP/1.1 200 OK"
+ok
+test_direct_reservation_requires_bearer_token (test_secure_reservation_create.TestSecureReservationCreate.test_direct_reservation_requires_bearer_token) ... 2026-07-20 21:00:18,508 | INFO | httpx | HTTP Request: POST http://testserver/reservation/ "HTTP/1.1 401 Unauthorized"
+ok
+test_same_token_with_different_session_ids_keeps_same_owner (test_secure_reservation_create.TestSecureReservationCreate.test_same_token_with_different_session_ids_keeps_same_owner) ... 2026-07-20 21:00:18,512 | INFO | AURA | SESSION TRANSITION: intent=reservation awaiting_confirmation=True update_stage=None cancel_stage=None
+2026-07-20 21:00:18,512 | INFO | AURA | WORKFLOW TRANSITION: intent=reservation confidence_available=True
+2026-07-20 21:00:18,515 | INFO | httpx | HTTP Request: POST http://testserver/chat "HTTP/1.1 200 OK"
+2026-07-20 21:00:18,522 | INFO | AURA | SESSION TRANSITION: intent=reservation awaiting_confirmation=True update_stage=None cancel_stage=None
+2026-07-20 21:00:18,522 | INFO | AURA | WORKFLOW TRANSITION: intent=reservation confidence_available=True
+2026-07-20 21:00:18,525 | INFO | httpx | HTTP Request: POST http://testserver/chat "HTTP/1.1 200 OK"
+ok
+test_valid_token_allows_chat_create_and_uses_authenticated_owner (test_secure_reservation_create.TestSecureReservationCreate.test_valid_token_allows_chat_create_and_uses_authenticated_owner) ... 2026-07-20 21:00:18,535 | INFO | AURA | SESSION TRANSITION: intent=reservation awaiting_confirmation=True update_stage=None cancel_stage=None
+2026-07-20 21:00:18,535 | INFO | AURA | WORKFLOW TRANSITION: intent=reservation confidence_available=True
+2026-07-20 21:00:18,539 | INFO | httpx | HTTP Request: POST http://testserver/chat "HTTP/1.1 200 OK"
+ok
+test_cancel_state_is_scoped_by_authenticated_customer_and_session_id (test_secure_reservation_management.TestSecureReservationManagement.test_cancel_state_is_scoped_by_authenticated_customer_and_session_id) ... 2026-07-20 21:00:18,548 | INFO | AURA | SESSION TRANSITION: intent=None awaiting_confirmation=False update_stage=None cancel_stage=None
+2026-07-20 21:00:18,548 | INFO | AURA | CANCEL RESERVATION STATE: status=awaiting_cancellation stage=select_reservation_id
+2026-07-20 21:00:18,551 | INFO | httpx | HTTP Request: POST http://testserver/chat "HTTP/1.1 200 OK"
+2026-07-20 21:00:18,559 | INFO | AURA | SESSION TRANSITION: intent=None awaiting_confirmation=False update_stage=None cancel_stage=None
+2026-07-20 21:00:18,559 | INFO | AURA | CANCEL RESERVATION STATE: status=awaiting_cancellation stage=select_reservation_id
+2026-07-20 21:00:18,562 | INFO | httpx | HTTP Request: POST http://testserver/chat "HTTP/1.1 200 OK"
+ok
+test_customer_b_cannot_update_or_cancel_customer_a_reservation (test_secure_reservation_management.TestSecureReservationManagement.test_customer_b_cannot_update_or_cancel_customer_a_reservation) ... 2026-07-20 21:00:18,571 | INFO | AURA | SESSION TRANSITION: intent=None awaiting_confirmation=False update_stage=None cancel_stage=None
+2026-07-20 21:00:18,572 | INFO | AURA | UPDATE RESERVATION STATE: status=awaiting_update stage=select_reservation_id editing_field=None
+2026-07-20 21:00:18,575 | INFO | httpx | HTTP Request: POST http://testserver/chat "HTTP/1.1 200 OK"
+2026-07-20 21:00:18,583 | INFO | AURA | SESSION TRANSITION: intent=None awaiting_confirmation=False update_stage=select_reservation_id cancel_stage=None
+2026-07-20 21:00:18,583 | INFO | AURA | UPDATE RESERVATION STATE: status=awaiting_update stage=select_reservation_id editing_field=None
+2026-07-20 21:00:18,586 | INFO | httpx | HTTP Request: POST http://testserver/chat "HTTP/1.1 200 OK"
+2026-07-20 21:00:18,593 | INFO | AURA | SESSION TRANSITION: intent=None awaiting_confirmation=False update_stage=None cancel_stage=None
+2026-07-20 21:00:18,594 | INFO | AURA | CANCEL RESERVATION STATE: status=awaiting_cancellation stage=select_reservation_id
+2026-07-20 21:00:18,597 | INFO | httpx | HTTP Request: POST http://testserver/chat "HTTP/1.1 200 OK"
+2026-07-20 21:00:18,604 | INFO | AURA | SESSION TRANSITION: intent=None awaiting_confirmation=False update_stage=None cancel_stage=select_reservation_id
+2026-07-20 21:00:18,604 | INFO | AURA | CANCEL RESERVATION STATE: status=awaiting_cancellation stage=select_reservation_id
+2026-07-20 21:00:18,607 | INFO | httpx | HTTP Request: POST http://testserver/chat "HTTP/1.1 200 OK"
+ok
+test_customers_only_see_their_own_non_legacy_reservations (test_secure_reservation_management.TestSecureReservationManagement.test_customers_only_see_their_own_non_legacy_reservations) ... 2026-07-20 21:00:18,615 | INFO | AURA | SESSION TRANSITION: intent=None awaiting_confirmation=False update_stage=None cancel_stage=None
+2026-07-20 21:00:18,618 | INFO | httpx | HTTP Request: POST http://testserver/chat "HTTP/1.1 200 OK"
+2026-07-20 21:00:18,626 | INFO | AURA | SESSION TRANSITION: intent=None awaiting_confirmation=False update_stage=None cancel_stage=None
+2026-07-20 21:00:18,629 | INFO | httpx | HTTP Request: POST http://testserver/chat "HTTP/1.1 200 OK"
+ok
+test_memory_is_scoped_by_authenticated_customer_and_session_id (test_secure_reservation_management.TestSecureReservationManagement.test_memory_is_scoped_by_authenticated_customer_and_session_id) ... 2026-07-20 21:00:18,637 | INFO | AURA | SESSION TRANSITION: intent=None awaiting_confirmation=False update_stage=None cancel_stage=None
+2026-07-20 21:00:18,638 | INFO | AURA | UPDATE RESERVATION STATE: status=awaiting_update stage=select_reservation_id editing_field=None
+2026-07-20 21:00:18,641 | INFO | httpx | HTTP Request: POST http://testserver/chat "HTTP/1.1 200 OK"
+2026-07-20 21:00:18,648 | INFO | AURA | SESSION TRANSITION: intent=None awaiting_confirmation=False update_stage=select_reservation_id cancel_stage=None
+2026-07-20 21:00:18,648 | INFO | AURA | UPDATE RESERVATION STATE: status=awaiting_update stage=select_field editing_field=None
+2026-07-20 21:00:18,651 | INFO | httpx | HTTP Request: POST http://testserver/chat "HTTP/1.1 200 OK"
+2026-07-20 21:00:18,658 | INFO | AURA | SESSION TRANSITION: intent=None awaiting_confirmation=False update_stage=None cancel_stage=None
+2026-07-20 21:00:18,659 | INFO | AURA | UPDATE RESERVATION STATE: status=awaiting_update stage=select_reservation_id editing_field=None
+2026-07-20 21:00:18,662 | INFO | httpx | HTTP Request: POST http://testserver/chat "HTTP/1.1 200 OK"
+2026-07-20 21:00:18,669 | INFO | AURA | SESSION TRANSITION: intent=None awaiting_confirmation=False update_stage=select_reservation_id cancel_stage=None
+2026-07-20 21:00:18,669 | INFO | AURA | UPDATE RESERVATION STATE: status=awaiting_update stage=select_field editing_field=None
+2026-07-20 21:00:18,672 | INFO | httpx | HTTP Request: POST http://testserver/chat "HTTP/1.1 200 OK"
+ok
+test_same_customer_different_session_ids_have_separate_update_state (test_secure_reservation_management.TestSecureReservationManagement.test_same_customer_different_session_ids_have_separate_update_state) ... 2026-07-20 21:00:18,680 | INFO | AURA | SESSION TRANSITION: intent=None awaiting_confirmation=False update_stage=None cancel_stage=None
+2026-07-20 21:00:18,680 | INFO | AURA | UPDATE RESERVATION STATE: status=awaiting_update stage=select_reservation_id editing_field=None
+2026-07-20 21:00:18,683 | INFO | httpx | HTTP Request: POST http://testserver/chat "HTTP/1.1 200 OK"
+2026-07-20 21:00:18,691 | INFO | AURA | SESSION TRANSITION: intent=None awaiting_confirmation=False update_stage=select_reservation_id cancel_stage=None
+2026-07-20 21:00:18,691 | INFO | AURA | UPDATE RESERVATION STATE: status=awaiting_update stage=select_field editing_field=None
+2026-07-20 21:00:18,694 | INFO | httpx | HTTP Request: POST http://testserver/chat "HTTP/1.1 200 OK"
+2026-07-20 21:00:18,701 | INFO | AURA | SESSION TRANSITION: intent=None awaiting_confirmation=False update_stage=None cancel_stage=None
+2026-07-20 21:00:18,702 | INFO | AURA | UPDATE RESERVATION STATE: status=awaiting_update stage=select_reservation_id editing_field=None
+2026-07-20 21:00:18,704 | INFO | httpx | HTTP Request: POST http://testserver/chat "HTTP/1.1 200 OK"
+ok
+test_database_tool_executes_query (test_tool_manager.TestToolManager.test_database_tool_executes_query) ... ok
+test_tool_manager_executes_registered_tool (test_tool_manager.TestToolManager.test_tool_manager_executes_registered_tool) ... ok
+test_tool_manager_returns_error_for_unknown_tool (test_tool_manager.TestToolManager.test_tool_manager_returns_error_for_unknown_tool) ... ok
+test_classifier_declares_update_reservation_intent (test_update_reservation.TestUpdateReservation.test_classifier_declares_update_reservation_intent) ... ok
+test_invalid_field (test_update_reservation.TestUpdateReservation.test_invalid_field) ... ok
+test_invalid_people_values_keep_update_session_active (test_update_reservation.TestUpdateReservation.test_invalid_people_values_keep_update_session_active) ... ok
+test_invalid_reservation_id (test_update_reservation.TestUpdateReservation.test_invalid_reservation_id) ... ok
+test_orchestrator_keeps_confirmation_priority_over_update_state (test_update_reservation.TestUpdateReservation.test_orchestrator_keeps_confirmation_priority_over_update_state) ... 2026-07-20 21:00:19,687 | INFO | AURA | SESSION TRANSITION: intent=reservation awaiting_confirmation=True update_stage=select_field cancel_stage=None
+2026-07-20 21:00:19,687 | INFO | AURA | WORKFLOW TRANSITION: intent=reservation confidence_available=True
+ok
+test_orchestrator_logs_state_after_reservation_selection (test_update_reservation.TestUpdateReservation.test_orchestrator_logs_state_after_reservation_selection) ... 2026-07-20 21:00:20,313 | INFO | AURA | SESSION TRANSITION: intent=None awaiting_confirmation=False update_stage=None cancel_stage=None
+2026-07-20 21:00:20,313 | INFO | AURA | UPDATE RESERVATION STATE: status=awaiting_update stage=select_reservation_id editing_field=None
+ok
+test_orchestrator_routes_classified_update_intent (test_update_reservation.TestUpdateReservation.test_orchestrator_routes_classified_update_intent) ... 2026-07-20 21:00:20,926 | INFO | AURA | SESSION TRANSITION: intent=None awaiting_confirmation=False update_stage=None cancel_stage=None
+2026-07-20 21:00:20,926 | INFO | AURA | UPDATE RESERVATION STATE: status=awaiting_update stage=None editing_field=None
+ok
+test_people_value_accepts_natural_positive_integer_forms (test_update_reservation.TestUpdateReservation.test_people_value_accepts_natural_positive_integer_forms) ... ok
+test_repository_atomic_update_rejects_non_owner (test_update_reservation.TestUpdateReservation.test_repository_atomic_update_rejects_non_owner) ... ok
+test_repository_updates_allowed_field_and_rejects_invalid_field (test_update_reservation.TestUpdateReservation.test_repository_updates_allowed_field_and_rejects_invalid_field) ... ok
+test_reservation_id_persists_during_update_flow (test_update_reservation.TestUpdateReservation.test_reservation_id_persists_during_update_flow) ... ok
+test_retry_after_invalid_people_value_keeps_update_session_active (test_update_reservation.TestUpdateReservation.test_retry_after_invalid_people_value_keeps_update_session_active) ... ok
+test_successful_retry_with_valid_people_value (test_update_reservation.TestUpdateReservation.test_successful_retry_with_valid_people_value) ... ok
+test_successful_update (test_update_reservation.TestUpdateReservation.test_successful_update) ... ok
+test_update_date (test_update_reservation.TestUpdateReservation.test_update_date) ... ok
+test_update_people (test_update_reservation.TestUpdateReservation.test_update_people) ... ok
+test_update_people_with_natural_value (test_update_reservation.TestUpdateReservation.test_update_people_with_natural_value) ... ok
+test_update_time (test_update_reservation.TestUpdateReservation.test_update_time) ... ok
+test_user_cannot_update_another_customers_reservation (test_update_reservation.TestUpdateReservation.test_user_cannot_update_another_customers_reservation) ... ok
+test_classifier_declares_view_reservation_intent (test_view_reservation.TestViewReservation.test_classifier_declares_view_reservation_intent) ... ok
+test_orchestrator_routes_classified_view_intent_for_a_new_session (test_view_reservation.TestViewReservation.test_orchestrator_routes_classified_view_intent_for_a_new_session) ... 2026-07-20 21:00:21,938 | INFO | AURA | SESSION TRANSITION: intent=None awaiting_confirmation=False update_stage=None cancel_stage=None
+ok
+test_orchestrator_routes_view_request_without_changing_active_reservation_intent (test_view_reservation.TestViewReservation.test_orchestrator_routes_view_request_without_changing_active_reservation_intent) ... 2026-07-20 21:00:22,547 | INFO | AURA | SESSION TRANSITION: intent=reservation awaiting_confirmation=False update_stage=None cancel_stage=None
+ok
+test_repository_lists_latest_five_by_descending_id (test_view_reservation.TestViewReservation.test_repository_lists_latest_five_by_descending_id) ... ok
+test_view_agent_formats_only_five_latest_reservations (test_view_reservation.TestViewReservation.test_view_agent_formats_only_five_latest_reservations) ... ok
+test_view_agent_returns_empty_message_when_no_reservations_exist (test_view_reservation.TestViewReservation.test_view_agent_returns_empty_message_when_no_reservations_exist) ... ok
+test_view_only_returns_current_customer_records_and_hides_legacy (test_view_reservation.TestViewReservation.test_view_only_returns_current_customer_records_and_hides_legacy) ... ok
+
+----------------------------------------------------------------------
+Ran 148 tests in 14.916s
+
+OK
+Fondasi secure customer identity V1.5 berhasil ditambahkan.
+Fondasi secure customer identity V1.5 sudah tersedia.

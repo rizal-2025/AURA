@@ -258,6 +258,7 @@ class ReservationAgent:
         return {
             "status": "awaiting_confirmation",
             "response": self._confirmation_message(session),
+            "invalid_input": True,
         }
 
     def _detect_confirmation_intent(self, user_message: str) -> tuple[str | None, str | None]:
