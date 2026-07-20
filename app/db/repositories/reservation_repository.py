@@ -1,6 +1,7 @@
 from sqlalchemy import func, update
 from sqlalchemy.orm import Session
 
+from app.core.ownership import require_owner_customer_id
 from app.db.models.reservation import Reservation
 from app.schemas.reservation import ReservationCreate
 
@@ -15,6 +16,7 @@ class ReservationRepository:
         owner_customer_id,
         limit: int = 5,
     ):
+        require_owner_customer_id(owner_customer_id)
         return (
             db.query(Reservation)
             .filter(Reservation.owner_customer_id == owner_customer_id)
@@ -29,6 +31,7 @@ class ReservationRepository:
         reservation_id: int,
         owner_customer_id,
     ):
+        require_owner_customer_id(owner_customer_id)
         return (
             db.query(Reservation)
             .filter(Reservation.id == reservation_id)
@@ -44,6 +47,7 @@ class ReservationRepository:
         new_value,
         owner_customer_id,
     ):
+        require_owner_customer_id(owner_customer_id)
         if field_name not in self.EDITABLE_FIELDS:
             raise ValueError(f"Field '{field_name}' cannot be updated.")
 
@@ -68,6 +72,7 @@ class ReservationRepository:
         reservation_id: int,
         owner_customer_id,
     ):
+        require_owner_customer_id(owner_customer_id)
         statement = (
             update(Reservation)
             .where(
@@ -88,13 +93,9 @@ class ReservationRepository:
         self,
         db: Session,
         reservation: ReservationCreate,
-        customer_id: str | None = None,
-        owner_customer_id=None,
+        owner_customer_id,
     ):
-        if not customer_id and owner_customer_id is None:
-            raise ValueError(
-                "customer_id or owner_customer_id is required when creating a reservation."
-            )
+        require_owner_customer_id(owner_customer_id)
 
         reservation_fields = {
             "name": reservation.name,
@@ -102,10 +103,7 @@ class ReservationRepository:
             "date": reservation.date,
             "time": reservation.time,
         }
-        if customer_id is not None:
-            reservation_fields["customer_id"] = customer_id
-        if owner_customer_id is not None:
-            reservation_fields["owner_customer_id"] = owner_customer_id
+        reservation_fields["owner_customer_id"] = owner_customer_id
 
         data = Reservation(
             **reservation_fields,

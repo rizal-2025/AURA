@@ -2,6 +2,38 @@
 
 Semua perubahan penting pada AURA dicatat di dokumen ini. Repository belum memiliki tag rilis, sehingga entri berikut mengikuti riwayat commit proyek.
 
+## 2026-07-20 - Secure Customer Identity (V1.5 Phase 3)
+
+### Added
+
+- Validasi konfigurasi autentikasi saat startup: `AUTH_JWT_SECRET` wajib tersedia dan minimal 32 karakter, sedangkan `AUTH_JWT_EXPIRE_MINUTES` wajib berupa integer positif.
+- Validasi defensif yang sama saat token dibuat, sehingga perubahan konfigurasi runtime yang tidak aman tidak dapat menerbitkan token.
+- Regression test konfigurasi JWT, penolakan token tidak sah, isolasi ownership, record legacy tersembunyi, parser jumlah orang natural, serta verifikasi log AURA tidak berisi bearer token atau JWT secret.
+- Dokumentasi konfigurasi lokal, migrasi aman, guest token, Swagger authorization, kebijakan record legacy, dan batasan identitas guest.
+
+### Changed
+
+- Dokumentasi ownership kini membedakan tegas `session_id` (memori percakapan) dari `owner_customer_id` (UUID pelanggan tervalidasi dari bearer token).
+- Seluruh endpoint yang membuat atau mengelola reservasi (`POST /chat` dan `POST /reservation/`) memerlukan bearer token; Create, Read, Update, dan Cancel memakai `owner_customer_id` saja untuk ownership.
+
+### Security notes
+
+- Nilai secret maupun bearer token tidak ditulis oleh logger aplikasi AURA. Header `Authorization` tidak masuk ke custom state-transition logs.
+- Tidak ada migrasi dijalankan pada fase ini; record lama tidak dihapus, diubah, atau di-backfill.
+
+## 2026-07-20 - Secure Customer Identity (V1.5 Phases 1-2B)
+
+### Added
+
+- Tabel `customers`, JWT guest bearer token, dan dependency `get_current_customer` untuk memvalidasi signature, expiry, issuer, audience, status pelanggan, serta `token_version`.
+- Kolom ownership aman `reservations.owner_customer_id` yang merujuk ke `customers.id`.
+- Filter ownership dan operasi UPDATE/CANCEL atomik dengan predicate `id` dan `owner_customer_id` dari pelanggan terautentikasi.
+
+### Notes
+
+- Kolom `customer_id` V1.4 dipertahankan sebagai data legacy dan tidak lagi dipakai sebagai sumber ownership aman.
+- Record dengan `owner_customer_id = NULL` tetap tersimpan, tetapi tidak ditampilkan atau dapat dikelola lewat fitur "reservasi saya".
+
 ## 2026-07-20 - Reservation Customer Ownership (V1.4)
 
 ### Added

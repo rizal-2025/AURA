@@ -310,11 +310,8 @@ class TestUpdateReservation(unittest.TestCase):
             )
 
         mocked_logger.info.assert_any_call(
-            "UPDATE RESERVATION STATE: session_id=%s status=%s "
-            "reservation_id=%s stage=%s editing_field=%s",
-            self.session_id,
+            "UPDATE RESERVATION STATE: status=%s stage=%s editing_field=%s",
             "awaiting_update",
-            2,
             UpdateReservationAgent.SELECT_FIELD,
             None,
         )

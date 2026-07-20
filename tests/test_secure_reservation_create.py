@@ -26,7 +26,7 @@ class TestSecureReservationCreate(unittest.TestCase):
         self.original_secret = settings.AUTH_JWT_SECRET
         self.original_issuer = settings.AUTH_JWT_ISSUER
         self.original_audience = settings.AUTH_JWT_AUDIENCE
-        settings.AUTH_JWT_SECRET = "phase-2a-test-secret"
+        settings.AUTH_JWT_SECRET = "phase-2a-test-secret-01234567890"
         settings.AUTH_JWT_ISSUER = "aura-phase-2a"
         settings.AUTH_JWT_AUDIENCE = "aura-phase-2a-api"
 
@@ -124,6 +124,37 @@ class TestSecureReservationCreate(unittest.TestCase):
         )
 
         self.assertEqual(response.status_code, 401)
+
+    def test_custom_aura_logs_do_not_include_bearer_token_or_secret(self):
+        token = self._token_for(self.customer_a)
+        session_id = f"session-payload-{token}"
+        reservation_db = MagicMock()
+        with (
+            patch("app.agents.reservation_agent.SessionLocal", return_value=reservation_db),
+            patch(
+                "app.agents.reservation_agent.ReservationService.create_reservation",
+                return_value=MagicMock(),
+            ),
+            self.assertLogs("AURA", level="INFO") as captured,
+        ):
+            self._seed_chat_confirmation(session_id)
+            response = self.client.post(
+                "/chat",
+                json={"session_id": session_id, "message": "Ya"},
+                headers={"Authorization": f"Bearer {token}"},
+            )
+
+        chat_agent.memory_manager.clear_session(session_id)
+        self.assertEqual(response.status_code, 200)
+        log_output = "\n".join(captured.output)
+        self.assertNotIn(token, log_output)
+        self.assertNotIn(settings.AUTH_JWT_SECRET, log_output)
+        self.assertNotIn("Authorization", log_output)
+        self.assertNotIn(session_id, log_output)
+        self.assertNotIn("Rizal", log_output)
+        self.assertNotIn("2026-08-01", log_output)
+        self.assertNotIn("19:00", log_output)
+        self.assertNotIn("4", log_output)
 
     def test_valid_token_allows_chat_create_and_uses_authenticated_owner(self):
         reservation_db = MagicMock()

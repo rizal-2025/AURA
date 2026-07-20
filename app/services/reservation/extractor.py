@@ -97,8 +97,6 @@ Pesan pengguna:
 
         response = await provider.chat(prompt)
 
-        logger.info(f"RAW AI RESPONSE:\n{response}")
-
         try:
             result = json.loads(response)
 
@@ -112,10 +110,8 @@ Pesan pengguna:
 
             return result
 
-        except Exception as e:
-
-            logger.error(f"JSON ERROR: {e}")
-            logger.error(f"RAW RESPONSE:\n{response}")
+        except Exception:
+            logger.error("Reservation extraction response parsing failed.")
 
             return {
                 "name": None,

@@ -2,6 +2,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from app.core.ownership import MissingOwnerCustomerError, require_owner_customer_id
 from app.services.reservation.service import ReservationService
 
 
@@ -17,11 +18,18 @@ class ViewReservationAgent:
         session_id: str,
         owner_customer_id,
     ) -> dict[str, Any]:
-        reservations = self.reservation_service.list_recent_reservations(
-            db,
-            owner_customer_id=owner_customer_id,
-            limit=5,
-        )
+        try:
+            require_owner_customer_id(owner_customer_id)
+            reservations = self.reservation_service.list_recent_reservations(
+                db,
+                owner_customer_id=owner_customer_id,
+                limit=5,
+            )
+        except MissingOwnerCustomerError:
+            return {
+                "status": "authorization_required",
+                "response": "Identitas pelanggan tidak valid atau telah kedaluwarsa.",
+            }
         recent_reservations = reservations[:5]
 
         if not recent_reservations:

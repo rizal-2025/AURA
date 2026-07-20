@@ -4,6 +4,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from app.brain.memory_manager import MemoryManager
+from app.core.ownership import MissingOwnerCustomerError, require_owner_customer_id
 from app.services.reservation.service import ReservationService
 from app.utils.datetime_parser import DatetimeParser
 
@@ -38,6 +39,14 @@ class UpdateReservationAgent:
         user_message: str,
         owner_customer_id,
     ) -> dict[str, Any]:
+        try:
+            require_owner_customer_id(owner_customer_id)
+        except MissingOwnerCustomerError:
+            return {
+                "status": "authorization_required",
+                "response": "Identitas pelanggan tidak valid atau telah kedaluwarsa.",
+            }
+
         session = self.memory_manager.get_session(session_id)
         stage = session.get("update_reservation_stage")
 

@@ -5,7 +5,11 @@ from uuid import UUID
 
 import jwt
 
-from app.core.config import settings
+from app.core.config import (
+    MAXIMUM_JWT_EXPIRE_MINUTES,
+    MINIMUM_JWT_SECRET_LENGTH,
+    settings,
+)
 
 
 JWT_ALGORITHM = "HS256"
@@ -18,9 +22,27 @@ class InvalidCustomerToken(Exception):
 
 def _jwt_secret() -> str:
     secret = settings.AUTH_JWT_SECRET
-    if not secret:
-        raise RuntimeError("AUTH_JWT_SECRET must be configured before issuing tokens.")
+    if not isinstance(secret, str) or len(secret) < MINIMUM_JWT_SECRET_LENGTH:
+        raise RuntimeError(
+            "Invalid AURA authentication configuration: AUTH_JWT_SECRET must be "
+            f"configured and at least {MINIMUM_JWT_SECRET_LENGTH} characters long."
+        )
     return secret
+
+
+def _jwt_expire_minutes() -> int:
+    expires_minutes = settings.AUTH_JWT_EXPIRE_MINUTES
+    if (
+        isinstance(expires_minutes, bool)
+        or not isinstance(expires_minutes, int)
+        or not 1 <= expires_minutes <= MAXIMUM_JWT_EXPIRE_MINUTES
+    ):
+        raise RuntimeError(
+            "Invalid AURA authentication configuration: "
+            "AUTH_JWT_EXPIRE_MINUTES must be a strict integer between 1 and "
+            f"{MAXIMUM_JWT_EXPIRE_MINUTES}."
+        )
+    return expires_minutes
 
 
 def create_customer_access_token(
@@ -39,7 +61,7 @@ def create_customer_access_token(
     expires_at = now + (
         expires_delta
         if expires_delta is not None
-        else timedelta(minutes=settings.AUTH_JWT_EXPIRE_MINUTES)
+        else timedelta(minutes=_jwt_expire_minutes())
     )
     payload = {
         "sub": str(customer_id),

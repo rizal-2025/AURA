@@ -109,7 +109,7 @@ class TestSecureReservationManagement(unittest.TestCase):
         self.original_secret = settings.AUTH_JWT_SECRET
         self.original_issuer = settings.AUTH_JWT_ISSUER
         self.original_audience = settings.AUTH_JWT_AUDIENCE
-        settings.AUTH_JWT_SECRET = "phase-2b-test-secret"
+        settings.AUTH_JWT_SECRET = "phase-2b-test-secret-01234567890"
         settings.AUTH_JWT_ISSUER = "aura-phase-2b"
         settings.AUTH_JWT_AUDIENCE = "aura-phase-2b-api"
 

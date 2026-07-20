@@ -5,6 +5,7 @@ from app.agents.view_reservation_agent import ViewReservationAgent
 from app.brain.classifier import IntentClassifier
 from app.brain.memory_manager import MemoryManager
 from app.brain.planner import Planner
+from app.core.ownership import MissingOwnerCustomerError, require_owner_customer_id
 from app.core.logger import logger
 from app.memory.session import memory
 from app.services.ai.factory import get_ai_provider
@@ -57,8 +58,14 @@ class AgentOrchestrator:
         session_payload = dict(session)
         session_payload["session_id"] = session_id
 
-        logger.info(f"SESSION ID: {session_id}")
-        logger.info(f"SESSION PRE-STATE: {session}")
+        logger.info(
+            "SESSION TRANSITION: intent=%s awaiting_confirmation=%s update_stage=%s "
+            "cancel_stage=%s",
+            session.get("intent"),
+            bool(session.get("awaiting_confirmation")),
+            session.get("update_reservation_stage"),
+            session.get("cancel_reservation_stage"),
+        )
 
         if self._is_update_reservation_active(session_payload):
             return await self._update_reservation(
@@ -130,7 +137,11 @@ class AgentOrchestrator:
                 }
             )
 
-        logger.info(f"MEMORY: {self.memory_manager.get_session(session_id)}")
+        logger.info(
+            "WORKFLOW TRANSITION: intent=%s confidence_available=%s",
+            intent,
+            confidence is not None,
+        )
 
         if intent in {"reservation", "check_reservation", "cancel_reservation", "greeting", "general_question"}:
             session = self.memory_manager.get_session(session_id)
@@ -217,6 +228,8 @@ class AgentOrchestrator:
         return normalized_message in self.CANCEL_RESERVATION_PHRASES
 
     async def _view_reservations(self, db, session_id: str, owner_customer_id) -> str:
+        if not self._has_authenticated_owner(owner_customer_id):
+            return self._authorization_error_response()
         result = await self.view_reservation_agent.run(
             db,
             session_id,
@@ -231,6 +244,8 @@ class AgentOrchestrator:
         message: str,
         owner_customer_id,
     ) -> str:
+        if not self._has_authenticated_owner(owner_customer_id):
+            return self._authorization_error_response()
         result = await self.update_reservation_agent.run(
             db,
             session_id,
@@ -239,11 +254,8 @@ class AgentOrchestrator:
         )
         session = self.memory_manager.get_session(session_id)
         logger.info(
-            "UPDATE RESERVATION STATE: session_id=%s status=%s "
-            "reservation_id=%s stage=%s editing_field=%s",
-            session_id,
+            "UPDATE RESERVATION STATE: status=%s stage=%s editing_field=%s",
             result.get("status"),
-            session.get("reservation_id"),
             session.get("update_reservation_stage"),
             session.get("editing_field"),
         )
@@ -256,6 +268,8 @@ class AgentOrchestrator:
         message: str,
         owner_customer_id,
     ) -> str:
+        if not self._has_authenticated_owner(owner_customer_id):
+            return self._authorization_error_response()
         result = await self.cancel_reservation_agent.run(
             db,
             session_id,
@@ -264,11 +278,20 @@ class AgentOrchestrator:
         )
         session = self.memory_manager.get_session(session_id)
         logger.info(
-            "CANCEL RESERVATION STATE: session_id=%s status=%s "
-            "reservation_id=%s stage=%s",
-            session_id,
+            "CANCEL RESERVATION STATE: status=%s stage=%s",
             result.get("status"),
-            session.get("cancel_reservation_id"),
             session.get("cancel_reservation_stage"),
         )
         return result.get("response", "")
+
+    @staticmethod
+    def _has_authenticated_owner(owner_customer_id) -> bool:
+        try:
+            require_owner_customer_id(owner_customer_id)
+        except MissingOwnerCustomerError:
+            return False
+        return True
+
+    @staticmethod
+    def _authorization_error_response() -> str:
+        return "Identitas pelanggan tidak valid atau telah kedaluwarsa."

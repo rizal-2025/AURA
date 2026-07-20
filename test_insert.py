@@ -1,28 +1,11 @@
-from app.db.database import SessionLocal
-from app.db.repositories.reservation_repository import ReservationRepository
-from app.schemas.reservation import ReservationCreate
+"""Disabled legacy insertion script.
+
+V1.5 reservations must be created through an authenticated API path so the
+server supplies owner_customer_id. This script intentionally performs no write.
+"""
 
 
-db = SessionLocal()
-
-repo = ReservationRepository()
-
-reservation = ReservationCreate(
-    name="Rizal",
-    people=6,
-    date="2026-07-14",
-    time="19:00",
-)
-
-saved = repo.create(
-    db=db,
-    reservation=reservation,
-    customer_id="manual-test-session",
-)
-
-print(saved.id)
-print(saved.name)
-print(saved.people)
-print(saved.date)
-print(saved.time)
-print(saved.status)
+if __name__ == "__main__":
+    raise SystemExit(
+        "Legacy direct insertion is disabled. Use POST /reservation/ with a bearer token."
+    )

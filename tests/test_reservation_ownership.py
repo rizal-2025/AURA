@@ -5,12 +5,15 @@ from unittest.mock import MagicMock, patch
 from uuid import uuid4
 
 from app.agents.update_reservation_agent import UpdateReservationAgent
+from app.agents.cancel_reservation_agent import CancelReservationAgent
 from app.agents.view_reservation_agent import ViewReservationAgent
 from app.api.reservation import create as create_reservation_endpoint
 from app.brain.memory_manager import MemoryManager
+from app.core.ownership import MissingOwnerCustomerError
 from app.db.models.reservation import Reservation
 from app.db.repositories.reservation_repository import ReservationRepository
 from app.schemas.reservation import ReservationCreate
+from app.services.reservation.service import ReservationService
 
 
 class InMemoryOwnedReservationService:
@@ -83,7 +86,7 @@ class TestReservationOwnership(unittest.TestCase):
     def test_customer_id_model_column_is_nullable(self):
         self.assertTrue(Reservation.__table__.c.customer_id.nullable)
 
-    def test_repository_create_sets_customer_id(self):
+    def test_repository_blocks_legacy_only_create(self):
         data = ReservationCreate(
             name="Rizal",
             people=4,
@@ -91,44 +94,108 @@ class TestReservationOwnership(unittest.TestCase):
             time="19:00",
         )
         db = MagicMock()
-        created_reservation = MagicMock()
-
-        with patch(
-            "app.db.repositories.reservation_repository.Reservation",
-            return_value=created_reservation,
-        ) as reservation_model:
-            result = ReservationRepository().create(
-                db,
-                data,
-                customer_id="session-a",
-            )
-
-        self.assertIs(result, created_reservation)
-        reservation_model.assert_called_once_with(
-            name="Rizal",
-            people=4,
-            date="2026-07-22",
-            time="19:00",
-            customer_id="session-a",
-        )
-        db.add.assert_called_once_with(created_reservation)
-        db.commit.assert_called_once()
-        db.refresh.assert_called_once_with(created_reservation)
-
-    def test_repository_rejects_new_reservation_without_customer_id(self):
-        data = ReservationCreate(
-            name="Rizal",
-            people=4,
-            date="2026-07-22",
-            time="19:00",
-        )
-        db = MagicMock()
-
-        with self.assertRaises(ValueError):
-            ReservationRepository().create(db, data, customer_id="")
+        with self.assertRaises(MissingOwnerCustomerError):
+            ReservationRepository().create(db, data, owner_customer_id=None)
 
         db.add.assert_not_called()
         db.commit.assert_not_called()
+
+    def test_repository_rejects_new_reservation_without_authenticated_owner(self):
+        data = ReservationCreate(
+            name="Rizal",
+            people=4,
+            date="2026-07-22",
+            time="19:00",
+        )
+        db = MagicMock()
+
+        with self.assertRaises(MissingOwnerCustomerError):
+            ReservationRepository().create(db, data, owner_customer_id=None)
+
+        db.add.assert_not_called()
+        db.commit.assert_not_called()
+
+    def test_secure_repository_operations_reject_missing_owner_before_query(self):
+        repository = ReservationRepository()
+        db = MagicMock()
+        data = ReservationCreate(
+            name="Rizal",
+            people=4,
+            date="2026-07-22",
+            time="19:00",
+        )
+
+        for operation in (
+            lambda: repository.list_recent(db, owner_customer_id=None),
+            lambda: repository.get_by_id(db, 4, owner_customer_id=None),
+            lambda: repository.update_reservation_field(
+                db,
+                4,
+                "people",
+                5,
+                owner_customer_id=None,
+            ),
+            lambda: repository.cancel_reservation(db, 4, owner_customer_id=None),
+            lambda: repository.create(db, data, owner_customer_id=None),
+        ):
+            with self.subTest(operation=operation):
+                with self.assertRaises(MissingOwnerCustomerError):
+                    operation()
+
+        db.query.assert_not_called()
+        db.execute.assert_not_called()
+        db.add.assert_not_called()
+        db.commit.assert_not_called()
+
+    def test_secure_service_operations_reject_missing_owner_before_repository_call(self):
+        service = ReservationService()
+        service.repository = MagicMock()
+        data = ReservationCreate(
+            name="Rizal",
+            people=4,
+            date="2026-07-22",
+            time="19:00",
+        )
+        db = MagicMock()
+
+        for operation in (
+            lambda: service.list_recent_reservations(db, owner_customer_id=None),
+            lambda: service.get_reservation_by_id(db, 4, owner_customer_id=None),
+            lambda: service.update_reservation_field(
+                db, 4, "people", 5, owner_customer_id=None
+            ),
+            lambda: service.cancel_reservation(db, 4, owner_customer_id=None),
+            lambda: service.create_reservation(db, data, owner_customer_id=None),
+        ):
+            with self.subTest(operation=operation):
+                with self.assertRaises(MissingOwnerCustomerError):
+                    operation()
+
+        self.assertEqual(service.repository.method_calls, [])
+
+    def test_management_agents_reject_missing_owner_before_service_call(self):
+        service = MagicMock()
+        memory = MemoryManager()
+        view_result = asyncio.run(
+            ViewReservationAgent(reservation_service=service).run(
+                MagicMock(), "session-a", None
+            )
+        )
+        update_result = asyncio.run(
+            UpdateReservationAgent(memory_manager=memory, reservation_service=service).run(
+                MagicMock(), "session-a", "lihat", None
+            )
+        )
+        cancel_result = asyncio.run(
+            CancelReservationAgent(memory_manager=memory, reservation_service=service).run(
+                MagicMock(), "session-a", "lihat", None
+            )
+        )
+
+        for result in (view_result, update_result, cancel_result):
+            self.assertEqual(result["status"], "authorization_required")
+
+        self.assertEqual(service.method_calls, [])
 
     def test_repository_create_sets_secure_owner_without_legacy_customer_id(self):
         data = ReservationCreate(

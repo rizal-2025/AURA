@@ -12,7 +12,8 @@ from fastapi.security import HTTPAuthorizationCredentials
 
 from app.api.auth import create_guest_customer
 from app.api.dependencies import get_current_customer
-from app.core.config import settings
+from app.core.config import MAXIMUM_JWT_EXPIRE_MINUTES, Settings, settings
+from app.db.database import engine
 from app.core.security import (
     JWT_ALGORITHM,
     create_customer_access_token,
@@ -106,7 +107,8 @@ class TestSecureCustomerIdentity(unittest.TestCase):
         self.original_secret = settings.AUTH_JWT_SECRET
         self.original_issuer = settings.AUTH_JWT_ISSUER
         self.original_audience = settings.AUTH_JWT_AUDIENCE
-        settings.AUTH_JWT_SECRET = "test-secure-customer-secret"
+        self.original_expiry = settings.AUTH_JWT_EXPIRE_MINUTES
+        settings.AUTH_JWT_SECRET = "test-secure-customer-secret-0123456789"
         settings.AUTH_JWT_ISSUER = "aura-test"
         settings.AUTH_JWT_AUDIENCE = "aura-test-api"
         self.customer_id = uuid4()
@@ -115,6 +117,7 @@ class TestSecureCustomerIdentity(unittest.TestCase):
         settings.AUTH_JWT_SECRET = self.original_secret
         settings.AUTH_JWT_ISSUER = self.original_issuer
         settings.AUTH_JWT_AUDIENCE = self.original_audience
+        settings.AUTH_JWT_EXPIRE_MINUTES = self.original_expiry
 
     def _credentials(self, token):
         return HTTPAuthorizationCredentials(scheme="Bearer", credentials=token)
@@ -173,6 +176,57 @@ class TestSecureCustomerIdentity(unittest.TestCase):
         self.assertEqual(raised.exception.status_code, 503)
         db.add.assert_not_called()
         db.commit.assert_not_called()
+
+    def test_short_jwt_secret_is_rejected_by_configuration(self):
+        with self.assertRaises(ValueError) as raised:
+            Settings(
+                DATABASE_URL="postgresql://user:password@localhost/aura",
+                AUTH_JWT_SECRET="too-short",
+            )
+
+        self.assertIn("AUTH_JWT_SECRET", str(raised.exception))
+
+    def test_zero_or_negative_jwt_expiry_is_rejected_by_configuration(self):
+        for expires_minutes in (
+            True,
+            1.0,
+            "1.0",
+            0,
+            -1,
+            MAXIMUM_JWT_EXPIRE_MINUTES + 1,
+        ):
+            with self.subTest(expires_minutes=expires_minutes):
+                with self.assertRaises(ValueError) as raised:
+                    Settings(
+                        DATABASE_URL="postgresql://user:password@localhost/aura",
+                        AUTH_JWT_SECRET="test-secure-customer-secret-0123456789",
+                        AUTH_JWT_EXPIRE_MINUTES=expires_minutes,
+                    )
+
+                self.assertIn("AUTH_JWT_EXPIRE_MINUTES", str(raised.exception))
+
+    def test_valid_integer_jwt_expiry_is_accepted(self):
+        configured = Settings(
+            DATABASE_URL="postgresql://user:password@localhost/aura",
+            AUTH_JWT_SECRET="test-secure-customer-secret-0123456789",
+            AUTH_JWT_EXPIRE_MINUTES="60",
+        )
+
+        self.assertEqual(configured.AUTH_JWT_EXPIRE_MINUTES, 60)
+
+    def test_guest_endpoint_returns_safe_error_for_invalid_runtime_expiry(self):
+        settings.AUTH_JWT_EXPIRE_MINUTES = MAXIMUM_JWT_EXPIRE_MINUTES + 1
+        db = MagicMock()
+
+        with self.assertRaises(HTTPException) as raised:
+            create_guest_customer(Response(), db)
+
+        self.assertEqual(raised.exception.status_code, 503)
+        db.add.assert_not_called()
+        db.commit.assert_not_called()
+
+    def test_sql_echo_is_disabled_by_default(self):
+        self.assertFalse(engine.echo)
 
     def test_valid_token_returns_active_customer(self):
         token, _ = create_customer_access_token(self.customer_id, 1)

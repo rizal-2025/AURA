@@ -6,7 +6,7 @@ Dokumen ini merangkum status pengembangan berdasarkan baseline kode AURA saat in
 
 ### Platform API
 
-- Aplikasi FastAPI dengan endpoint root, health check, chat, dan pembuatan reservasi langsung.
+- Aplikasi FastAPI dengan endpoint root, health check, guest authentication, chat, dan pembuatan reservasi langsung.
 - Konfigurasi aplikasi berbasis environment serta provider AI yang dapat dipilih: Ollama atau OpenAI.
 - Schema Pydantic untuk input chat dan data reservasi.
 
@@ -21,7 +21,9 @@ Dokumen ini merangkum status pengembangan berdasarkan baseline kode AURA saat in
 - Reservation Management (READ): intent `view_reservation` untuk menampilkan maksimal lima reservasi terbaru.
 - Reservation Management (UPDATE): intent `update_reservation` untuk mengubah nama, jumlah orang, tanggal, atau jam pada reservasi tersimpan.
 - Reservation Management (CANCEL): intent `cancel_reservation` untuk memilih salah satu dari lima reservasi terbaru, mengonfirmasi pembatalan, lalu mengubah status menjadi `cancelled` tanpa menghapus record.
-- Reservation Customer Ownership (V1.4): setiap reservasi baru menyimpan `customer_id` dari session sementara; Read, Update, dan Cancel terisolasi per pelanggan, sementara record legacy `NULL` tetap dipertahankan tetapi tidak diekspos.
+- Secure Customer Identity (V1.5): server menerbitkan guest bearer token; `session_id` hanya untuk memori percakapan, sedangkan Create, Read, Update, dan Cancel memakai `owner_customer_id` dari pelanggan terautentikasi.
+- Validasi konfigurasi JWT aman: secret minimal 32 karakter dan expiry positif, disertai regression test token, ownership, parser nilai natural, dan logging tanpa secret/token.
+- Kolom `customer_id` V1.4 serta record legacy tetap dipertahankan; record dengan `owner_customer_id = NULL` tidak diekspos.
 
 ### Fondasi pendukung
 
@@ -35,7 +37,7 @@ Dokumen ini merangkum status pengembangan berdasarkan baseline kode AURA saat in
 - Mengganti agent placeholder untuk cek reservasi, greeting, dan pertanyaan umum dengan perilaku yang benar-benar fungsional.
 - Menyatukan daftar intent pada classifier, planner, dan workflow; melengkapi handler khusus untuk menu, promo, FAQ, dan keluhan.
 - Menambahkan validasi bisnis untuk jumlah orang, format/tanggal/waktu reservasi, serta penanganan respons AI yang tidak valid.
-- Mengganti identitas session sementara dengan autentikasi dan identitas pelanggan persisten agar ownership dapat dipakai secara aman lintas perangkat dan instance.
+- Menambahkan refresh-token lifecycle atau autentikasi akun setelah kebutuhan produk dan kebijakan keamanan ditetapkan.
 - Memperkuat reliabilitas provider AI dengan timeout, retry, dan error handling yang jelas.
 - Menambah pengujian end-to-end yang terisolasi, termasuk database uji dan tanggal/waktu yang deterministik.
 
@@ -43,6 +45,6 @@ Dokumen ini merangkum status pengembangan berdasarkan baseline kode AURA saat in
 
 - Validasi ketersediaan meja, kapasitas, jam operasional, dan pencegahan bentrok jadwal.
 - Notifikasi reservasi melalui kanal yang relevan, misalnya email atau WhatsApp.
-- Autentikasi, otorisasi, dan dashboard operasional untuk staf restoran.
+- Registrasi, pemulihan akun, dan autentikasi pelanggan permanen dengan kebijakan verifikasi yang sesuai.
 - Observabilitas produksi: metrik, tracing, audit log, rate limiting, dan alerting.
 - Penyimpanan memori yang dapat dibagi antar-instance serta strategi deployment yang siap skala.
