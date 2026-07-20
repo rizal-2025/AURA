@@ -1,3 +1,4 @@
+from sqlalchemy import func, update
 from sqlalchemy.orm import Session
 
 from app.db.models.reservation import Reservation
@@ -11,12 +12,12 @@ class ReservationRepository:
     def list_recent(
         self,
         db: Session,
-        customer_id: str,
+        owner_customer_id,
         limit: int = 5,
     ):
         return (
             db.query(Reservation)
-            .filter(Reservation.customer_id == customer_id)
+            .filter(Reservation.owner_customer_id == owner_customer_id)
             .order_by(Reservation.id.desc())
             .limit(limit)
             .all()
@@ -26,12 +27,12 @@ class ReservationRepository:
         self,
         db: Session,
         reservation_id: int,
-        customer_id: str,
+        owner_customer_id,
     ):
         return (
             db.query(Reservation)
             .filter(Reservation.id == reservation_id)
-            .filter(Reservation.customer_id == customer_id)
+            .filter(Reservation.owner_customer_id == owner_customer_id)
             .first()
         )
 
@@ -41,34 +42,47 @@ class ReservationRepository:
         reservation_id: int,
         field_name: str,
         new_value,
-        customer_id: str,
+        owner_customer_id,
     ):
         if field_name not in self.EDITABLE_FIELDS:
             raise ValueError(f"Field '{field_name}' cannot be updated.")
 
-        reservation = self.get_by_id(db, reservation_id, customer_id)
-        if reservation is None:
+        statement = (
+            update(Reservation)
+            .where(
+                Reservation.id == reservation_id,
+                Reservation.owner_customer_id == owner_customer_id,
+            )
+            .values({field_name: new_value})
+        )
+        result = db.execute(statement)
+        if result.rowcount != 1:
             return None
 
-        setattr(reservation, field_name, new_value)
         db.commit()
-        db.refresh(reservation)
-        return reservation
+        return self.get_by_id(db, reservation_id, owner_customer_id)
 
     def cancel_reservation(
         self,
         db: Session,
         reservation_id: int,
-        customer_id: str,
+        owner_customer_id,
     ):
-        reservation = self.get_by_id(db, reservation_id, customer_id)
-        if reservation is None or str(reservation.status).lower() == "cancelled":
+        statement = (
+            update(Reservation)
+            .where(
+                Reservation.id == reservation_id,
+                Reservation.owner_customer_id == owner_customer_id,
+                func.lower(Reservation.status) != "cancelled",
+            )
+            .values(status="cancelled")
+        )
+        result = db.execute(statement)
+        if result.rowcount != 1:
             return None
 
-        reservation.status = "cancelled"
         db.commit()
-        db.refresh(reservation)
-        return reservation
+        return self.get_by_id(db, reservation_id, owner_customer_id)
 
     def create(
         self,

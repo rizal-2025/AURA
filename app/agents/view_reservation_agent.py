@@ -15,10 +15,11 @@ class ViewReservationAgent:
         self,
         db: Session,
         session_id: str,
+        owner_customer_id,
     ) -> dict[str, Any]:
         reservations = self.reservation_service.list_recent_reservations(
             db,
-            customer_id=session_id,
+            owner_customer_id=owner_customer_id,
             limit=5,
         )
         recent_reservations = reservations[:5]

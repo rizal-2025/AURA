@@ -45,31 +45,32 @@ class CancelReservationAgent:
         db: Session,
         session_id: str,
         user_message: str,
+        owner_customer_id,
     ) -> dict[str, Any]:
         session = self.memory_manager.get_session(session_id)
         stage = session.get("cancel_reservation_stage")
 
         if stage is None:
-            return self._start_cancellation(db, session, session_id)
+            return self._start_cancellation(db, session, owner_customer_id)
 
         if stage == self.SELECT_RESERVATION_ID:
-            return self._select_reservation(db, session, user_message, session_id)
+            return self._select_reservation(db, session, user_message, owner_customer_id)
 
         if stage == self.CONFIRM_CANCELLATION:
-            return self._confirm_cancellation(db, session, user_message, session_id)
+            return self._confirm_cancellation(db, session, user_message, owner_customer_id)
 
         self._clear_cancellation_state(session)
-        return self._start_cancellation(db, session, session_id)
+        return self._start_cancellation(db, session, owner_customer_id)
 
     def _start_cancellation(
         self,
         db: Session,
         session: dict[str, Any],
-        customer_id: str,
+        owner_customer_id,
     ) -> dict[str, Any]:
         reservations = self.reservation_service.list_recent_reservations(
             db,
-            customer_id=customer_id,
+            owner_customer_id=owner_customer_id,
             limit=5,
         )
         recent_reservations = reservations[:5]
@@ -99,7 +100,7 @@ class CancelReservationAgent:
         db: Session,
         session: dict[str, Any],
         user_message: str,
-        customer_id: str,
+        owner_customer_id,
     ) -> dict[str, Any]:
         reservation_id = self._parse_reservation_id(user_message)
         if reservation_id is None:
@@ -111,7 +112,7 @@ class CancelReservationAgent:
         reservation = self.reservation_service.get_reservation_by_id(
             db,
             reservation_id,
-            customer_id=customer_id,
+            owner_customer_id=owner_customer_id,
         )
         if reservation is None:
             return {
@@ -145,7 +146,7 @@ class CancelReservationAgent:
         db: Session,
         session: dict[str, Any],
         user_message: str,
-        customer_id: str,
+        owner_customer_id,
     ) -> dict[str, Any]:
         reservation_id = session.get("cancel_reservation_id")
         if not isinstance(reservation_id, int):
@@ -172,13 +173,13 @@ class CancelReservationAgent:
         cancelled_reservation = self.reservation_service.cancel_reservation(
             db,
             reservation_id,
-            customer_id=customer_id,
+            owner_customer_id=owner_customer_id,
         )
         if cancelled_reservation is None:
             current_reservation = self.reservation_service.get_reservation_by_id(
                 db,
                 reservation_id,
-                customer_id=customer_id,
+                owner_customer_id=owner_customer_id,
             )
             self._clear_cancellation_state(session)
             if current_reservation is not None and self._is_cancelled(current_reservation):

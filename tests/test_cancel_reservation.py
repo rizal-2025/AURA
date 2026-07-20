@@ -1,7 +1,7 @@
 import asyncio
 import unittest
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from app.agents.cancel_reservation_agent import CancelReservationAgent
 from app.agents.orchestrator import AgentOrchestrator
@@ -22,7 +22,7 @@ class FakeCancellationService:
                 date="2026-07-23",
                 time="17:00",
                 status="pending",
-                customer_id=None,
+                owner_customer_id=None,
             ),
             4: SimpleNamespace(
                 id=4,
@@ -31,7 +31,7 @@ class FakeCancellationService:
                 date="2026-07-23",
                 time="18:00",
                 status="pending",
-                customer_id="other-session",
+                owner_customer_id="other-customer",
             ),
             3: SimpleNamespace(
                 id=3,
@@ -40,7 +40,7 @@ class FakeCancellationService:
                 date="2026-07-22",
                 time="20:00",
                 status="cancelled",
-                customer_id=self.OWNER_ID,
+                owner_customer_id=self.OWNER_ID,
             ),
             2: SimpleNamespace(
                 id=2,
@@ -49,7 +49,7 @@ class FakeCancellationService:
                 date="2026-07-21",
                 time="19:00",
                 status="pending",
-                customer_id=self.OWNER_ID,
+                owner_customer_id=self.OWNER_ID,
             ),
             1: SimpleNamespace(
                 id=1,
@@ -58,18 +58,18 @@ class FakeCancellationService:
                 date="2026-07-20",
                 time="18:00",
                 status="pending",
-                customer_id=self.OWNER_ID,
+                owner_customer_id=self.OWNER_ID,
             ),
         }
         self.list_calls = []
         self.cancel_calls = []
 
-    def list_recent_reservations(self, db, customer_id, limit=5):
-        self.list_calls.append((db, customer_id, limit))
+    def list_recent_reservations(self, db, owner_customer_id, limit=5):
+        self.list_calls.append((db, owner_customer_id, limit))
         reservations = [
             reservation
             for reservation in self.reservations.values()
-            if reservation.customer_id == customer_id
+            if reservation.owner_customer_id == owner_customer_id
         ]
         return sorted(
             reservations,
@@ -77,19 +77,19 @@ class FakeCancellationService:
             reverse=True,
         )[:limit]
 
-    def get_reservation_by_id(self, db, reservation_id, customer_id):
+    def get_reservation_by_id(self, db, reservation_id, owner_customer_id):
         reservation = self.reservations.get(reservation_id)
-        if reservation is None or reservation.customer_id != customer_id:
+        if reservation is None or reservation.owner_customer_id != owner_customer_id:
             return None
         return reservation
 
-    def cancel_reservation(self, db, reservation_id, customer_id):
-        reservation = self.get_reservation_by_id(db, reservation_id, customer_id)
+    def cancel_reservation(self, db, reservation_id, owner_customer_id):
+        reservation = self.get_reservation_by_id(db, reservation_id, owner_customer_id)
         if reservation is None or reservation.status == "cancelled":
             return None
 
         reservation.status = "cancelled"
-        self.cancel_calls.append((db, reservation_id, customer_id))
+        self.cancel_calls.append((db, reservation_id, owner_customer_id))
         return reservation
 
 
@@ -106,6 +106,11 @@ class FakeCancelQuery:
         return self.reservation
 
 
+class FakeAtomicResult:
+    def __init__(self, rowcount):
+        self.rowcount = rowcount
+
+
 class TestCancelReservation(unittest.TestCase):
     def setUp(self):
         self.memory = MemoryManager()
@@ -118,7 +123,14 @@ class TestCancelReservation(unittest.TestCase):
         self.session_id = "cancel-session"
 
     def _send(self, message):
-        return asyncio.run(self.agent.run(self.db, self.session_id, message))
+        return asyncio.run(
+            self.agent.run(
+                self.db,
+                self.session_id,
+                message,
+                self.service.OWNER_ID,
+            )
+        )
 
     def _start_and_select_reservation(self, reservation_id="2"):
         self._send("batalkan reservasi saya")
@@ -132,7 +144,7 @@ class TestCancelReservation(unittest.TestCase):
 
         self.assertEqual(
             self.service.list_calls,
-            [(self.db, self.session_id, 5)],
+            [(self.db, self.service.OWNER_ID, 5)],
         )
         self.assertIn("Pilih ID reservasi", start_result["response"])
         self.assertIn("ID: 2", selected_result["response"])
@@ -144,7 +156,7 @@ class TestCancelReservation(unittest.TestCase):
         self.assertEqual(self.service.reservations[2].status, "cancelled")
         self.assertEqual(
             self.service.cancel_calls,
-            [(self.db, 2, self.session_id)],
+            [(self.db, 2, self.service.OWNER_ID)],
         )
         self.assertIn("Status: cancelled", result["response"])
         self.assertIsNone(session["cancel_reservation_stage"])
@@ -222,45 +234,49 @@ class TestCancelReservation(unittest.TestCase):
             date="2026-07-21",
             time="19:00",
             status="pending",
-            customer_id=self.session_id,
+            owner_customer_id=self.service.OWNER_ID,
         )
         db = MagicMock()
-        db.query.return_value = FakeCancelQuery(reservation)
+        db.execute.return_value = FakeAtomicResult(rowcount=1)
+        repository = ReservationRepository()
 
-        updated = ReservationRepository().cancel_reservation(
-            db,
-            2,
-            self.session_id,
-        )
+        with patch.object(
+            repository,
+            "get_by_id",
+            return_value=reservation,
+        ) as get_by_id:
+            updated = repository.cancel_reservation(
+                db,
+                2,
+                self.service.OWNER_ID,
+            )
 
         self.assertIs(updated, reservation)
-        self.assertEqual(reservation.status, "cancelled")
         db.commit.assert_called_once()
-        db.refresh.assert_called_once_with(reservation)
+        get_by_id.assert_called_once_with(db, 2, self.service.OWNER_ID)
+        statement = db.execute.call_args.args[0]
+        self.assertIn("reservations.id", str(statement))
+        self.assertIn("owner_customer_id", str(statement))
+        self.assertIn("cancelled", statement.compile().params.values())
         db.delete.assert_not_called()
 
-    def test_repository_rejects_already_cancelled_reservation(self):
-        reservation = SimpleNamespace(
-            id=3,
-            name="Citra",
-            people=5,
-            date="2026-07-22",
-            time="20:00",
-            status="cancelled",
-            customer_id=self.session_id,
-        )
+    def test_repository_atomic_cancel_rejects_non_owner_or_cancelled_record(self):
         db = MagicMock()
-        db.query.return_value = FakeCancelQuery(reservation)
+        db.execute.return_value = FakeAtomicResult(rowcount=0)
+        repository = ReservationRepository()
 
-        result = ReservationRepository().cancel_reservation(
+        result = repository.cancel_reservation(
             db,
             3,
-            self.session_id,
+            self.service.OWNER_ID,
         )
 
         self.assertIsNone(result)
         db.commit.assert_not_called()
-        db.refresh.assert_not_called()
+        statement = db.execute.call_args.args[0]
+        self.assertIn("reservations.id", str(statement))
+        self.assertIn("owner_customer_id", str(statement))
+        self.assertIn("cancelled", statement.compile().params.values())
         db.delete.assert_not_called()
 
     def test_user_cannot_cancel_another_customers_reservation(self):
@@ -303,11 +319,18 @@ class TestCancelReservation(unittest.TestCase):
                 )
 
                 class DummyCancelReservationAgent:
-                    async def run(self, received_db, received_session_id, received_message):
+                    async def run(
+                        self,
+                        received_db,
+                        received_session_id,
+                        received_message,
+                        received_owner_customer_id,
+                    ):
                         self.args = (
                             received_db,
                             received_session_id,
                             received_message,
+                            received_owner_customer_id,
                         )
                         return {
                             "status": "awaiting_cancellation",
@@ -318,10 +341,21 @@ class TestCancelReservation(unittest.TestCase):
                 orchestrator.cancel_reservation_agent = handler
                 db = MagicMock()
 
-                response = asyncio.run(orchestrator.handle(session_id, phrase, db))
+                owner_customer_id = f"cancel-owner-{index}"
+                response = asyncio.run(
+                    orchestrator.handle(
+                        session_id,
+                        phrase,
+                        db,
+                        owner_customer_id=owner_customer_id,
+                    )
+                )
 
                 self.assertEqual(response, "Pilih ID reservasi")
-                self.assertEqual(handler.args, (db, session_id, phrase))
+                self.assertEqual(
+                    handler.args,
+                    (db, session_id, phrase, owner_customer_id),
+                )
                 self.assertEqual(
                     orchestrator.memory_manager.get_session(session_id)["intent"],
                     "reservation",
@@ -336,8 +370,19 @@ class TestCancelReservation(unittest.TestCase):
                 return {"intent": "cancel_reservation", "confidence": 0.95}
 
         class DummyCancelReservationAgent:
-            async def run(self, received_db, received_session_id, received_message):
-                self.args = (received_db, received_session_id, received_message)
+            async def run(
+                self,
+                received_db,
+                received_session_id,
+                received_message,
+                received_owner_customer_id,
+            ):
+                self.args = (
+                    received_db,
+                    received_session_id,
+                    received_message,
+                    received_owner_customer_id,
+                )
                 return {
                     "status": "awaiting_cancellation",
                     "response": "Pilih ID reservasi",
@@ -347,14 +392,20 @@ class TestCancelReservation(unittest.TestCase):
         orchestrator.intent_classifier = DummyClassifier()
         orchestrator.cancel_reservation_agent = handler
 
+        owner_customer_id = "cancel-owner"
         response = asyncio.run(
-            orchestrator.handle("cancel-new-session", "hapus booking saya", db)
+            orchestrator.handle(
+                "cancel-new-session",
+                "hapus booking saya",
+                db,
+                owner_customer_id=owner_customer_id,
+            )
         )
 
         self.assertEqual(response, "Pilih ID reservasi")
         self.assertEqual(
             handler.args,
-            (db, "cancel-new-session", "hapus booking saya"),
+            (db, "cancel-new-session", "hapus booking saya", owner_customer_id),
         )
 
     def test_orchestrator_keeps_create_confirmation_priority_over_cancel_state(self):

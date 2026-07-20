@@ -23,7 +23,7 @@ class FakeReservationService:
                 date="2026-07-22",
                 time="18:00",
                 status="pending",
-                customer_id="other-session",
+                owner_customer_id="other-customer",
             ),
             2: SimpleNamespace(
                 id=2,
@@ -32,7 +32,7 @@ class FakeReservationService:
                 date="2026-07-20",
                 time="19:00",
                 status="pending",
-                customer_id=self.OWNER_ID,
+                owner_customer_id=self.OWNER_ID,
             ),
             1: SimpleNamespace(
                 id=1,
@@ -41,22 +41,22 @@ class FakeReservationService:
                 date="2026-07-21",
                 time="20:00",
                 status="pending",
-                customer_id=self.OWNER_ID,
+                owner_customer_id=self.OWNER_ID,
             ),
         }
         self.update_calls = []
 
-    def list_recent_reservations(self, db, customer_id, limit=5):
+    def list_recent_reservations(self, db, owner_customer_id, limit=5):
         reservations = [
             reservation
             for reservation in self.reservations.values()
-            if reservation.customer_id == customer_id
+            if reservation.owner_customer_id == owner_customer_id
         ]
         return sorted(reservations, key=lambda item: item.id, reverse=True)[:limit]
 
-    def get_reservation_by_id(self, db, reservation_id, customer_id):
+    def get_reservation_by_id(self, db, reservation_id, owner_customer_id):
         reservation = self.reservations.get(reservation_id)
-        if reservation is None or reservation.customer_id != customer_id:
+        if reservation is None or reservation.owner_customer_id != owner_customer_id:
             return None
         return reservation
 
@@ -66,13 +66,13 @@ class FakeReservationService:
         reservation_id,
         field_name,
         new_value,
-        customer_id,
+        owner_customer_id,
     ):
-        reservation = self.get_reservation_by_id(db, reservation_id, customer_id)
+        reservation = self.get_reservation_by_id(db, reservation_id, owner_customer_id)
         if reservation is None:
             return None
         setattr(reservation, field_name, new_value)
-        self.update_calls.append((reservation_id, field_name, new_value, customer_id))
+        self.update_calls.append((reservation_id, field_name, new_value, owner_customer_id))
         return reservation
 
 
@@ -89,6 +89,11 @@ class FakeUpdateQuery:
         return self.reservation
 
 
+class FakeAtomicResult:
+    def __init__(self, rowcount):
+        self.rowcount = rowcount
+
+
 class TestUpdateReservation(unittest.TestCase):
     def setUp(self):
         self.memory = MemoryManager()
@@ -101,7 +106,14 @@ class TestUpdateReservation(unittest.TestCase):
         self.session_id = "update-session"
 
     def _send(self, message):
-        return asyncio.run(self.agent.run(self.db, self.session_id, message))
+        return asyncio.run(
+            self.agent.run(
+                self.db,
+                self.session_id,
+                message,
+                self.service.OWNER_ID,
+            )
+        )
 
     def _start_and_select_reservation(self, reservation_id="2"):
         self._send("ubah reservasi saya")
@@ -117,7 +129,7 @@ class TestUpdateReservation(unittest.TestCase):
         self.assertEqual(self.service.reservations[2].name, "Andi")
         self.assertEqual(
             self.service.update_calls[-1],
-            (2, "name", "Andi", self.session_id),
+            (2, "name", "Andi", self.service.OWNER_ID),
         )
         self.assertEqual(result["status"], "updated")
         self.assertIn("Reservasi berhasil diperbarui", result["response"])
@@ -159,15 +171,41 @@ class TestUpdateReservation(unittest.TestCase):
         self.assertEqual(self.service.reservations[2].people, 7)
         self.assertEqual(
             self.service.update_calls[-1],
-            (2, "people", 7, self.session_id),
+            (2, "people", 7, self.service.OWNER_ID),
         )
         self.assertIn("Jumlah Orang: 7", result["response"])
+
+    def test_people_value_accepts_natural_positive_integer_forms(self):
+        for value in ("9", "9 orang", "menjadi 9 orang", "ubah jadi 9"):
+            with self.subTest(value=value):
+                self.assertEqual(self.agent._parse_new_value("people", value), 9)
+
+    def test_update_people_with_natural_value(self):
+        self._start_and_select_reservation()
+        self._send("people")
+
+        result = self._send("menjadi 9 orang")
+
+        self.assertEqual(self.service.reservations[2].people, 9)
+        self.assertEqual(
+            self.service.update_calls[-1],
+            (2, "people", 9, self.service.OWNER_ID),
+        )
+        self.assertEqual(result["status"], "updated")
 
     def test_invalid_people_values_keep_update_session_active(self):
         self._start_and_select_reservation()
         self._send("people")
 
-        for invalid_value in ("abc", "", "-7", "0", "7.5"):
+        for invalid_value in (
+            "abc",
+            "sembilan",
+            "",
+            "0",
+            "-5",
+            "3.5",
+            "9 dan 10",
+        ):
             with self.subTest(value=invalid_value):
                 result = self._send(invalid_value)
                 session = self.memory.get_session(self.session_id)
@@ -216,7 +254,7 @@ class TestUpdateReservation(unittest.TestCase):
         self.assertEqual(self.service.reservations[2].people, 7)
         self.assertEqual(
             self.service.update_calls,
-            [(2, "people", 7, self.session_id)],
+            [(2, "people", 7, self.service.OWNER_ID)],
         )
         self.assertEqual(session["reservation_id"], 2)
         self.assertIsNone(session["update_reservation_stage"])
@@ -253,11 +291,23 @@ class TestUpdateReservation(unittest.TestCase):
         orchestrator.update_reservation_agent = self.agent
 
         asyncio.run(
-            orchestrator.handle(self.session_id, "ubah reservasi saya", self.db)
+            orchestrator.handle(
+                self.session_id,
+                "ubah reservasi saya",
+                self.db,
+                owner_customer_id=self.service.OWNER_ID,
+            )
         )
 
         with patch("app.agents.orchestrator.logger") as mocked_logger:
-            asyncio.run(orchestrator.handle(self.session_id, "2", self.db))
+            asyncio.run(
+                orchestrator.handle(
+                    self.session_id,
+                    "2",
+                    self.db,
+                    owner_customer_id=self.service.OWNER_ID,
+                )
+            )
 
         mocked_logger.info.assert_any_call(
             "UPDATE RESERVATION STATE: session_id=%s status=%s "
@@ -278,7 +328,7 @@ class TestUpdateReservation(unittest.TestCase):
         self.assertEqual(self.service.reservations[2].date, "2026-07-25")
         self.assertEqual(
             self.service.update_calls[-1],
-            (2, "date", "2026-07-25", self.session_id),
+            (2, "date", "2026-07-25", self.service.OWNER_ID),
         )
         self.assertIn("Tanggal: 2026-07-25", result["response"])
 
@@ -291,7 +341,7 @@ class TestUpdateReservation(unittest.TestCase):
         self.assertEqual(self.service.reservations[2].time, "20:00")
         self.assertEqual(
             self.service.update_calls[-1],
-            (2, "time", "20:00", self.session_id),
+            (2, "time", "20:00", self.service.OWNER_ID),
         )
         self.assertIn("Jam: 20:00", result["response"])
 
@@ -303,33 +353,54 @@ class TestUpdateReservation(unittest.TestCase):
             date="2026-07-20",
             time="19:00",
             status="pending",
-            customer_id=self.session_id,
+            owner_customer_id=self.service.OWNER_ID,
         )
-        query = FakeUpdateQuery(reservation)
         db = MagicMock()
-        db.query.return_value = query
+        db.execute.return_value = FakeAtomicResult(rowcount=1)
         repository = ReservationRepository()
 
-        updated = repository.update_reservation_field(
-            db,
-            2,
-            "people",
-            7,
-            self.session_id,
-        )
+        with patch.object(repository, "get_by_id", return_value=reservation) as get_by_id:
+            updated = repository.update_reservation_field(
+                db,
+                2,
+                "people",
+                7,
+                self.service.OWNER_ID,
+            )
 
         self.assertIs(updated, reservation)
-        self.assertEqual(reservation.people, 7)
         db.commit.assert_called_once()
-        db.refresh.assert_called_once_with(reservation)
+        get_by_id.assert_called_once_with(db, 2, self.service.OWNER_ID)
+        statement = db.execute.call_args.args[0]
+        self.assertIn("reservations.id", str(statement))
+        self.assertIn("owner_customer_id", str(statement))
         with self.assertRaises(ValueError):
             repository.update_reservation_field(
                 db,
                 2,
                 "table",
                 "A1",
-                self.session_id,
+                self.service.OWNER_ID,
             )
+
+    def test_repository_atomic_update_rejects_non_owner(self):
+        db = MagicMock()
+        db.execute.return_value = FakeAtomicResult(rowcount=0)
+        repository = ReservationRepository()
+
+        updated = repository.update_reservation_field(
+            db,
+            3,
+            "people",
+            7,
+            self.service.OWNER_ID,
+        )
+
+        self.assertIsNone(updated)
+        db.commit.assert_not_called()
+        statement = db.execute.call_args.args[0]
+        self.assertIn("reservations.id", str(statement))
+        self.assertIn("owner_customer_id", str(statement))
 
     def test_user_cannot_update_another_customers_reservation(self):
         self._send("ubah reservasi saya")
@@ -354,20 +425,40 @@ class TestUpdateReservation(unittest.TestCase):
                 return {"intent": "update_reservation", "confidence": 0.95}
 
         class DummyUpdateReservationAgent:
-            async def run(self, received_db, received_session_id, received_message):
-                self.args = (received_db, received_session_id, received_message)
+            async def run(
+                self,
+                received_db,
+                received_session_id,
+                received_message,
+                received_owner_customer_id,
+            ):
+                self.args = (
+                    received_db,
+                    received_session_id,
+                    received_message,
+                    received_owner_customer_id,
+                )
                 return {"status": "awaiting_update", "response": "Pilih ID reservasi"}
 
         handler = DummyUpdateReservationAgent()
         orchestrator.intent_classifier = DummyClassifier()
         orchestrator.update_reservation_agent = handler
 
+        owner_customer_id = "update-owner"
         response = asyncio.run(
-            orchestrator.handle("update-new-session", "ubah booking saya", db)
+            orchestrator.handle(
+                "update-new-session",
+                "ubah booking saya",
+                db,
+                owner_customer_id=owner_customer_id,
+            )
         )
 
         self.assertEqual(response, "Pilih ID reservasi")
-        self.assertEqual(handler.args, (db, "update-new-session", "ubah booking saya"))
+        self.assertEqual(
+            handler.args,
+            (db, "update-new-session", "ubah booking saya", owner_customer_id),
+        )
 
     def test_orchestrator_keeps_confirmation_priority_over_update_state(self):
         orchestrator = AgentOrchestrator()

@@ -23,7 +23,7 @@ class InMemoryOwnedReservationService:
                 date="2026-07-24",
                 time="18:00",
                 status="pending",
-                customer_id=None,
+                owner_customer_id=None,
             ),
             3: SimpleNamespace(
                 id=3,
@@ -32,7 +32,7 @@ class InMemoryOwnedReservationService:
                 date="2026-07-23",
                 time="19:00",
                 status="pending",
-                customer_id="session-b",
+                owner_customer_id="customer-b",
             ),
             2: SimpleNamespace(
                 id=2,
@@ -41,25 +41,25 @@ class InMemoryOwnedReservationService:
                 date="2026-07-22",
                 time="20:00",
                 status="pending",
-                customer_id="session-a",
+                owner_customer_id="customer-a",
             ),
         }
         self.update_calls = []
 
-    def list_recent_reservations(self, db, customer_id, limit=5):
+    def list_recent_reservations(self, db, owner_customer_id, limit=5):
         return sorted(
             (
                 reservation
                 for reservation in self.reservations.values()
-                if reservation.customer_id == customer_id
+                if reservation.owner_customer_id == owner_customer_id
             ),
             key=lambda reservation: reservation.id,
             reverse=True,
         )[:limit]
 
-    def get_reservation_by_id(self, db, reservation_id, customer_id):
+    def get_reservation_by_id(self, db, reservation_id, owner_customer_id):
         reservation = self.reservations.get(reservation_id)
-        if reservation is None or reservation.customer_id != customer_id:
+        if reservation is None or reservation.owner_customer_id != owner_customer_id:
             return None
         return reservation
 
@@ -69,13 +69,13 @@ class InMemoryOwnedReservationService:
         reservation_id,
         field_name,
         new_value,
-        customer_id,
+        owner_customer_id,
     ):
-        reservation = self.get_reservation_by_id(db, reservation_id, customer_id)
+        reservation = self.get_reservation_by_id(db, reservation_id, owner_customer_id)
         if reservation is None:
             return None
         setattr(reservation, field_name, new_value)
-        self.update_calls.append((reservation_id, customer_id))
+        self.update_calls.append((reservation_id, owner_customer_id))
         return reservation
 
 
@@ -197,10 +197,10 @@ class TestReservationOwnership(unittest.TestCase):
         db = MagicMock()
 
         customer_a_list = asyncio.run(
-            agent.run(db, "session-a", "ubah reservasi saya")
+            agent.run(db, "session-a", "ubah reservasi saya", "customer-a")
         )
         customer_b_list = asyncio.run(
-            agent.run(db, "session-b", "ubah reservasi saya")
+            agent.run(db, "session-b", "ubah reservasi saya", "customer-b")
         )
 
         self.assertIn("Rizal", customer_a_list["response"])
@@ -209,8 +209,8 @@ class TestReservationOwnership(unittest.TestCase):
         self.assertIn("Budi", customer_b_list["response"])
         self.assertNotIn("Rizal", customer_b_list["response"])
 
-        selected = asyncio.run(agent.run(db, "session-a", "2"))
-        foreign_selection = asyncio.run(agent.run(db, "session-b", "2"))
+        selected = asyncio.run(agent.run(db, "session-a", "2", "customer-a"))
+        foreign_selection = asyncio.run(agent.run(db, "session-b", "2", "customer-b"))
 
         self.assertIn("Reservasi dipilih", selected["response"])
         self.assertIn("ID reservasi tidak ditemukan", foreign_selection["response"])
@@ -221,7 +221,7 @@ class TestReservationOwnership(unittest.TestCase):
         service = InMemoryOwnedReservationService()
         agent = ViewReservationAgent(reservation_service=service)
 
-        result = asyncio.run(agent.run(MagicMock(), "session-a"))
+        result = asyncio.run(agent.run(MagicMock(), "session-a", "customer-a"))
 
         self.assertIn("Rizal", result["response"])
         self.assertNotIn("Legacy", result["response"])

@@ -36,34 +36,35 @@ class UpdateReservationAgent:
         db: Session,
         session_id: str,
         user_message: str,
+        owner_customer_id,
     ) -> dict[str, Any]:
         session = self.memory_manager.get_session(session_id)
         stage = session.get("update_reservation_stage")
 
         if stage is None:
-            return self._start_update(db, session, session_id)
+            return self._start_update(db, session, owner_customer_id)
 
         if stage == self.SELECT_RESERVATION_ID:
-            return self._select_reservation(db, session, user_message, session_id)
+            return self._select_reservation(db, session, user_message, owner_customer_id)
 
         if stage == self.SELECT_FIELD:
             return self._select_field(session, user_message)
 
         if stage == self.INPUT_VALUE:
-            return self._update_field(db, session, user_message, session_id)
+            return self._update_field(db, session, user_message, owner_customer_id)
 
         self._clear_update_state(session)
-        return self._start_update(db, session, session_id)
+        return self._start_update(db, session, owner_customer_id)
 
     def _start_update(
         self,
         db: Session,
         session: dict[str, Any],
-        customer_id: str,
+        owner_customer_id,
     ) -> dict[str, Any]:
         reservations = self.reservation_service.list_recent_reservations(
             db,
-            customer_id=customer_id,
+            owner_customer_id=owner_customer_id,
             limit=5,
         )
         recent_reservations = reservations[:5]
@@ -93,7 +94,7 @@ class UpdateReservationAgent:
         db: Session,
         session: dict[str, Any],
         user_message: str,
-        customer_id: str,
+        owner_customer_id,
     ) -> dict[str, Any]:
         reservation_id = self._parse_reservation_id(user_message)
         if reservation_id is None:
@@ -105,7 +106,7 @@ class UpdateReservationAgent:
         reservation = self.reservation_service.get_reservation_by_id(
             db,
             reservation_id,
-            customer_id=customer_id,
+            owner_customer_id=owner_customer_id,
         )
         if reservation is None:
             return {
@@ -152,7 +153,7 @@ class UpdateReservationAgent:
         db: Session,
         session: dict[str, Any],
         user_message: str,
-        customer_id: str,
+        owner_customer_id,
     ) -> dict[str, Any]:
         reservation_id = session.get("reservation_id")
         field_name = session.get("editing_field")
@@ -176,7 +177,7 @@ class UpdateReservationAgent:
             reservation_id,
             field_name,
             new_value,
-            customer_id=customer_id,
+            owner_customer_id=owner_customer_id,
         )
         if updated_reservation is None:
             self._clear_update_state(session)
@@ -224,10 +225,19 @@ class UpdateReservationAgent:
             return text.title()
 
         if field_name == "people":
-            if not re.fullmatch(r"[0-9]+", text):
+            # Allow one positive whole number in a natural-language reply, while
+            # rejecting signed, decimal, and ambiguous multi-number values.
+            if re.search(r"(?<![0-9])-[ ]*[0-9]+", text):
                 return None
 
-            people = int(text)
+            if re.search(r"[0-9]+\.[0-9]+", text):
+                return None
+
+            values = re.findall(r"(?<![0-9.])[0-9]+(?![0-9.])", text)
+            if len(values) != 1:
+                return None
+
+            people = int(values[0])
             return people if people > 0 else None
 
         if field_name == "date":

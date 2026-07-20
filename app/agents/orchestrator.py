@@ -61,19 +61,39 @@ class AgentOrchestrator:
         logger.info(f"SESSION PRE-STATE: {session}")
 
         if self._is_update_reservation_active(session_payload):
-            return await self._update_reservation(db, session_id, message)
+            return await self._update_reservation(
+                db,
+                session_id,
+                message,
+                owner_customer_id,
+            )
 
         if self._is_cancel_reservation_active(session_payload):
-            return await self._cancel_reservation(db, session_id, message)
+            return await self._cancel_reservation(
+                db,
+                session_id,
+                message,
+                owner_customer_id,
+            )
 
         if self._is_update_reservation_request(message, session_payload):
-            return await self._update_reservation(db, session_id, message)
+            return await self._update_reservation(
+                db,
+                session_id,
+                message,
+                owner_customer_id,
+            )
 
         if self._is_cancel_reservation_request(message, session_payload):
-            return await self._cancel_reservation(db, session_id, message)
+            return await self._cancel_reservation(
+                db,
+                session_id,
+                message,
+                owner_customer_id,
+            )
 
         if self._is_view_reservation_request(message, session_payload):
-            return await self._view_reservations(db, session_id)
+            return await self._view_reservations(db, session_id, owner_customer_id)
 
         if session_payload.get("intent"):
             intent = session_payload["intent"]
@@ -84,13 +104,23 @@ class AgentOrchestrator:
             confidence = intent_result.get("confidence", 0.0)
 
             if intent == "view_reservation":
-                return await self._view_reservations(db, session_id)
+                return await self._view_reservations(db, session_id, owner_customer_id)
 
             if intent == "update_reservation":
-                return await self._update_reservation(db, session_id, message)
+                return await self._update_reservation(
+                    db,
+                    session_id,
+                    message,
+                    owner_customer_id,
+                )
 
             if intent == "cancel_reservation":
-                return await self._cancel_reservation(db, session_id, message)
+                return await self._cancel_reservation(
+                    db,
+                    session_id,
+                    message,
+                    owner_customer_id,
+                )
 
             self.memory_manager.update_session(
                 session_id,
@@ -186,12 +216,27 @@ class AgentOrchestrator:
         normalized_message = " ".join(message.lower().strip().split())
         return normalized_message in self.CANCEL_RESERVATION_PHRASES
 
-    async def _view_reservations(self, db, session_id: str) -> str:
-        result = await self.view_reservation_agent.run(db, session_id)
+    async def _view_reservations(self, db, session_id: str, owner_customer_id) -> str:
+        result = await self.view_reservation_agent.run(
+            db,
+            session_id,
+            owner_customer_id,
+        )
         return result.get("response", "")
 
-    async def _update_reservation(self, db, session_id: str, message: str) -> str:
-        result = await self.update_reservation_agent.run(db, session_id, message)
+    async def _update_reservation(
+        self,
+        db,
+        session_id: str,
+        message: str,
+        owner_customer_id,
+    ) -> str:
+        result = await self.update_reservation_agent.run(
+            db,
+            session_id,
+            message,
+            owner_customer_id,
+        )
         session = self.memory_manager.get_session(session_id)
         logger.info(
             "UPDATE RESERVATION STATE: session_id=%s status=%s "
@@ -204,8 +249,19 @@ class AgentOrchestrator:
         )
         return result.get("response", "")
 
-    async def _cancel_reservation(self, db, session_id: str, message: str) -> str:
-        result = await self.cancel_reservation_agent.run(db, session_id, message)
+    async def _cancel_reservation(
+        self,
+        db,
+        session_id: str,
+        message: str,
+        owner_customer_id,
+    ) -> str:
+        result = await self.cancel_reservation_agent.run(
+            db,
+            session_id,
+            message,
+            owner_customer_id,
+        )
         session = self.memory_manager.get_session(session_id)
         logger.info(
             "CANCEL RESERVATION STATE: session_id=%s status=%s "

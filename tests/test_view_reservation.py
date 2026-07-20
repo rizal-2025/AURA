@@ -2,6 +2,7 @@ import asyncio
 import unittest
 from types import SimpleNamespace
 from unittest.mock import MagicMock
+from uuid import uuid4
 
 from app.agents.orchestrator import AgentOrchestrator
 from app.agents.view_reservation_agent import ViewReservationAgent
@@ -39,7 +40,10 @@ class TestViewReservation(unittest.TestCase):
         db = MagicMock()
         db.query.return_value = query
 
-        result = ReservationRepository().list_recent(db, customer_id="customer-a")
+        result = ReservationRepository().list_recent(
+            db,
+            owner_customer_id=uuid4(),
+        )
 
         db.query.assert_called_once_with(Reservation)
         self.assertEqual(len(query.filter_clauses), 1)
@@ -64,11 +68,12 @@ class TestViewReservation(unittest.TestCase):
         agent = ViewReservationAgent(reservation_service=service)
         db = MagicMock()
 
-        result = asyncio.run(agent.run(db, "customer-a"))
+        owner_customer_id = uuid4()
+        result = asyncio.run(agent.run(db, "memory-session", owner_customer_id))
 
         service.list_recent_reservations.assert_called_once_with(
             db,
-            customer_id="customer-a",
+            owner_customer_id=owner_customer_id,
             limit=5,
         )
         self.assertEqual(result["status"], "viewed")
@@ -87,7 +92,7 @@ class TestViewReservation(unittest.TestCase):
         service.list_recent_reservations.return_value = []
         agent = ViewReservationAgent(reservation_service=service)
 
-        result = asyncio.run(agent.run(MagicMock(), "customer-a"))
+        result = asyncio.run(agent.run(MagicMock(), "memory-session", uuid4()))
 
         self.assertEqual(result, {"status": "viewed", "response": "Belum ada reservasi."})
 
@@ -101,16 +106,22 @@ class TestViewReservation(unittest.TestCase):
             def __init__(self):
                 self.db = None
 
-            async def run(self, received_db, received_session_id):
+            async def run(self, received_db, received_session_id, received_owner_customer_id):
                 self.db = received_db
                 self.session_id = received_session_id
+                self.owner_customer_id = received_owner_customer_id
                 return {"status": "viewed", "response": "Daftar reservasi terbaru"}
 
         handler = DummyViewReservationAgent()
         orchestrator.view_reservation_agent = handler
 
         response = asyncio.run(
-            orchestrator.handle(session_id, "lihat reservasi saya", db)
+            orchestrator.handle(
+                session_id,
+                "lihat reservasi saya",
+                db,
+                owner_customer_id=uuid4(),
+            )
         )
 
         self.assertEqual(response, "Daftar reservasi terbaru")
@@ -127,17 +138,24 @@ class TestViewReservation(unittest.TestCase):
                 return {"intent": "view_reservation", "confidence": 0.95}
 
         class DummyViewReservationAgent:
-            async def run(self, received_db, received_session_id):
+            async def run(self, received_db, received_session_id, received_owner_customer_id):
                 self.db = received_db
                 self.session_id = received_session_id
+                self.owner_customer_id = received_owner_customer_id
                 return {"status": "viewed", "response": "Daftar reservasi terbaru"}
 
         handler = DummyViewReservationAgent()
         orchestrator.intent_classifier = DummyClassifier()
         orchestrator.view_reservation_agent = handler
 
+        owner_customer_id = uuid4()
         response = asyncio.run(
-            orchestrator.handle("view-new-session", "tampilkan riwayat booking", db)
+            orchestrator.handle(
+                "view-new-session",
+                "tampilkan riwayat booking",
+                db,
+                owner_customer_id=owner_customer_id,
+            )
         )
 
         self.assertEqual(response, "Daftar reservasi terbaru")
@@ -153,7 +171,7 @@ class TestViewReservation(unittest.TestCase):
                 date="2026-07-20",
                 time="19:00",
                 status="pending",
-                customer_id="customer-b",
+                owner_customer_id="customer-b",
             ),
             SimpleNamespace(
                 id=8,
@@ -162,7 +180,7 @@ class TestViewReservation(unittest.TestCase):
                 date="2026-07-20",
                 time="19:00",
                 status="pending",
-                customer_id=None,
+                owner_customer_id=None,
             ),
             SimpleNamespace(
                 id=7,
@@ -171,7 +189,7 @@ class TestViewReservation(unittest.TestCase):
                 date="2026-07-20",
                 time="19:00",
                 status="pending",
-                customer_id="customer-a",
+                owner_customer_id="customer-a",
             ),
             SimpleNamespace(
                 id=6,
@@ -180,22 +198,22 @@ class TestViewReservation(unittest.TestCase):
                 date="2026-07-20",
                 time="19:00",
                 status="pending",
-                customer_id="customer-a",
+                owner_customer_id="customer-a",
             ),
         ]
 
         class OwnedReservationService:
-            def list_recent_reservations(self, db, customer_id, limit=5):
+            def list_recent_reservations(self, db, owner_customer_id, limit=5):
                 return [
                     reservation
                     for reservation in reservations
-                    if reservation.customer_id == customer_id
+                    if reservation.owner_customer_id == owner_customer_id
                 ][:limit]
 
         result = asyncio.run(
             ViewReservationAgent(
                 reservation_service=OwnedReservationService(),
-            ).run(MagicMock(), "customer-a")
+            ).run(MagicMock(), "memory-session", "customer-a")
         )
 
         self.assertIn("ID: 7", result["response"])
