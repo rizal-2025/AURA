@@ -1,5 +1,9 @@
+from uuid import UUID
+
 from sqlalchemy import Integer
 from sqlalchemy import String
+from sqlalchemy import Uuid
+from sqlalchemy import ForeignKey
 from sqlalchemy.orm import Mapped
 from sqlalchemy.orm import mapped_column
 
@@ -26,6 +30,12 @@ class Reservation(Base):
 
     customer_id: Mapped[str | None] = mapped_column(
         String(255),
+        nullable=True,
+    )
+
+    owner_customer_id: Mapped[UUID | None] = mapped_column(
+        Uuid,
+        ForeignKey("customers.id"),
         nullable=True,
     )
 

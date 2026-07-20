@@ -12,6 +12,11 @@ class Settings(BaseSettings):
     DATABASE_URL: str
     OPENAI_API_KEY: str | None = None
 
+    AUTH_JWT_SECRET: str | None = None
+    AUTH_JWT_ISSUER: str = "aura"
+    AUTH_JWT_AUDIENCE: str = "aura-api"
+    AUTH_JWT_EXPIRE_MINUTES: int = 60
+
     model_config = SettingsConfigDict(
         env_file=".env",
         extra="ignore"
