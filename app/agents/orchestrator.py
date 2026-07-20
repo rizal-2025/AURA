@@ -13,25 +13,6 @@ from app.services.ai.factory import get_ai_provider
 
 class AgentOrchestrator:
 
-    VIEW_RESERVATION_PHRASES = {
-        "lihat reservasi saya",
-        "reservasi saya",
-        "daftar reservasi",
-        "show my reservation",
-    }
-    UPDATE_RESERVATION_PHRASES = {
-        "ubah reservasi saya",
-        "edit reservasi saya",
-        "update reservasi saya",
-        "update my reservation",
-    }
-    CANCEL_RESERVATION_PHRASES = {
-        "batalkan reservasi saya",
-        "cancel reservasi",
-        "saya ingin membatalkan reservasi",
-        "cancel my reservation",
-    }
-
     def __init__(self):
         self.ai = get_ai_provider()
         self.intent_classifier = IntentClassifier()
@@ -53,6 +34,11 @@ class AgentOrchestrator:
         db,
         owner_customer_id=None,
     ):
+        # Authenticated chat must never create or read unscoped conversation
+        # memory. The API supplies an owner-scoped internal key only after the
+        # bearer token has been validated.
+        if not self._has_authenticated_owner(owner_customer_id):
+            return self._authorization_error_response()
 
         session = self.memory_manager.get_session(session_id)
         session_payload = dict(session)
@@ -190,8 +176,10 @@ class AgentOrchestrator:
         if session_state.get("awaiting_confirmation"):
             return False
 
-        normalized_message = " ".join(message.lower().strip().split())
-        return normalized_message in self.VIEW_RESERVATION_PHRASES
+        return (
+            IntentClassifier.detect_reservation_intent(message)
+            == "view_reservation"
+        )
 
     def _is_update_reservation_active(self, session_state: dict) -> bool:
         return (
@@ -207,8 +195,10 @@ class AgentOrchestrator:
         if session_state.get("awaiting_confirmation"):
             return False
 
-        normalized_message = " ".join(message.lower().strip().split())
-        return normalized_message in self.UPDATE_RESERVATION_PHRASES
+        return (
+            IntentClassifier.detect_reservation_intent(message)
+            == "update_reservation"
+        )
 
     def _is_cancel_reservation_active(self, session_state: dict) -> bool:
         return (
@@ -224,8 +214,10 @@ class AgentOrchestrator:
         if session_state.get("awaiting_confirmation"):
             return False
 
-        normalized_message = " ".join(message.lower().strip().split())
-        return normalized_message in self.CANCEL_RESERVATION_PHRASES
+        return (
+            IntentClassifier.detect_reservation_intent(message)
+            == "cancel_reservation"
+        )
 
     async def _view_reservations(self, db, session_id: str, owner_customer_id) -> str:
         if not self._has_authenticated_owner(owner_customer_id):

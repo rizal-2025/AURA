@@ -21,8 +21,9 @@ class TestReservationStatePersistence(unittest.TestCase):
         orchestrator.intent_classifier = DummyClassifier()
         orchestrator.ai = DummyAI()
 
-        first_response = asyncio.run(orchestrator.handle("session-123", "Saya mau reservasi", None))
-        second_response = asyncio.run(orchestrator.handle("session-123", "Rizal", None))
+        owner = "test-owner"
+        first_response = asyncio.run(orchestrator.handle("session-123", "Saya mau reservasi", None, owner))
+        second_response = asyncio.run(orchestrator.handle("session-123", "Rizal", None, owner))
 
         session_state = orchestrator.memory_manager.get_session("session-123")
 
@@ -44,9 +45,10 @@ class TestReservationStatePersistence(unittest.TestCase):
         orchestrator.intent_classifier = DummyClassifier()
         orchestrator.ai = DummyAI()
 
-        asyncio.run(orchestrator.handle("session-a", "Saya mau reservasi", None))
-        asyncio.run(orchestrator.handle("session-a", "Rizal", None))
-        asyncio.run(orchestrator.handle("session-b", "Saya mau reservasi", None))
+        owner = "test-owner"
+        asyncio.run(orchestrator.handle("session-a", "Saya mau reservasi", None, owner))
+        asyncio.run(orchestrator.handle("session-a", "Rizal", None, owner))
+        asyncio.run(orchestrator.handle("session-b", "Saya mau reservasi", None, owner))
 
         session_a = orchestrator.memory_manager.get_session("session-a")
         session_b = orchestrator.memory_manager.get_session("session-b")

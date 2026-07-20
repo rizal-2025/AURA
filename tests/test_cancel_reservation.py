@@ -436,7 +436,14 @@ class TestCancelReservation(unittest.TestCase):
         orchestrator.workflow = DummyWorkflow()
         orchestrator.cancel_reservation_agent = FailingCancelReservationAgent()
 
-        response = asyncio.run(orchestrator.handle(session_id, "Ya", db))
+        response = asyncio.run(
+            orchestrator.handle(
+                session_id,
+                "Ya",
+                db,
+                owner_customer_id="cancel-confirmation-owner",
+            ),
+        )
 
         self.assertEqual(response, "Ditangani confirmation flow")
 

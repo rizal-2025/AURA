@@ -484,7 +484,14 @@ class TestUpdateReservation(unittest.TestCase):
         orchestrator.workflow = DummyWorkflow()
         orchestrator.update_reservation_agent = FailingUpdateReservationAgent()
 
-        response = asyncio.run(orchestrator.handle(session_id, "Ya", db))
+        response = asyncio.run(
+            orchestrator.handle(
+                session_id,
+                "Ya",
+                db,
+                owner_customer_id=self.service.OWNER_ID,
+            ),
+        )
 
         self.assertEqual(response, "Ditangani confirmation flow")
 

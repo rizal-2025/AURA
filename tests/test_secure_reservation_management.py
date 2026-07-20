@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 
 from app.api.chat import agent as chat_agent
 from app.core.config import settings
+from app.core.conversation_memory import build_authenticated_memory_key
 from app.core.security import create_customer_access_token
 from app.db.database import get_db
 from app.main import app
@@ -148,8 +149,14 @@ class TestSecureReservationManagement(unittest.TestCase):
             "read-b",
             "update-b",
             "cancel-b",
+            "shared-update",
+            "separate-update",
+            "shared-cancel",
         ):
-            chat_agent.memory_manager.clear_session(session_id)
+            for customer in (self.customer_a, self.customer_b):
+                chat_agent.memory_manager.clear_session(
+                    self._memory_key(customer, session_id),
+                )
         settings.AUTH_JWT_SECRET = self.original_secret
         settings.AUTH_JWT_ISSUER = self.original_issuer
         settings.AUTH_JWT_AUDIENCE = self.original_audience
@@ -157,6 +164,10 @@ class TestSecureReservationManagement(unittest.TestCase):
     def _headers(self, customer):
         token, _ = create_customer_access_token(customer.id, customer.token_version)
         return {"Authorization": f"Bearer {token}"}
+
+    @staticmethod
+    def _memory_key(customer, session_id):
+        return build_authenticated_memory_key(customer.id, session_id)
 
     def _chat(self, customer, session_id, message):
         return self.client.post(
@@ -204,6 +215,67 @@ class TestSecureReservationManagement(unittest.TestCase):
         self.assertEqual(self.service.reservations[1].status, "pending")
         self.assertEqual(self.service.update_calls, [])
         self.assertEqual(self.service.cancel_calls, [])
+
+    def test_memory_is_scoped_by_authenticated_customer_and_session_id(self):
+        shared_session_id = "shared-update"
+
+        self._chat(self.customer_a, shared_session_id, "ubah reservasi saya")
+        select_a = self._chat(self.customer_a, shared_session_id, "1")
+        self._chat(self.customer_b, shared_session_id, "ubah reservasi saya")
+        select_b = self._chat(self.customer_b, shared_session_id, "2")
+
+        state_a = chat_agent.memory_manager.get_session(
+            self._memory_key(self.customer_a, shared_session_id),
+        )
+        state_b = chat_agent.memory_manager.get_session(
+            self._memory_key(self.customer_b, shared_session_id),
+        )
+
+        self.assertEqual(select_a.status_code, 200)
+        self.assertIn("field mana", select_a.json()["reply"].lower())
+        self.assertEqual(select_b.status_code, 200)
+        self.assertIn("field mana", select_b.json()["reply"].lower())
+        self.assertEqual(state_a["reservation_id"], 1)
+        self.assertEqual(state_b["reservation_id"], 2)
+        self.assertNotIn(shared_session_id, chat_agent.memory_manager._sessions)
+
+    def test_same_customer_different_session_ids_have_separate_update_state(self):
+        self._chat(self.customer_a, "shared-update", "ubah reservasi saya")
+        self._chat(self.customer_a, "shared-update", "1")
+        self._chat(self.customer_a, "separate-update", "ubah reservasi saya")
+
+        first_state = chat_agent.memory_manager.get_session(
+            self._memory_key(self.customer_a, "shared-update"),
+        )
+        second_state = chat_agent.memory_manager.get_session(
+            self._memory_key(self.customer_a, "separate-update"),
+        )
+
+        self.assertEqual(first_state["reservation_id"], 1)
+        self.assertIsNone(second_state.get("reservation_id"))
+        self.assertNotEqual(
+            first_state["update_reservation_stage"],
+            second_state["update_reservation_stage"],
+        )
+
+    def test_cancel_state_is_scoped_by_authenticated_customer_and_session_id(self):
+        shared_session_id = "shared-cancel"
+        self._chat(self.customer_a, shared_session_id, "batalkan reservasi saya")
+        self._chat(self.customer_b, shared_session_id, "batalkan reservasi saya")
+
+        state_a = chat_agent.memory_manager.get_session(
+            self._memory_key(self.customer_a, shared_session_id),
+        )
+        state_b = chat_agent.memory_manager.get_session(
+            self._memory_key(self.customer_b, shared_session_id),
+        )
+
+        self.assertEqual(state_a["cancel_reservation_stage"], "select_reservation_id")
+        self.assertEqual(state_b["cancel_reservation_stage"], "select_reservation_id")
+        self.assertNotEqual(
+            self._memory_key(self.customer_a, shared_session_id),
+            self._memory_key(self.customer_b, shared_session_id),
+        )
 
 
 if __name__ == "__main__":

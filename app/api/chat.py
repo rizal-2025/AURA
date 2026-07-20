@@ -4,6 +4,7 @@ from app.agents.orchestrator import AgentOrchestrator
 from fastapi import Depends
 from sqlalchemy.orm import Session
 from app.api.dependencies import get_current_customer
+from app.core.conversation_memory import build_authenticated_memory_key
 from app.db.database import get_db
 from app.db.models.customer import Customer
 
@@ -19,9 +20,16 @@ async def chat(
     db: Session = Depends(get_db),
     current_customer: Customer = Depends(get_current_customer),
 ):
+    # Authentication has completed before this point. Keep the client supplied
+    # session_id as a conversation label, but scope the in-memory state to the
+    # authenticated customer.
+    memory_key = build_authenticated_memory_key(
+        current_customer.id,
+        request.session_id,
+    )
 
     reply = await agent.handle(
-        session_id=request.session_id,
+        session_id=memory_key,
         message=request.message,
         db=db,
         owner_customer_id=current_customer.id,

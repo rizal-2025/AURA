@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 
 from app.api.chat import agent as chat_agent
 from app.core.config import settings
+from app.core.conversation_memory import build_authenticated_memory_key
 from app.core.security import JWT_ALGORITHM, create_customer_access_token
 from app.db.database import get_db
 from app.main import app
@@ -65,10 +66,14 @@ class TestSecureReservationCreate(unittest.TestCase):
     def _authorization(self, customer):
         return {"Authorization": f"Bearer {self._token_for(customer)}"}
 
-    def _seed_chat_confirmation(self, session_id):
-        chat_agent.memory_manager.clear_session(session_id)
+    def _memory_key(self, customer, session_id):
+        return build_authenticated_memory_key(customer.id, session_id)
+
+    def _seed_chat_confirmation(self, session_id, customer):
+        memory_key = self._memory_key(customer, session_id)
+        chat_agent.memory_manager.clear_session(memory_key)
         chat_agent.memory_manager.update_session(
-            session_id,
+            memory_key,
             {
                 "intent": "reservation",
                 "intent_confidence": 0.95,
@@ -81,13 +86,13 @@ class TestSecureReservationCreate(unittest.TestCase):
         )
 
     def _confirm_chat_reservation(self, session_id, customer, create_reservation):
-        self._seed_chat_confirmation(session_id)
+        self._seed_chat_confirmation(session_id, customer)
         response = self.client.post(
             "/chat",
             json={"session_id": session_id, "message": "Ya"},
             headers=self._authorization(customer),
         )
-        chat_agent.memory_manager.clear_session(session_id)
+        chat_agent.memory_manager.clear_session(self._memory_key(customer, session_id))
         self.assertEqual(response.status_code, 200)
         self.assertIn("Reservasi berhasil dibuat", response.json()["reply"])
         self.assertEqual(
@@ -137,20 +142,24 @@ class TestSecureReservationCreate(unittest.TestCase):
             ),
             self.assertLogs("AURA", level="INFO") as captured,
         ):
-            self._seed_chat_confirmation(session_id)
+            self._seed_chat_confirmation(session_id, self.customer_a)
             response = self.client.post(
                 "/chat",
                 json={"session_id": session_id, "message": "Ya"},
                 headers={"Authorization": f"Bearer {token}"},
             )
 
-        chat_agent.memory_manager.clear_session(session_id)
+        chat_agent.memory_manager.clear_session(
+            self._memory_key(self.customer_a, session_id),
+        )
         self.assertEqual(response.status_code, 200)
         log_output = "\n".join(captured.output)
         self.assertNotIn(token, log_output)
         self.assertNotIn(settings.AUTH_JWT_SECRET, log_output)
         self.assertNotIn("Authorization", log_output)
         self.assertNotIn(session_id, log_output)
+        self.assertNotIn(str(self.customer_a.id), log_output)
+        self.assertNotIn(self._memory_key(self.customer_a, session_id), log_output)
         self.assertNotIn("Rizal", log_output)
         self.assertNotIn("2026-08-01", log_output)
         self.assertNotIn("19:00", log_output)

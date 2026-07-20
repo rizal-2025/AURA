@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
 from app.api.chat import chat
+from app.core.conversation_memory import build_authenticated_memory_key
 from app.schemas.chat import ChatRequest
 
 
@@ -29,7 +30,7 @@ class TestChatIntegration(unittest.TestCase):
             self.assertTrue(hasattr(response, "reply"))
             self.assertIn("reservasinya", response.reply)
             agent_handle.assert_awaited_once_with(
-                session_id="abc",
+                session_id=build_authenticated_memory_key(customer.id, "abc"),
                 message="Saya mau reservasi",
                 db=unittest.mock.ANY,
                 owner_customer_id=customer.id,

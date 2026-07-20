@@ -168,7 +168,14 @@ class TestReservationConfirmationFlow(unittest.TestCase):
             "awaiting_confirmation": True,
         })
 
-        result = asyncio.run(orchestrator.handle("s-reject", "tidak", None))
+        result = asyncio.run(
+            orchestrator.handle(
+                "s-reject",
+                "tidak",
+                None,
+                owner_customer_id=self.OWNER_CUSTOMER_ID,
+            ),
+        )
         session = orchestrator.memory_manager.get_session("s-reject")
 
         self.assertIn("field", result.lower())

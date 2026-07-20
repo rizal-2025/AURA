@@ -67,7 +67,9 @@ class TestMultiIntentRouter(unittest.TestCase):
         orchestrator.intent_classifier = DummyClassifier()
         orchestrator.workflow = DummyWorkflow()
 
-        response = asyncio.run(orchestrator.handle("session-1", "Halo", None))
+        response = asyncio.run(
+            orchestrator.handle("session-1", "Halo", None, "test-owner"),
+        )
 
         self.assertEqual(response, "stubbed greeting")
 
