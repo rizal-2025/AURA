@@ -155,6 +155,17 @@ class AgentOrchestrator:
             intent = intent_result.get("intent", "general")
             confidence = intent_result.get("confidence", 0.0)
 
+            if intent == "general" and HandoffDetector.is_deterministically_misunderstood(message):
+                attempt_count = self.handoff_service.record_misunderstanding(session_id)
+                if attempt_count >= 2:
+                    self.handoff_service.require_handoff(
+                        session_id,
+                        "repeated_misunderstanding",
+                        attempt_count,
+                    )
+                    return self.handoff_service.required_response()
+                return "Maaf, saya belum memahami permintaan Anda. Bisa dijelaskan kembali?"
+
             if HandoffDetector.is_low_confidence(intent, confidence):
                 if intent == "general" and HandoffDetector.is_safe_non_action_message(message):
                     self._reset_intent_attempts(session_id)

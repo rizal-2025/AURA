@@ -103,10 +103,11 @@ class TestCustomerServiceScenarios(unittest.TestCase):
             "extract",
             AsyncMock(return_value={}),
         )
+        self.general_ai = AsyncMock(return_value="Bantuan umum tersedia.")
         self.general_reply_patch = patch.object(
             chat_agent.ai,
             "chat",
-            AsyncMock(return_value="Bantuan umum tersedia."),
+            self.general_ai,
         )
         self.classifier_reply_patch = patch.object(
             chat_agent.intent_classifier.ai,
@@ -241,6 +242,47 @@ class TestCustomerServiceScenarios(unittest.TestCase):
         self.assertTrue(state_a["handoff_required"])
         self.assertNotIn("notifikasi", initial.json()["reply"].lower())
 
+    def test_explicit_human_handoff_phrases_bypass_general_ai(self):
+        phrases = (
+            "hubungkan saya ke Rizal",
+            "saya ingin bicara dengan Rizal",
+            "saya mau bicara dengan owner",
+            "hubungkan ke admin",
+            "panggil petugas",
+            "saya ingin bicara dengan manusia",
+            "hubungkan ke customer service",
+            "Hubungkan Saya ke RIZAL",
+        )
+        token, _ = create_customer_access_token(
+            self.customer_a.id,
+            self.customer_a.token_version,
+        )
+        headers = {"Authorization": f"Bearer {token}"}
+
+        for index, phrase in enumerate(phrases):
+            with self.subTest(phrase=phrase):
+                session_id = f"explicit-handoff-{index}"
+                memory_key = build_authenticated_memory_key(
+                    self.customer_a.id,
+                    session_id,
+                )
+                chat_agent.memory_manager.clear_session(memory_key)
+                response = self.client.post(
+                    "/chat",
+                    json={"session_id": session_id, "message": phrase},
+                    headers=headers,
+                )
+                state = chat_agent.memory_manager.get_session(memory_key)
+                self.assertEqual(response.status_code, 200)
+                self.assertIn("meneruskan percakapan", response.json()["reply"])
+                self.assertTrue(state["handoff_required"])
+                self.assertEqual(
+                    state["handoff_state"]["category"],
+                    "explicit_human_request",
+                )
+
+        self.general_ai.assert_not_awaited()
+
     def test_handoff_counters_reset_and_remain_scoped_to_workflow_stage(self):
         reset_scenario = {
             "authenticated_customer": "customer_a",
@@ -273,6 +315,67 @@ class TestCustomerServiceScenarios(unittest.TestCase):
         self.assertTrue(result.handoff)
         self.assertEqual(result.ticket_category, "ambiguous_intent")
         self.assertIn("perlu diteruskan kepada petugas", result.replies[-1])
+
+    def test_repeated_misunderstanding_is_scoped_and_resets_after_valid_intent(self):
+        session_id = "misunderstanding-shared-session"
+
+        def send(customer, message):
+            token, _ = create_customer_access_token(customer.id, customer.token_version)
+            return self.client.post(
+                "/chat",
+                json={"session_id": session_id, "message": message},
+                headers={"Authorization": f"Bearer {token}"},
+            )
+
+        first_unclear = send(self.customer_a, "asdasdasd")
+        customer_b_unclear = send(self.customer_b, "asdasdasd")
+        second_unclear = send(self.customer_a, "zxqv qwerty tidak jelas")
+        key_a = build_authenticated_memory_key(self.customer_a.id, session_id)
+        key_b = build_authenticated_memory_key(self.customer_b.id, session_id)
+
+        self.assertIn("belum memahami", first_unclear.json()["reply"])
+        self.assertIn("belum memahami", customer_b_unclear.json()["reply"])
+        self.assertIn("perlu diteruskan kepada petugas", second_unclear.json()["reply"])
+        self.assertTrue(chat_agent.memory_manager.get_session(key_a)["handoff_required"])
+        self.assertFalse(chat_agent.memory_manager.get_session(key_b).get("handoff_required"))
+        self.assertEqual(
+            chat_agent.memory_manager.get_session(key_b)["misunderstanding_count"],
+            1,
+        )
+        self.general_ai.assert_not_awaited()
+
+        reset_session = "misunderstanding-reset-session"
+
+        def send_reset(message):
+            token, _ = create_customer_access_token(
+                self.customer_a.id,
+                self.customer_a.token_version,
+            )
+            return self.client.post(
+                "/chat",
+                json={"session_id": reset_session, "message": message},
+                headers={"Authorization": f"Bearer {token}"},
+            )
+
+        send_reset("asdasdasd")
+        valid = send_reset("lihat reservasi saya")
+        after_reset = send_reset("zxqv qwerty tidak jelas")
+        reset_key = build_authenticated_memory_key(self.customer_a.id, reset_session)
+        reset_state = chat_agent.memory_manager.get_session(reset_key)
+        self.assertIn("Customer A", valid.json()["reply"])
+        self.assertIn("belum memahami", after_reset.json()["reply"])
+        self.assertFalse(reset_state.get("handoff_required"))
+        self.assertEqual(reset_state["misunderstanding_count"], 1)
+
+    def test_informational_question_does_not_increment_misunderstanding(self):
+        scenario = {
+            "authenticated_customer": "customer_a",
+            "session_id": "misunderstanding-information",
+            "customer_messages": ["bagaimana cara mengubah reservasi?"],
+        }
+        result = self.simulator.run(scenario)
+        self.assertFalse(result.handoff)
+        self.assertEqual(result.state.get("misunderstanding_count"), 0)
 
 
 if __name__ == "__main__":

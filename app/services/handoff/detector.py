@@ -7,7 +7,7 @@ class HandoffDetector:
     """Detect safe, explicit reasons to pause automated assistance."""
 
     EXPLICIT_HUMAN_PATTERNS = (
-        r"\bhubungkan\b.*\b(admin|manusia|petugas|owner|customer service)\b",
+        r"\bhubungkan\b.*\b(admin|manusia|petugas|owner|customer service|rizal)\b",
         r"\bbicara\b.*\b(admin|manusia|petugas|owner|customer service|rizal)\b",
         r"\bpanggil\b.*\bpetugas\b",
     )
@@ -20,6 +20,21 @@ class HandoffDetector:
         "botnya tidak mengerti",
         "ribet banget",
         "dari tadi tidak bisa",
+    )
+    INFORMATIONAL_PREFIXES = (
+        "bagaimana",
+        "apa itu",
+        "jelaskan",
+        "cara ",
+    )
+    KNOWN_NON_ACTION_PHRASES = (
+        "halo",
+        "hai",
+        "terima kasih",
+        "makasih",
+        "selamat pagi",
+        "selamat siang",
+        "selamat malam",
     )
 
     @classmethod
@@ -56,6 +71,35 @@ class HandoffDetector:
     def is_safe_non_action_message(cls, message: str) -> bool:
         """Negated and informational requests are valid, non-destructive input."""
         return IntentClassifier.detect_reservation_intent(message) == "general"
+
+    @classmethod
+    def is_deterministically_misunderstood(cls, message: str) -> bool:
+        """Identify unknown token-like messages without sending them to AI first."""
+        normalized = cls.normalize(message)
+        if not normalized:
+            return True
+        if normalized.startswith(cls.INFORMATIONAL_PREFIXES):
+            return False
+        if normalized in cls.KNOWN_NON_ACTION_PHRASES:
+            return False
+
+        detected_intent = IntentClassifier.detect_reservation_intent(message)
+        if detected_intent not in {None, "general"}:
+            return False
+
+        tokens = set(normalized.split())
+        known_reservation_tokens = (
+            IntentClassifier._RESERVATION_WORDS
+            | IntentClassifier._UPDATE_WORDS
+            | IntentClassifier._CANCEL_WORDS
+            | IntentClassifier._VIEW_WORDS
+            | {"buat", "buatkan", "pesan", "meja"}
+        )
+        # A meaningful negated reservation request is valid non-action input;
+        # random text such as "zxqv qwerty tidak jelas" has no such context.
+        if tokens.intersection(known_reservation_tokens):
+            return False
+        return True
 
     @staticmethod
     def is_low_confidence(intent: str, confidence) -> bool:
