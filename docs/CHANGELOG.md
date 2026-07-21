@@ -2,6 +2,27 @@
 
 Semua perubahan penting pada AURA dicatat di dokumen ini. Repository belum memiliki tag rilis, sehingga entri berikut mengikuti riwayat commit proyek.
 
+## 2026-07-20 - Persistent Support Ticket Hardening (V1.6 Phase C Fix 2)
+
+### Added
+
+- CHECK constraint PostgreSQL bernama stabil untuk priority dan status tiket.
+- Partial unique index untuk membatasi satu tiket aktif (`open`/`in_progress`) per authenticated customer dan hash sesi percakapan.
+- Lifecycle ticket `in_progress`, `resolved`, dan `closed` dengan update owner-filtered serta timestamp penyelesaian.
+- Pemulihan automation lock dari tiket aktif PostgreSQL sebelum classifier, AI, atau workflow reservasi berjalan.
+- PostgreSQL integration tests opt-in melalui `TEST_DATABASE_URL` dengan schema uji terisolasi dan penolakan database aplikasi normal.
+
+### Changed
+
+- Migrasi support ticket menjadi konvergen: tabel yang sudah ada tetap diperiksa dan index/constraint aman yang hilang ditambahkan.
+- Tiket resolved/closed tidak lagi dipakai ulang; handoff berikutnya dapat membuat tiket aktif baru.
+- Race concurrent tetap rollback lalu mengambil tiket aktif pemenang.
+
+### Security notes
+
+- Recovery menggunakan authenticated `owner_customer_id` dan SHA-256 customer-session reference; raw session, token, pesan, dan detail reservasi tidak dipulihkan atau dicatat.
+- Migrasi support ticket tidak dijalankan selama implementasi ini dan tidak menyentuh tabel atau record reservasi.
+
 ## 2026-07-20 - Secure Customer Identity (V1.5 Phase 3)
 
 ### Added
@@ -139,3 +160,4 @@ Skrip memverifikasi tabel `reservations` sudah ada, lalu memakai `ALTER TABLE ..
 - Konfigurasi aplikasi berbasis environment.
 - Endpoint `GET /` dan `GET /health`.
 - Daftar dependency awal proyek.
+- V1.6 Phase C: tiket support persisten untuk handoff, dengan nomor tiket dan referensi session yang di-hash.

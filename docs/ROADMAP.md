@@ -24,6 +24,7 @@ Dokumen ini merangkum status pengembangan berdasarkan baseline kode AURA saat in
 - Secure Customer Identity (V1.5): server menerbitkan guest bearer token; `session_id` hanya untuk memori percakapan, sedangkan Create, Read, Update, dan Cancel memakai `owner_customer_id` dari pelanggan terautentikasi.
 - Validasi konfigurasi JWT aman: secret minimal 32 karakter dan expiry positif, disertai regression test token, ownership, parser nilai natural, dan logging tanpa secret/token.
 - Kolom `customer_id` V1.4 serta record legacy tetap dipertahankan; record dengan `owner_customer_id = NULL` tidak diekspos.
+- Persistent Support Tickets (V1.6 Phase C): constraint database, satu tiket aktif per customer-session, lifecycle resolved/closed, race recovery, dan pemulihan automation lock setelah restart.
 
 ### Fondasi pendukung
 
@@ -40,6 +41,8 @@ Dokumen ini merangkum status pengembangan berdasarkan baseline kode AURA saat in
 - Menambahkan refresh-token lifecycle atau autentikasi akun setelah kebutuhan produk dan kebijakan keamanan ditetapkan.
 - Memperkuat reliabilitas provider AI dengan timeout, retry, dan error handling yang jelas.
 - Menambah pengujian end-to-end yang terisolasi, termasuk database uji dan tanggal/waktu yang deterministik.
+- Menjalankan suite PostgreSQL opt-in secara rutin pada CI dengan database disposable melalui `TEST_DATABASE_URL`.
+- Integrasi notifikasi Telegram untuk tiket support yang sudah tersimpan.
 
 ## Future
 

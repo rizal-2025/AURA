@@ -42,15 +42,15 @@ class AgentOrchestrator:
         if self.handoff_service.is_required(session_id):
             if self._is_handoff_status_request(message):
                 return self.handoff_service.status_response(session_id)
-            return self.handoff_service.waiting_response()
+            return self.handoff_service.waiting_response(session_id)
 
         if HandoffDetector.is_explicit_human_request(message):
-            self.handoff_service.require_handoff(session_id, "explicit_human_request")
-            return self.handoff_service.explicit_response()
+            self._create_handoff(session_id, "explicit_human_request", 1, db, owner_customer_id)
+            return self.handoff_service.explicit_response(session_id)
 
         if HandoffDetector.is_frustrated(message):
-            self.handoff_service.require_handoff(session_id, "customer_frustration")
-            return self.handoff_service.required_response()
+            self._create_handoff(session_id, "customer_frustration", 1, db, owner_customer_id)
+            return self.handoff_service.required_response(session_id)
 
         current_session = self.memory_manager.get_session(session_id)
         active_workflow = (
@@ -61,12 +61,8 @@ class AgentOrchestrator:
         if not active_workflow and HandoffDetector.is_ambiguous_reservation_action(message):
             attempt_count = self.handoff_service.record_ambiguity(session_id)
             if attempt_count >= 2:
-                self.handoff_service.require_handoff(
-                    session_id,
-                    "ambiguous_intent",
-                    attempt_count,
-                )
-                return self.handoff_service.required_response()
+                self._create_handoff(session_id, "ambiguous_intent", attempt_count, db, owner_customer_id)
+                return self.handoff_service.required_response(session_id)
             return "Apakah Anda ingin mengubah atau membatalkan reservasi?"
 
         try:
@@ -77,9 +73,9 @@ class AgentOrchestrator:
                 owner_customer_id,
             )
         except Exception:
-            self.handoff_service.require_handoff(session_id, "internal_error")
+            self._create_handoff(session_id, "internal_error", 1, db, owner_customer_id)
             logger.error("HANDOFF TRANSITION: category=internal_error")
-            return self.handoff_service.required_response()
+            return self.handoff_service.required_response(session_id)
 
     async def _handle_authenticated(
         self,
@@ -158,12 +154,8 @@ class AgentOrchestrator:
             if intent == "general" and HandoffDetector.is_deterministically_misunderstood(message):
                 attempt_count = self.handoff_service.record_misunderstanding(session_id)
                 if attempt_count >= 2:
-                    self.handoff_service.require_handoff(
-                        session_id,
-                        "repeated_misunderstanding",
-                        attempt_count,
-                    )
-                    return self.handoff_service.required_response()
+                    self._create_handoff(session_id, "repeated_misunderstanding", attempt_count, db, owner_customer_id)
+                    return self.handoff_service.required_response(session_id)
                 return "Maaf, saya belum memahami permintaan Anda. Bisa dijelaskan kembali?"
 
             if HandoffDetector.is_low_confidence(intent, confidence):
@@ -172,22 +164,14 @@ class AgentOrchestrator:
                 elif intent in {"ambiguous", "update_reservation", "cancel_reservation"}:
                     attempt_count = self.handoff_service.record_ambiguity(session_id)
                     if attempt_count >= 2:
-                        self.handoff_service.require_handoff(
-                            session_id,
-                            "ambiguous_intent",
-                            attempt_count,
-                        )
-                        return self.handoff_service.required_response()
+                        self._create_handoff(session_id, "ambiguous_intent", attempt_count, db, owner_customer_id)
+                        return self.handoff_service.required_response(session_id)
                     return "Saya belum yakin tindakan reservasi yang Anda maksud. Mohon jelaskan kembali."
                 else:
                     attempt_count = self.handoff_service.record_misunderstanding(session_id)
                     if attempt_count >= 2:
-                        self.handoff_service.require_handoff(
-                            session_id,
-                            "repeated_misunderstanding",
-                            attempt_count,
-                        )
-                        return self.handoff_service.required_response()
+                        self._create_handoff(session_id, "repeated_misunderstanding", attempt_count, db, owner_customer_id)
+                        return self.handoff_service.required_response(session_id)
                     return "Maaf, saya belum memahami permintaan Anda. Bisa dijelaskan kembali?"
             else:
                 self._reset_intent_attempts(session_id)
@@ -214,12 +198,8 @@ class AgentOrchestrator:
             if intent == "ambiguous":
                 attempt_count = self.handoff_service.record_ambiguity(session_id)
                 if attempt_count >= 2:
-                    self.handoff_service.require_handoff(
-                        session_id,
-                        "ambiguous_intent",
-                        attempt_count,
-                    )
-                    return self.handoff_service.required_response()
+                    self._create_handoff(session_id, "ambiguous_intent", attempt_count, db, owner_customer_id)
+                    return self.handoff_service.required_response(session_id)
                 return "Apakah Anda ingin mengubah atau membatalkan reservasi?"
 
             self.memory_manager.update_session(
@@ -267,12 +247,8 @@ class AgentOrchestrator:
                         "confirmation",
                     )
                     if attempt_count >= 3:
-                        self.handoff_service.require_handoff(
-                            session_id,
-                            "repeated_invalid_input",
-                            attempt_count,
-                        )
-                        return self.handoff_service.required_response()
+                        self._create_handoff(session_id, "repeated_invalid_input", attempt_count, db, owner_customer_id)
+                        return self.handoff_service.required_response(session_id)
                 else:
                     self.handoff_service.reset_invalid_input(session_id)
 
@@ -377,12 +353,8 @@ class AgentOrchestrator:
                 session.get("update_reservation_stage"),
             )
             if attempt_count >= 3:
-                self.handoff_service.require_handoff(
-                    session_id,
-                    "repeated_invalid_input",
-                    attempt_count,
-                )
-                return self.handoff_service.required_response()
+                self._create_handoff(session_id, "repeated_invalid_input", attempt_count, db, owner_customer_id)
+                return self.handoff_service.required_response(session_id)
         else:
             self.handoff_service.reset_invalid_input(session_id)
         logger.info(
@@ -416,12 +388,8 @@ class AgentOrchestrator:
                 session.get("cancel_reservation_stage"),
             )
             if attempt_count >= 3:
-                self.handoff_service.require_handoff(
-                    session_id,
-                    "repeated_invalid_input",
-                    attempt_count,
-                )
-                return self.handoff_service.required_response()
+                self._create_handoff(session_id, "repeated_invalid_input", attempt_count, db, owner_customer_id)
+                return self.handoff_service.required_response(session_id)
         else:
             self.handoff_service.reset_invalid_input(session_id)
         logger.info(
@@ -446,6 +414,15 @@ class AgentOrchestrator:
     def _reset_intent_attempts(self, session_id: str) -> None:
         self.handoff_service.reset_misunderstandings(session_id)
         self.handoff_service.reset_ambiguity(session_id)
+
+    def _create_handoff(self, session_id, category, attempt_count, db, owner_customer_id) -> None:
+        self.handoff_service.require_handoff(
+            session_id,
+            category,
+            attempt_count,
+            db=db,
+            owner_customer_id=owner_customer_id,
+        )
 
     @staticmethod
     def _is_handoff_status_request(message: str) -> bool:

@@ -28,6 +28,17 @@ async def chat(
         request.session_id,
     )
 
+    try:
+        agent.handoff_service.restore_active_handoff(
+            memory_key,
+            db,
+            current_customer.id,
+        )
+    except Exception:
+        # Fail before any classifier, AI provider, or reservation workflow can
+        # run. Database and identity details are deliberately not returned.
+        return ChatResponse(reply=agent.handoff_service.recovery_error_response())
+
     reply = await agent.handle(
         session_id=memory_key,
         message=request.message,

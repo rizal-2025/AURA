@@ -91,3 +91,13 @@ FastAPI juga menyediakan spesifikasi OpenAPI dan antarmuka dokumentasi interakti
 - Sesi dan long-term memory masih berada di memori proses, sehingga belum persisten setelah aplikasi restart atau dibagikan antar-instance.
 
 Rencana untuk melengkapi fondasi tersebut dicatat di [ROADMAP.md](ROADMAP.md).
+
+## Support Tickets
+
+- Handoff membuat maksimal satu tiket aktif (`open` atau `in_progress`) per authenticated customer dan hash referensi percakapan.
+- PostgreSQL menegakkan priority `low`, `medium`, `high`, atau `urgent` serta status `open`, `in_progress`, `resolved`, atau `closed`.
+- Tiket `resolved` dan `closed` menjadi inactive, sehingga handoff baru pada customer-session yang sama dapat memperoleh nomor tiket baru.
+- Pergantian status memakai predicate `ticket_id` dan `owner_customer_id`, memperbarui `updated_at`, serta menetapkan `resolved_at` untuk status terminal.
+- Setelah restart, request chat memulihkan automation lock dari tiket aktif sebelum classifier, AI, Update, atau Cancel berjalan.
+- Persistensi hanya menyimpan hash SHA-256 referensi sesi dan ringkasan operasional allowlisted; tidak menyimpan raw session, token, transcript, pesan pelanggan, atau detail reservasi.
+- Tidak ada notifikasi Telegram pada versi ini.

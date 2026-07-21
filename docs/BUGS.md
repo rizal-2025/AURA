@@ -17,6 +17,17 @@ Audit rilis sebelumnya menemukan beberapa risiko yang telah ditangani pada Phase
 
 Record legacy tetap tersimpan dan tidak dimodifikasi.
 
+## Audit V1.6 Phase C - fixed
+
+- Transaction ticket gagal sekarang selalu rollback dan session SQLAlchemy tetap dapat digunakan.
+- Race concurrent memakai partial unique index tiket aktif, rollback, lalu mengambil nomor tiket pemenang.
+- Nilai priority/status divalidasi pada aplikasi dan ditegakkan oleh CHECK constraint PostgreSQL.
+- Constraint lama yang membatasi satu tiket sepanjang masa diganti secara aman dengan uniqueness untuk status aktif saja.
+- Automation lock dapat dipulihkan dari tiket aktif PostgreSQL setelah memory proses hilang.
+- Recovery dan persistensi tetap memakai ringkasan allowlisted serta hash customer-session tanpa raw message atau raw session ID.
+
+PostgreSQL integration tests memerlukan `TEST_DATABASE_URL` khusus. Tanpa konfigurasi tersebut test ditandai skipped, bukan dianggap lulus terhadap PostgreSQL.
+
 ## Catatan ruang lingkup
 
 Beberapa kemampuan masih berupa fondasi atau placeholder, misalnya cek reservasi, agent umum, dan `DatabaseTool`. Identitas pelanggan saat ini masih guest-only: belum ada refresh token, registrasi akun, maupun pemulihan akun. Hal tersebut dicatat sebagai pekerjaan pengembangan dan risiko rilis di [ROADMAP.md](ROADMAP.md), bukan sebagai bug terbuka.
@@ -34,3 +45,5 @@ Jika bug ditemukan, tambahkan entri dengan format berikut:
 - Hasil aktual:
 - Status:
 ```
+
+- Keterbatasan: tiket support belum dikirim ke Telegram atau kanal eksternal.

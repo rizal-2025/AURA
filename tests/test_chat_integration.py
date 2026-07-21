@@ -10,6 +10,9 @@ from app.schemas.chat import ChatRequest
 
 
 class DummyDB:
+    def execute(self, _statement):
+        return SimpleNamespace(scalar_one_or_none=lambda: None)
+
     def close(self):
         pass
 

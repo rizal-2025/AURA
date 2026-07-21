@@ -21,6 +21,9 @@ class FakeCustomerDB:
     def get(self, _model, customer_id):
         return self.customers.get(customer_id)
 
+    def execute(self, _statement):
+        return SimpleNamespace(scalar_one_or_none=lambda: None)
+
 
 class TestSecureReservationCreate(unittest.TestCase):
     def setUp(self):

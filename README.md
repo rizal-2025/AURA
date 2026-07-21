@@ -29,6 +29,22 @@ Jalankan sekali pada database yang sudah memiliki tabel `reservations`:
 
 Migrasi idempoten ini menambahkan fondasi `customers` dan `owner_customer_id` bila belum ada. Migrasi tidak membuat ulang tabel reservasi, menghapus record, atau melakukan backfill data legacy. Jangan jalankan ulang migrasi sebagai bagian dari startup aplikasi.
 
+## Support ticket dan migrasi V1.6
+
+Handoff membuat tiket persisten dengan status aktif `open` atau `in_progress`. Untuk satu pelanggan terautentikasi dan satu referensi percakapan hanya boleh ada satu tiket aktif. Tiket `resolved` atau `closed` tidak digunakan kembali; handoff berikutnya dapat memperoleh nomor tiket baru.
+
+Migrasi support ticket tetap manual dan tidak dijalankan saat startup:
+
+```powershell
+.\.venv\Scripts\python.exe migrations\add_support_tickets.py
+```
+
+Migrasi memeriksa kolom, foreign key, CHECK constraint, uniqueness, dan index yang diperlukan. Migrasi tidak menghapus atau mengubah record reservasi. Jika tabel support ticket lama mengandung nilai priority/status yang tidak valid, migrasi berhenti aman agar data dapat ditinjau secara manual.
+
+Pada awal `POST /chat`, AURA mencari tiket aktif berdasarkan authenticated customer dan hash internal customer-session ketika lock belum ada di memory. Tiket aktif mengembalikan lock sebelum classifier, AI, Update, atau Cancel berjalan. State yang dipulihkan hanya berisi metadata operasional aman dan nomor tiket.
+
+Tiket tidak menyimpan raw `session_id`, composite memory key, bearer token, secret, Authorization header, transcript, pesan mentah, nama pelanggan, atau detail tanggal/jam reservasi. Notifikasi Telegram belum tersedia.
+
 ## Autentikasi guest dan penggunaan API
 
 Ambil token guest dari server; klien tidak mengirim customer ID:
@@ -65,6 +81,18 @@ Pembuatan reservasi baru selalu memerlukan `owner_customer_id` dari bearer terau
 
 ## Verifikasi
 
+Unit tests, tanpa membutuhkan PostgreSQL eksternal:
+
 ```powershell
-.\.venv\Scripts\python.exe -m unittest discover -s tests -v
+$modules = Get-ChildItem tests -File -Filter 'test_*.py' | ForEach-Object { "tests.$($_.BaseName)" }
+.\.venv\Scripts\python.exe -m unittest $modules -v
 ```
+
+PostgreSQL integration tests bersifat opt-in. Gunakan database disposable khusus yang berbeda dari `DATABASE_URL`; nama databasenya harus mengandung `test`:
+
+```powershell
+$env:TEST_DATABASE_URL = "postgresql+psycopg://TEST_USERNAME:TEST_PASSWORD@localhost:5432/aura_test"
+.\.venv\Scripts\python.exe -m unittest discover -s tests\integration -v
+```
+
+Jika `TEST_DATABASE_URL` tidak tersedia, integration tests dilewati dengan alasan yang jelas. Test membuat schema unik dan hanya membersihkan schema tersebut.

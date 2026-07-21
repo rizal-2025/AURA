@@ -3,6 +3,14 @@ from datetime import datetime, timezone
 from typing import Any
 
 from app.brain.memory_manager import MemoryManager
+from app.core.ownership import require_owner_customer_id
+from app.db.models.support_ticket import (
+    ACTIVE_TICKET_STATUSES,
+    SAFE_TICKET_SUMMARIES,
+    VALID_TICKET_PRIORITIES,
+    safe_summary_for,
+)
+from app.services.handoff.ticket_service import TicketService
 
 
 @dataclass(frozen=True)
@@ -29,17 +37,11 @@ class HandoffService:
         "internal_error",
         "ambiguous_intent",
     }
-    SAFE_SUMMARIES = {
-        "explicit_human_request": "Customer requested human assistance.",
-        "repeated_misunderstanding": "Automated intent understanding failed repeatedly.",
-        "repeated_invalid_input": "The active workflow received repeated invalid input.",
-        "customer_frustration": "Customer reported a poor automated assistance experience.",
-        "internal_error": "An internal service error prevented safe completion.",
-        "ambiguous_intent": "The requested reservation action remained ambiguous.",
-    }
+    SAFE_SUMMARIES = SAFE_TICKET_SUMMARIES
 
-    def __init__(self, memory_manager: MemoryManager):
+    def __init__(self, memory_manager: MemoryManager, ticket_service=None):
         self.memory_manager = memory_manager
+        self.ticket_service = ticket_service or TicketService()
 
     def is_required(self, memory_key: str) -> bool:
         return bool(self.memory_manager.get_session(memory_key).get(self.REQUIRED_KEY))
@@ -48,23 +50,83 @@ class HandoffService:
         state = self.memory_manager.get_session(memory_key).get(self.STATE_KEY)
         return dict(state) if isinstance(state, dict) else None
 
-    def require_handoff(self, memory_key: str, category: str, attempt_count: int = 1) -> HandoffState:
+    def require_handoff(self, memory_key: str, category: str, attempt_count: int = 1, db=None, owner_customer_id=None) -> HandoffState:
+        require_owner_customer_id(owner_customer_id)
         if category not in self.CATEGORIES:
             raise ValueError("Unsupported handoff category.")
         state = HandoffState(
             handoff_required=True,
             category=category,
             reason_code=category,
-            priority="high" if category in {"explicit_human_request", "internal_error", "customer_frustration"} else "normal",
+            priority="high" if category in {"explicit_human_request", "internal_error", "customer_frustration"} else "medium",
             safe_summary=self.SAFE_SUMMARIES[category],
             created_at=datetime.now(timezone.utc).isoformat(),
             attempt_count=max(1, attempt_count),
         )
+        state_data = asdict(state)
         self.memory_manager.update_session(
             memory_key,
-            {self.REQUIRED_KEY: True, self.STATE_KEY: asdict(state)},
+            {self.REQUIRED_KEY: True, self.STATE_KEY: state_data},
         )
+        if db is not None and owner_customer_id is not None:
+            try:
+                ticket = self.ticket_service.create_or_get(
+                    db,
+                    owner_customer_id=owner_customer_id,
+                    memory_key=memory_key,
+                    handoff_state=state_data,
+                )
+                state_data["ticket_id"] = ticket.id
+                state_data["ticket_number"] = ticket.ticket_number
+            except Exception:
+                # Automation remains locked even if PostgreSQL is unavailable.
+                state_data["ticket_creation_failed"] = True
         return state
+
+    def restore_active_handoff(self, memory_key: str, db, owner_customer_id):
+        """Restore only allowlisted handoff state from an active persisted ticket."""
+        require_owner_customer_id(owner_customer_id)
+        if self.is_required(memory_key):
+            return self.get_state(memory_key)
+
+        ticket = self.ticket_service.get_active(
+            db,
+            owner_customer_id=owner_customer_id,
+            memory_key=memory_key,
+        )
+        if ticket is None:
+            return None
+        if ticket.status not in ACTIVE_TICKET_STATUSES:
+            return None
+        if ticket.priority not in VALID_TICKET_PRIORITIES:
+            raise ValueError("Invalid persisted ticket priority.")
+
+        safe_summary = safe_summary_for(
+            category=ticket.category,
+            reason_code=ticket.reason_code,
+        )
+        created_at = (
+            ticket.created_at.isoformat()
+            if hasattr(ticket.created_at, "isoformat")
+            else str(ticket.created_at)
+        )
+        state_data = {
+            self.REQUIRED_KEY: True,
+            "category": ticket.category,
+            "reason_code": ticket.reason_code,
+            "priority": ticket.priority,
+            "safe_summary": safe_summary,
+            "status": ticket.status,
+            "created_at": created_at,
+            "attempt_count": max(1, int(ticket.attempt_count)),
+            "ticket_id": ticket.id,
+            "ticket_number": ticket.ticket_number,
+        }
+        self.memory_manager.update_session(
+            memory_key,
+            {self.REQUIRED_KEY: True, self.STATE_KEY: state_data},
+        )
+        return dict(state_data)
 
     def clear_for_test(self, memory_key: str) -> None:
         """Internal-only reset hook; deliberately not exposed through an API."""
@@ -108,23 +170,31 @@ class HandoffService:
         session["invalid_input_context"] = None
         session["invalid_input_count"] = 0
 
-    @staticmethod
-    def explicit_response() -> str:
-        return "Baik, saya akan meneruskan percakapan ini kepada petugas."
+    def explicit_response(self, memory_key: str | None = None) -> str:
+        return "Baik, saya akan meneruskan percakapan ini kepada petugas." + self._ticket_suffix(memory_key)
 
-    @staticmethod
-    def required_response() -> str:
+    def required_response(self, memory_key: str | None = None) -> str:
         return (
             "Maaf, saya belum berhasil menyelesaikan kendala Anda. Percakapan ini perlu "
             "diteruskan kepada petugas agar dapat ditangani dengan lebih baik."
-        )
+        ) + self._ticket_suffix(memory_key)
+
+    def waiting_response(self, memory_key: str | None = None) -> str:
+        return "Percakapan ini sedang menunggu bantuan petugas." + self._ticket_suffix(memory_key)
 
     @staticmethod
-    def waiting_response() -> str:
-        return "Percakapan ini sedang menunggu bantuan petugas."
+    def recovery_error_response() -> str:
+        return "Maaf, status bantuan petugas belum dapat diperiksa. Silakan coba lagi."
 
     def status_response(self, memory_key: str) -> str:
         state = self.get_state(memory_key)
         if state is None:
             return "Tidak ada permintaan bantuan petugas yang aktif."
-        return "Percakapan ini sedang menunggu bantuan petugas."
+        return self.waiting_response(memory_key)
+
+    def _ticket_suffix(self, memory_key: str | None) -> str:
+        if memory_key is None:
+            return ""
+        state = self.get_state(memory_key) or {}
+        number = state.get("ticket_number")
+        return f"\nNomor tiket Anda: {number}" if number else ""

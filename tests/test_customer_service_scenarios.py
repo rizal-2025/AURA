@@ -32,6 +32,9 @@ class FakeCustomerDB:
     def get(self, _model, customer_id):
         return self.customers.get(customer_id)
 
+    def execute(self, _statement):
+        return SimpleNamespace(scalar_one_or_none=lambda: None)
+
 
 class ScenarioReservationService:
     """Small in-memory read model for endpoint conversation scenarios."""

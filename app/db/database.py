@@ -4,6 +4,7 @@ from app.core.config import settings
 from app.db.base import Base
 import app.db.models.reservation
 import app.db.models.customer
+import app.db.models.support_ticket
 
 engine = create_engine(
     settings.DATABASE_URL,
