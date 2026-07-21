@@ -51,3 +51,8 @@ Dokumen ini merangkum status pengembangan berdasarkan baseline kode AURA saat in
 - Registrasi, pemulihan akun, dan autentikasi pelanggan permanen dengan kebijakan verifikasi yang sesuai.
 - Observabilitas produksi: metrik, tracing, audit log, rate limiting, dan alerting.
 - Penyimpanan memori yang dapat dibagi antar-instance serta strategi deployment yang siap skala.
+# V1.7
+
+- Phase D selesai secara implementasi: Telegram customer bot dengan identity persisten dan local long polling.
+- Security/reliability hardening Phase D: redaction token, runner-only validation, deterministic status, handler fail-safe, dan migration/concurrency tests.
+- Berikutnya: Phase E notifikasi owner Telegram setelah mekanisme delivery dan retry ditinjau.

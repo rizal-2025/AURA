@@ -2,7 +2,7 @@
 
 ## Status saat ini
 
-Saat ini tidak ada bug terbuka yang terdokumentasi atau dilaporkan pada repository AURA.
+Temuan audit Phase D tentang token logging, validasi konfigurasi runner, handler failure, status tiket, dan partial-schema migration telah diperbaiki dalam working tree dan menunggu verifikasi PostgreSQL opt-in serta UAT aman sebelum rilis.
 
 Pencarian pada source juga tidak menemukan penanda `TODO`, `FIXME`, `BUG`, atau `HACK` yang menunjuk ke issue terbuka.
 
@@ -47,3 +47,9 @@ Jika bug ditemukan, tambahkan entri dengan format berikut:
 ```
 
 - Keterbatasan: tiket support belum dikirim ke Telegram atau kanal eksternal.
+## V1.7 Phase D — security fixes
+
+- Logger network pihak ketiga dibatasi dan output memiliki credential redaction.
+- Telegram-only configuration divalidasi runner; FastAPI tetap independen.
+- Handler missing-object/send-failure, deterministic `/status`, HMAC domain separation, dan migration partial-schema telah diperkuat.
+- PostgreSQL concurrency/migration tests tetap wajib dijalankan melalui dedicated `TEST_DATABASE_URL` sebelum migration normal.

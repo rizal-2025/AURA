@@ -5,6 +5,7 @@ from app.db.base import Base
 import app.db.models.reservation
 import app.db.models.customer
 import app.db.models.support_ticket
+import app.db.models.telegram_identity
 
 engine = create_engine(
     settings.DATABASE_URL,

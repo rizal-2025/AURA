@@ -161,3 +161,12 @@ Skrip memverifikasi tabel `reservations` sudah ada, lalu memakai `ALTER TABLE ..
 - Endpoint `GET /` dan `GET /health`.
 - Daftar dependency awal proyek.
 - V1.6 Phase C: tiket support persisten untuk handoff, dengan nomor tiket dan referensi session yang di-hash.
+# V1.7 Phase D - Telegram Customer Bot
+
+- Menambahkan Telegram customer bot berbasis local long polling sebagai proses terpisah.
+- Menambahkan identity Telegram persisten berbasis HMAC dan migrasi `telegram_identities` yang aditif.
+- Menyatukan boundary chat terautentikasi untuk HTTP dan Telegram tanpa bearer token Telegram.
+- Menambahkan private-chat-only handler, `/start`, `/help`, `/status`, serta pemecahan balasan plain text aman.
+- Membatasi logger `httpx`, `httpcore`, dan Telegram serta menambahkan redaction credential dan PTB error handler aman.
+- Memindahkan validasi Telegram-only ke runner, memperkuat handler failure, dan membuat `/status` deterministik tanpa AI.
+- Memberi HMAC label purpose/version terpisah serta memperketat convergence migration dan test concurrency PostgreSQL.

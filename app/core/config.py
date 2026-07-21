@@ -5,7 +5,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 MINIMUM_JWT_SECRET_LENGTH = 32
+MINIMUM_TELEGRAM_IDENTITY_SECRET_LENGTH = 32
 MAXIMUM_JWT_EXPIRE_MINUTES = 1440
+DEFAULT_TELEGRAM_POLL_TIMEOUT_SECONDS = 30
 
 
 class Settings(BaseSettings):
@@ -24,6 +26,16 @@ class Settings(BaseSettings):
     AUTH_JWT_AUDIENCE: str = "aura-api"
     AUTH_JWT_EXPIRE_MINUTES: int = 60
     SQL_ECHO: bool = False
+
+    # Telegram is optional for the FastAPI process. The runner validates these
+    # values immediately before starting local long polling.
+    TELEGRAM_BOT_TOKEN: str | None = None
+    TELEGRAM_IDENTITY_SECRET: str | None = None
+    # Keep Telegram values unparsed here. FastAPI does not depend on the runner
+    # and must remain startable even when optional Telegram settings are bad.
+    TELEGRAM_CLEAR_WEBHOOK_ON_START: object = False
+    TELEGRAM_DROP_PENDING_UPDATES: object = False
+    TELEGRAM_POLL_TIMEOUT_SECONDS: object = DEFAULT_TELEGRAM_POLL_TIMEOUT_SECONDS
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -59,7 +71,6 @@ class Settings(BaseSettings):
                 f"{MAXIMUM_JWT_EXPIRE_MINUTES}."
             )
         return expires_minutes
-
 
 try:
     settings = Settings()

@@ -101,3 +101,12 @@ Rencana untuk melengkapi fondasi tersebut dicatat di [ROADMAP.md](ROADMAP.md).
 - Setelah restart, request chat memulihkan automation lock dari tiket aktif sebelum classifier, AI, Update, atau Cancel berjalan.
 - Persistensi hanya menyimpan hash SHA-256 referensi sesi dan ringkasan operasional allowlisted; tidak menyimpan raw session, token, transcript, pesan pelanggan, atau detail reservasi.
 - Tidak ada notifikasi Telegram pada versi ini.
+# Telegram Customer Bot (V1.7 Phase D)
+
+- Percakapan reservasi melalui private chat Telegram memakai workflow AURA yang sama dengan chat HTTP.
+- Identity Telegram dipetakan server-side ke Customer melalui HMAC; raw Telegram ID dan bearer token tidak disimpan.
+- Handoff dan ticket persisten dipulihkan untuk customer dan sesi Telegram yang sama setelah restart.
+- Perintah `/start`, `/help`, dan `/status` tersedia; bot belum mengirim notifikasi owner.
+- `/status` membaca tiket aktif berdasarkan Customer dan session HMAC tanpa memanggil AI, classifier, atau membuat tiket baru.
+- Logging network dibatasi dan credential redaction melindungi token Bot API, bearer token, serta password DSN.
+- Identity/session memakai domain HMAC versioned yang berbeda dan konfigurasi Telegram divalidasi hanya oleh runner.

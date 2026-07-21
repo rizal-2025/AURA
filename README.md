@@ -45,6 +45,35 @@ Pada awal `POST /chat`, AURA mencari tiket aktif berdasarkan authenticated custo
 
 Tiket tidak menyimpan raw `session_id`, composite memory key, bearer token, secret, Authorization header, transcript, pesan mentah, nama pelanggan, atau detail tanggal/jam reservasi. Notifikasi Telegram belum tersedia.
 
+## Telegram customer bot (V1.7 Phase D)
+
+Telegram memakai long polling lokal sebagai proses terpisah; FastAPI tidak memulai poller dan tetap dapat berjalan tanpa konfigurasi Telegram. Isi `TELEGRAM_BOT_TOKEN` dan `TELEGRAM_IDENTITY_SECRET` hanya di `.env` lokal. Secret identity harus acak, stabil, minimal 32 karakter non-whitespace, dan bebas newline, tab, null, atau karakter kontrol. Seluruh konfigurasi Telegram divalidasi ketika runner dimulai.
+
+Gunakan secret berbeda dari JWT secret. Contoh pembuatan secret lokal:
+
+```powershell
+.\.venv\Scripts\python.exe -c "import secrets; print(secrets.token_urlsafe(48))"
+```
+
+Mengubah secret atau versi derivasi HMAC memutus mapping Telegram yang sudah ada. Identity memakai domain `aura:telegram:identity:v1`, sedangkan percakapan private memakai domain `aura:telegram:private-session:v1`.
+
+Jalankan migrasi identitas secara manual setelah meninjau database, kemudian mulai proses terpisah:
+
+```powershell
+.\.venv\Scripts\python.exe migrations\add_telegram_identities.py
+.\.venv\Scripts\python.exe -m app.integrations.telegram.runner
+```
+
+Jangan menjalankan migrasi otomatis saat startup. Bot hanya menerima private chat, dengan `/start`, `/help`, dan `/status`; gambar, file, voice note, kontak, dan lokasi tidak diteruskan ke AURA. Hanya satu polling instance yang didukung untuk demo ini.
+
+Identitas Telegram tidak memakai bearer token: AURA membuat atau memakai `Customer` server-side dari HMAC-SHA256 atas Telegram user ID. User ID/chat ID mentah, username, dan token tidak disimpan. Referensi percakapan juga berupa HMAC internal, sehingga workflow, ownership, handoff, dan ticket tetap terisolasi.
+
+Sebelum polling, runner memeriksa webhook aktif. Default-nya runner berhenti aman. Untuk penghapusan webhook yang disengaja saja, set `TELEGRAM_CLEAR_WEBHOOK_ON_START=true`; `TELEGRAM_DROP_PENDING_UPDATES=false` mempertahankan update tertunda. `/status` memeriksa tiket aktif secara customer-session scoped tanpa AI atau classifier. Phase D belum mengirim notifikasi owner melalui Telegram.
+
+Logger pihak ketiga `httpx`, `httpcore`, dan Telegram dibatasi agar URL Bot API tidak mencatat token. Filter redaction tetap diterapkan sebagai lapisan kedua. Jika token pernah muncul di log, segera rotasi melalui BotFather dan perlakukan seluruh salinan log sebagai data sensitif.
+
+Untuk uji PostgreSQL integrasi, gunakan `TEST_DATABASE_URL` terpisah yang nama databasenya mengandung `test`; jangan pernah menggunakan `DATABASE_URL` utama. Tidak ada request ke Telegram nyata di test otomatis.
+
 ## Autentikasi guest dan penggunaan API
 
 Ambil token guest dari server; klien tidak mengirim customer ID:
