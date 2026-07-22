@@ -6,6 +6,7 @@ import app.db.models.reservation
 import app.db.models.customer
 import app.db.models.support_ticket
 import app.db.models.telegram_identity
+import app.db.models.support_ticket_notification
 
 engine = create_engine(
     settings.DATABASE_URL,

@@ -2,6 +2,7 @@
 
 import asyncio
 import os
+import re
 import threading
 import unittest
 from concurrent.futures import ThreadPoolExecutor
@@ -24,6 +25,9 @@ from app.db.repositories.telegram_identity_repository import TelegramIdentityRep
 from app.integrations.telegram.identity import derive_telegram_user_key
 from app.services.authenticated_chat_service import AuthenticatedChatService
 from migrations.add_support_tickets import migrate as migrate_support_tickets
+from migrations.add_support_ticket_notifications import (
+    migrate as migrate_support_ticket_notifications,
+)
 from migrations.add_telegram_identities import (
     CUSTOMER_FOREIGN_KEY,
     CUSTOMER_INDEX,
@@ -439,6 +443,7 @@ class TestTelegramIdentitiesPostgreSQL(unittest.TestCase):
         with self.engine.begin() as connection:
             connection.execute(text(f'DROP TABLE "{self.schema}".support_tickets'))
         migrate_support_tickets(self.engine, schema=self.schema)
+        migrate_support_ticket_notifications(self.engine, schema=self.schema)
         migrate(self.engine, schema=self.schema)
 
         class Message:
@@ -456,6 +461,13 @@ class TestTelegramIdentitiesPostgreSQL(unittest.TestCase):
                 effective_message=Message(message),
             )
 
+        def complete_reply(update):
+            chunks = update.effective_message.replies
+            self.assertTrue(chunks)
+            self.assertTrue(all(isinstance(chunk, str) for chunk in chunks))
+            self.assertTrue(all(len(chunk) <= 4096 for chunk in chunks))
+            return "".join(chunks)
+
         secret = "handler-handoff-identity-secret-v1"
         first_agent = AgentOrchestrator()
         first_agent.update_reservation_agent.run = AsyncMock(side_effect=AssertionError("Update must remain locked"))
@@ -468,18 +480,29 @@ class TestTelegramIdentitiesPostgreSQL(unittest.TestCase):
 
         first = update_for(880001, "hubungkan saya ke Rizal")
         asyncio.run(first_handlers.text_message(first, None))
-        self.assertIn("Nomor tiket Anda: CS-", first.effective_message.replies[0])
-        ticket_number = first.effective_message.replies[0].split("Nomor tiket Anda: ", 1)[1]
+        first_reply = complete_reply(first)
+        ticket_match = re.search(r"Nomor tiket Anda: (CS-[0-9]{4}-[0-9]{6,})", first_reply)
+        self.assertIsNotNone(ticket_match)
+        ticket_number = ticket_match.group(1)
+        self.assertNotIn("notifikasi", first_reply.lower())
 
         for locked_message in ("ubah reservasi saya", "batalkan reservasi saya"):
             locked = update_for(880001, locked_message)
             asyncio.run(first_handlers.text_message(locked, None))
-            self.assertIn(ticket_number, locked.effective_message.replies[0])
+            locked_reply = complete_reply(locked)
+            self.assertIn(ticket_number, locked_reply)
+            self.assertNotIn("notifikasi", locked_reply.lower())
         first_agent.update_reservation_agent.run.assert_not_awaited()
         first_agent.cancel_reservation_agent.run.assert_not_awaited()
 
         with self.engine.connect() as connection:
             self.assertEqual(connection.execute(text("SELECT count(*) FROM support_tickets")).scalar_one(), 1)
+            self.assertEqual(
+                connection.execute(
+                    text("SELECT count(*) FROM support_ticket_notifications")
+                ).scalar_one(),
+                1,
+            )
             first_customer = connection.execute(text(
                 "SELECT customer_id FROM telegram_identities WHERE telegram_user_key=:key"
             ), {"key": derive_telegram_user_key(secret, 880001)}).scalar_one()
@@ -493,7 +516,7 @@ class TestTelegramIdentitiesPostgreSQL(unittest.TestCase):
         )
         after_restart = update_for(880001, "halo lagi")
         asyncio.run(restarted_handlers.text_message(after_restart, None))
-        self.assertIn(ticket_number, after_restart.effective_message.replies[0])
+        self.assertIn(ticket_number, complete_reply(after_restart))
 
         other_status = update_for(880002, "/status")
         asyncio.run(restarted_handlers.status(other_status, None))
@@ -502,6 +525,12 @@ class TestTelegramIdentitiesPostgreSQL(unittest.TestCase):
 
         with self.engine.connect() as connection:
             self.assertEqual(connection.execute(text("SELECT count(*) FROM support_tickets")).scalar_one(), 1)
+            self.assertEqual(
+                connection.execute(
+                    text("SELECT count(*) FROM support_ticket_notifications")
+                ).scalar_one(),
+                1,
+            )
             self.assertEqual(connection.execute(text(
                 "SELECT customer_id FROM telegram_identities WHERE telegram_user_key=:key"
             ), {"key": derive_telegram_user_key(secret, 880001)}).scalar_one(), first_customer)

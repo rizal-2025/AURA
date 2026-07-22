@@ -25,6 +25,8 @@ Dokumen ini merangkum status pengembangan berdasarkan baseline kode AURA saat in
 - Validasi konfigurasi JWT aman: secret minimal 32 karakter dan expiry positif, disertai regression test token, ownership, parser nilai natural, dan logging tanpa secret/token.
 - Kolom `customer_id` V1.4 serta record legacy tetap dipertahankan; record dengan `owner_customer_id = NULL` tidak diekspos.
 - Persistent Support Tickets (V1.6 Phase C): constraint database, satu tiket aktif per customer-session, lifecycle resolved/closed, race recovery, dan pemulihan automation lock setelah restart.
+- Telegram Customer Bot (V1.7 Phase D): private long polling, persistent HMAC identity, shared authenticated chat workflow, dan `/start`, `/help`, `/status`.
+- Telegram Owner Notification (V1.8 Phase E): transactional outbox tiket baru, runner-only sequential dispatcher, safe renderer, lease recovery, dan bounded retry.
 
 ### Fondasi pendukung
 
@@ -42,7 +44,8 @@ Dokumen ini merangkum status pengembangan berdasarkan baseline kode AURA saat in
 - Memperkuat reliabilitas provider AI dengan timeout, retry, dan error handling yang jelas.
 - Menambah pengujian end-to-end yang terisolasi, termasuk database uji dan tanggal/waktu yang deterministik.
 - Menjalankan suite PostgreSQL opt-in secara rutin pada CI dengan database disposable melalui `TEST_DATABASE_URL`.
-- Integrasi notifikasi Telegram untuk tiket support yang sudah tersimpan.
+- Phase F: autentikasi owner serta command terbatas untuk mengambil, resolve, atau close tiket tanpa membuka boundary customer.
+- Uji migration/concurrency Phase E secara rutin pada PostgreSQL disposable di CI.
 
 ## Future
 
@@ -51,8 +54,9 @@ Dokumen ini merangkum status pengembangan berdasarkan baseline kode AURA saat in
 - Registrasi, pemulihan akun, dan autentikasi pelanggan permanen dengan kebijakan verifikasi yang sesuai.
 - Observabilitas produksi: metrik, tracing, audit log, rate limiting, dan alerting.
 - Penyimpanan memori yang dapat dibagi antar-instance serta strategi deployment yang siap skala.
+- Deployment Telegram multi-instance/webhook dengan koordinasi dispatcher dan observabilitas delivery.
 # V1.7
 
 - Phase D selesai secara implementasi: Telegram customer bot dengan identity persisten dan local long polling.
 - Security/reliability hardening Phase D: redaction token, runner-only validation, deterministic status, handler fail-safe, dan migration/concurrency tests.
-- Berikutnya: Phase E notifikasi owner Telegram setelah mekanisme delivery dan retry ditinjau.
+- Phase E selesai secara implementasi; aktivasi membutuhkan migrasi manual dan UAT runner pada database/Telegram test yang terisolasi.

@@ -20,6 +20,7 @@ def redact_sensitive_text(value) -> str:
     for environment_name in (
         "TELEGRAM_BOT_TOKEN",
         "TELEGRAM_IDENTITY_SECRET",
+        "TELEGRAM_OWNER_CHAT_ID",
         "AUTH_JWT_SECRET",
         "OPENAI_API_KEY",
     ):

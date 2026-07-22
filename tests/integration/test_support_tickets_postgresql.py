@@ -19,7 +19,14 @@ from app.db.database import get_db
 from app.db.repositories.support_ticket_repository import SupportTicketRepository
 from app.main import app
 from app.services.handoff.ticket_service import TicketService
-from migrations.add_support_tickets import migrate
+from migrations.add_support_tickets import migrate as migrate_support_tickets
+from migrations.add_support_ticket_notifications import migrate as migrate_notifications
+
+
+def migrate(target_engine, *, schema=None):
+    ticket_changed = migrate_support_tickets(target_engine, schema=schema)
+    migrate_notifications(target_engine, schema=schema)
+    return ticket_changed
 
 
 def _database_identity(url):
@@ -340,10 +347,14 @@ class TestSupportTicketsPostgreSQL(unittest.TestCase):
                 SELECT COUNT(*) FROM {self._table('support_tickets')}
                 WHERE ticket_number LIKE 'PENDING-%'
             """)).scalar_one()
+            notification_count = connection.execute(text(f"""
+                SELECT COUNT(*) FROM {self._table('support_ticket_notifications')}
+            """)).scalar_one()
         self.assertEqual(numbers[0], numbers[1])
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0].ticket_number, numbers[0])
         self.assertEqual(pending_count, 0)
+        self.assertEqual(notification_count, 1)
 
     def test_05_integrity_failure_rolls_back_and_session_remains_usable(self):
         migrate(self.engine, schema=self.schema)
@@ -361,6 +372,7 @@ class TestSupportTicketsPostgreSQL(unittest.TestCase):
                 priority="high",
                 attempt_count=1,
             )
+            db.commit()
             with self.assertRaises(IntegrityError):
                 repository.create(
                     db,

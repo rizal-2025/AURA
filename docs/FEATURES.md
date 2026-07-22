@@ -100,13 +100,21 @@ Rencana untuk melengkapi fondasi tersebut dicatat di [ROADMAP.md](ROADMAP.md).
 - Pergantian status memakai predicate `ticket_id` dan `owner_customer_id`, memperbarui `updated_at`, serta menetapkan `resolved_at` untuk status terminal.
 - Setelah restart, request chat memulihkan automation lock dari tiket aktif sebelum classifier, AI, Update, atau Cancel berjalan.
 - Persistensi hanya menyimpan hash SHA-256 referensi sesi dan ringkasan operasional allowlisted; tidak menyimpan raw session, token, transcript, pesan pelanggan, atau detail reservasi.
-- Tidak ada notifikasi Telegram pada versi ini.
+- Tiket baru membuat satu job outbox notifikasi owner secara atomik; tiket aktif yang dipakai ulang tidak membuat job tambahan.
 # Telegram Customer Bot (V1.7 Phase D)
 
 - Percakapan reservasi melalui private chat Telegram memakai workflow AURA yang sama dengan chat HTTP.
 - Identity Telegram dipetakan server-side ke Customer melalui HMAC; raw Telegram ID dan bearer token tidak disimpan.
 - Handoff dan ticket persisten dipulihkan untuk customer dan sesi Telegram yang sama setelah restart.
-- Perintah `/start`, `/help`, dan `/status` tersedia; bot belum mengirim notifikasi owner.
+- Perintah `/start`, `/help`, dan `/status` tersedia; command owner/admin belum tersedia.
 - `/status` membaca tiket aktif berdasarkan Customer dan session HMAC tanpa memanggil AI, classifier, atau membuat tiket baru.
 - Logging network dibatasi dan credential redaction melindungi token Bot API, bearer token, serta password DSN.
 - Identity/session memakai domain HMAC versioned yang berbeda dan konfigurasi Telegram divalidasi hanya oleh runner.
+
+# Telegram Owner Notification (V1.8 Phase E)
+
+- Runner dapat mengirim notifikasi plain text aman untuk tiket baru ke private owner chat yang berasal eksklusif dari konfigurasi tervalidasi.
+- Persistent transactional outbox mempertahankan job setelah restart, menghindari enqueue ganda, dan memulihkan lease `sending` yang kedaluwarsa.
+- Klaim job memakai locking PostgreSQL, sementara retry memakai backoff dan maksimum attempt yang dibatasi konfigurasi.
+- Isi notifikasi hanya memakai field support ticket yang diizinkan dan tidak menyimpan atau menampilkan identitas pelanggan, raw message, session reference, credential, atau detail reservasi.
+- FastAPI tidak menjalankan dispatcher; Phase E tetap memakai single Telegram polling instance dan belum memiliki command pengelolaan tiket oleh owner.

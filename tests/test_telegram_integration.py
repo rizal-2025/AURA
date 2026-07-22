@@ -162,6 +162,12 @@ class TelegramConfigurationTests(unittest.TestCase):
             "TELEGRAM_IDENTITY_SECRET": "",
             "TELEGRAM_POLL_TIMEOUT_SECONDS": "not-an-integer",
             "TELEGRAM_CLEAR_WEBHOOK_ON_START": "not-a-boolean",
+            "TELEGRAM_OWNER_NOTIFICATIONS_ENABLED": "not-a-boolean",
+            "TELEGRAM_OWNER_CHAT_ID": "not-an-integer",
+            "TELEGRAM_OWNER_NOTIFICATION_POLL_SECONDS": "not-an-integer",
+            "TELEGRAM_OWNER_NOTIFICATION_MAX_ATTEMPTS": "not-an-integer",
+            "TELEGRAM_OWNER_NOTIFICATION_RETRY_BASE_SECONDS": "not-an-integer",
+            "TELEGRAM_OWNER_NOTIFICATION_LEASE_SECONDS": "not-an-integer",
         })
         result = subprocess.run(
             [sys.executable, "-c", "from app.main import app; print(app.title)"],

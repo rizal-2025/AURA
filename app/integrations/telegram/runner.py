@@ -1,15 +1,22 @@
 """Separate local long-polling entry point: ``python -m app.integrations.telegram.runner``."""
 
+import asyncio
 import re
 from dataclasses import dataclass
 
 from app.core.config import (
     DEFAULT_TELEGRAM_POLL_TIMEOUT_SECONDS,
+    DEFAULT_TELEGRAM_OWNER_NOTIFICATION_POLL_SECONDS,
+    DEFAULT_TELEGRAM_OWNER_NOTIFICATION_MAX_ATTEMPTS,
+    DEFAULT_TELEGRAM_OWNER_NOTIFICATION_RETRY_BASE_SECONDS,
+    DEFAULT_TELEGRAM_OWNER_NOTIFICATION_LEASE_SECONDS,
     MINIMUM_TELEGRAM_IDENTITY_SECRET_LENGTH,
     settings,
 )
 from app.core.logger import configure_safe_logging, logger
 from app.integrations.telegram.handlers import TelegramCustomerHandlers
+from app.integrations.telegram.owner_notification_dispatcher import OwnerNotificationDispatcher
+from app.db.database import SessionLocal
 
 
 class TelegramRunnerConfigurationError(RuntimeError):
@@ -27,6 +34,12 @@ class TelegramRunnerConfiguration:
     clear_webhook_on_start: bool
     drop_pending_updates: bool
     poll_timeout_seconds: int
+    owner_notifications_enabled: bool
+    owner_chat_id: int | None
+    owner_notification_poll_seconds: int
+    owner_notification_max_attempts: int
+    owner_notification_retry_base_seconds: int
+    owner_notification_lease_seconds: int
 
 
 def validate_runner_configuration(config=settings) -> TelegramRunnerConfiguration:
@@ -62,12 +75,59 @@ def validate_runner_configuration(config=settings) -> TelegramRunnerConfiguratio
             return value.strip().lower() == "true"
         raise TelegramRunnerConfigurationError("Telegram boolean configuration is invalid.")
 
+    def strict_integer(name: str, default: int, minimum: int, maximum: int) -> int:
+        value = getattr(config, name, default)
+        if isinstance(value, bool):
+            parsed = None
+        elif isinstance(value, int):
+            parsed = value
+        elif isinstance(value, str) and re.fullmatch(r"[1-9][0-9]*", value):
+            parsed = int(value)
+        else:
+            parsed = None
+        if parsed is None or not minimum <= parsed <= maximum:
+            raise TelegramRunnerConfigurationError("Telegram owner notification integer configuration is invalid.")
+        return parsed
+
+    owner_enabled = strict_boolean("TELEGRAM_OWNER_NOTIFICATIONS_ENABLED", False)
+    owner_chat_id = None
+    if owner_enabled:
+        owner_chat_id = strict_integer(
+            "TELEGRAM_OWNER_CHAT_ID", 0, 1, 9_223_372_036_854_775_807
+        )
+
     return TelegramRunnerConfiguration(
         bot_token=token.strip(),
         identity_secret=secret,
         clear_webhook_on_start=strict_boolean("TELEGRAM_CLEAR_WEBHOOK_ON_START", False),
         drop_pending_updates=strict_boolean("TELEGRAM_DROP_PENDING_UPDATES", False),
         poll_timeout_seconds=parsed_timeout,
+        owner_notifications_enabled=owner_enabled,
+        owner_chat_id=owner_chat_id,
+        owner_notification_poll_seconds=strict_integer(
+            "TELEGRAM_OWNER_NOTIFICATION_POLL_SECONDS",
+            DEFAULT_TELEGRAM_OWNER_NOTIFICATION_POLL_SECONDS,
+            1,
+            300,
+        ),
+        owner_notification_max_attempts=strict_integer(
+            "TELEGRAM_OWNER_NOTIFICATION_MAX_ATTEMPTS",
+            DEFAULT_TELEGRAM_OWNER_NOTIFICATION_MAX_ATTEMPTS,
+            1,
+            20,
+        ),
+        owner_notification_retry_base_seconds=strict_integer(
+            "TELEGRAM_OWNER_NOTIFICATION_RETRY_BASE_SECONDS",
+            DEFAULT_TELEGRAM_OWNER_NOTIFICATION_RETRY_BASE_SECONDS,
+            1,
+            3600,
+        ),
+        owner_notification_lease_seconds=strict_integer(
+            "TELEGRAM_OWNER_NOTIFICATION_LEASE_SECONDS",
+            DEFAULT_TELEGRAM_OWNER_NOTIFICATION_LEASE_SECONDS,
+            5,
+            3600,
+        ),
     )
 
 
@@ -83,6 +143,34 @@ async def prepare_polling(application) -> None:
         await application.bot.delete_webhook(
             drop_pending_updates=config.drop_pending_updates,
         )
+    if config.owner_notifications_enabled:
+        if application.bot_data.get("aura_owner_notification_task") is not None:
+            return
+        dispatcher = OwnerNotificationDispatcher(
+            bot=application.bot,
+            session_factory=application.bot_data["aura_session_factory"],
+            owner_chat_id=config.owner_chat_id,
+            config=config,
+        )
+        application.bot_data["aura_owner_notification_dispatcher"] = dispatcher
+        application.bot_data["aura_owner_notification_task"] = asyncio.create_task(
+            dispatcher.run(), name="aura-owner-notification-dispatcher"
+        )
+
+
+async def shutdown_owner_notifications(application) -> None:
+    dispatcher = application.bot_data.get("aura_owner_notification_dispatcher")
+    task = application.bot_data.get("aura_owner_notification_task")
+    if dispatcher is not None:
+        dispatcher.stop()
+    if task is not None:
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+    application.bot_data.pop("aura_owner_notification_task", None)
+    application.bot_data.pop("aura_owner_notification_dispatcher", None)
 
 
 def build_application(config=settings, **handler_dependencies):
@@ -104,9 +192,11 @@ def build_application(config=settings, **handler_dependencies):
         .token(runner_config.bot_token)
         .concurrent_updates(False)
         .post_init(prepare_polling)
+        .post_shutdown(shutdown_owner_notifications)
         .build()
     )
     application.bot_data["aura_runner_config"] = runner_config
+    application.bot_data["aura_session_factory"] = handler_dependencies.get("session_factory", SessionLocal)
     application.add_handler(CommandHandler("start", handlers.start))
     application.add_handler(CommandHandler("help", handlers.help))
     application.add_handler(CommandHandler("status", handlers.status))

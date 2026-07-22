@@ -43,7 +43,7 @@ Migrasi memeriksa kolom, foreign key, CHECK constraint, uniqueness, dan index ya
 
 Pada awal `POST /chat`, AURA mencari tiket aktif berdasarkan authenticated customer dan hash internal customer-session ketika lock belum ada di memory. Tiket aktif mengembalikan lock sebelum classifier, AI, Update, atau Cancel berjalan. State yang dipulihkan hanya berisi metadata operasional aman dan nomor tiket.
 
-Tiket tidak menyimpan raw `session_id`, composite memory key, bearer token, secret, Authorization header, transcript, pesan mentah, nama pelanggan, atau detail tanggal/jam reservasi. Notifikasi Telegram belum tersedia.
+Tiket tidak menyimpan raw `session_id`, composite memory key, bearer token, secret, Authorization header, transcript, pesan mentah, nama pelanggan, atau detail tanggal/jam reservasi.
 
 ## Telegram customer bot (V1.7 Phase D)
 
@@ -57,10 +57,11 @@ Gunakan secret berbeda dari JWT secret. Contoh pembuatan secret lokal:
 
 Mengubah secret atau versi derivasi HMAC memutus mapping Telegram yang sudah ada. Identity memakai domain `aura:telegram:identity:v1`, sedangkan percakapan private memakai domain `aura:telegram:private-session:v1`.
 
-Jalankan migrasi identitas secara manual setelah meninjau database, kemudian mulai proses terpisah:
+Jalankan migrasi identitas dan outbox secara manual setelah meninjau database, kemudian mulai proses terpisah:
 
 ```powershell
 .\.venv\Scripts\python.exe migrations\add_telegram_identities.py
+.\.venv\Scripts\python.exe migrations\add_support_ticket_notifications.py
 .\.venv\Scripts\python.exe -m app.integrations.telegram.runner
 ```
 
@@ -68,7 +69,37 @@ Jangan menjalankan migrasi otomatis saat startup. Bot hanya menerima private cha
 
 Identitas Telegram tidak memakai bearer token: AURA membuat atau memakai `Customer` server-side dari HMAC-SHA256 atas Telegram user ID. User ID/chat ID mentah, username, dan token tidak disimpan. Referensi percakapan juga berupa HMAC internal, sehingga workflow, ownership, handoff, dan ticket tetap terisolasi.
 
-Sebelum polling, runner memeriksa webhook aktif. Default-nya runner berhenti aman. Untuk penghapusan webhook yang disengaja saja, set `TELEGRAM_CLEAR_WEBHOOK_ON_START=true`; `TELEGRAM_DROP_PENDING_UPDATES=false` mempertahankan update tertunda. `/status` memeriksa tiket aktif secara customer-session scoped tanpa AI atau classifier. Phase D belum mengirim notifikasi owner melalui Telegram.
+Sebelum polling, runner memeriksa webhook aktif. Default-nya runner berhenti aman. Untuk penghapusan webhook yang disengaja saja, set `TELEGRAM_CLEAR_WEBHOOK_ON_START=true`; `TELEGRAM_DROP_PENDING_UPDATES=false` mempertahankan update tertunda. `/status` memeriksa tiket aktif secara customer-session scoped tanpa AI atau classifier.
+
+## Notifikasi owner Telegram (V1.8 Phase E)
+
+Phase E membuat satu job outbox `telegram_owner` dalam transaksi yang sama dengan tiket support baru. Tiket yang dipakai ulang, pesan selama automation lock, `/status`, resolve, dan close tidak membuat job baru. Isi pesan dirender saat dispatch hanya dari nomor, kategori, prioritas, status, ringkasan allowlisted, dan waktu tiket; owner chat ID, raw pesan, identitas pelanggan, session reference, token, dan secret tidak disimpan.
+
+Konfigurasi ini hanya divalidasi oleh runner Telegram; FastAPI tetap tidak bergantung padanya:
+
+- `TELEGRAM_OWNER_NOTIFICATIONS_ENABLED=false` — boolean ketat.
+- `TELEGRAM_OWNER_CHAT_ID` — wajib hanya saat enabled; integer positif private ID.
+- `TELEGRAM_OWNER_NOTIFICATION_POLL_SECONDS=5` — integer 1–300.
+- `TELEGRAM_OWNER_NOTIFICATION_MAX_ATTEMPTS=5` — integer 1–20.
+- `TELEGRAM_OWNER_NOTIFICATION_RETRY_BASE_SECONDS=10` — integer 1–3600.
+- `TELEGRAM_OWNER_NOTIFICATION_LEASE_SECONDS=60` — integer 5–3600.
+
+Dispatcher berjalan sebagai satu task sequential milik proses polling, setelah pemeriksaan webhook berhasil. Job diklaim dengan `FOR UPDATE SKIP LOCKED`, status `sending`, dan lease yang sudah dikomit sebelum request jaringan. Failure retryable memakai exponential backoff terbatas; failure permanen atau batas attempt mengubah status menjadi `failed`. Hanya error code allowlisted yang disimpan.
+
+Telegram `sendMessage` tidak menyediakan idempotency key umum. Crash setelah Telegram menerima pesan tetapi sebelum AURA menandai job `sent` dapat menyebabkan satu pengiriman ulang setelah lease kedaluwarsa. Stable ticket number, deterministic outbox identity, dan lease mencegah duplikasi pada operasi normal, tetapi Phase E tidak mengklaim exactly-once delivery eksternal.
+
+Phase E belum menyediakan command owner/admin, resolve/close lewat Telegram, webhook deployment, maupun multi-runner deployment. Jangan menjalankan lebih dari satu polling instance pada demo ini.
+
+UAT lokal Phase E yang aman dilakukan setelah test PostgreSQL disposable lulus dan migrasi normal ditinjau/di-backup:
+
+1. Gunakan bot pengembangan dan private owner chat khusus; jangan gunakan token produksi di command history atau dokumentasi.
+2. Jalankan migrasi outbox manual satu kali, lalu set konfigurasi owner hanya di `.env` lokal dan aktifkan notifikasi.
+3. Mulai satu runner, picu satu handoff baru, dan pastikan satu pesan owner memuat nomor tiket yang sama tanpa identitas/detail reservasi.
+4. Kirim pesan lanjutan selama automation lock dan jalankan `/status`; pastikan tidak ada notifikasi kedua.
+5. Uji recipient invalid atau failure jaringan dengan bot test; tiket customer harus tetap ada sementara job mengikuti retry/failed lifecycle.
+6. Matikan kembali feature flag setelah UAT. Jika bot token bocor, rotasi melalui BotFather sebelum runner dipakai lagi.
+
+Migrasi tidak membuat job untuk tiket historis. Failure dispatch tidak menghapus, menutup, atau menyembunyikan tiket support yang sudah tersimpan.
 
 Logger pihak ketiga `httpx`, `httpcore`, dan Telegram dibatasi agar URL Bot API tidak mencatat token. Filter redaction tetap diterapkan sebagai lapisan kedua. Jika token pernah muncul di log, segera rotasi melalui BotFather dan perlakukan seluruh salinan log sebagai data sensitif.
 

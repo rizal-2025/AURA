@@ -2,7 +2,7 @@
 
 ## Status saat ini
 
-Temuan audit Phase D tentang token logging, validasi konfigurasi runner, handler failure, status tiket, dan partial-schema migration telah diperbaiki dalam working tree dan menunggu verifikasi PostgreSQL opt-in serta UAT aman sebelum rilis.
+Temuan audit Phase D tentang token logging, validasi konfigurasi runner, handler failure, status tiket, dan partial-schema migration telah diperbaiki. Phase E menambahkan transactional outbox dan masih memerlukan verifikasi PostgreSQL opt-in serta UAT aman sebelum aktivasi pada lingkungan normal.
 
 Pencarian pada source juga tidak menemukan penanda `TODO`, `FIXME`, `BUG`, atau `HACK` yang menunjuk ke issue terbuka.
 
@@ -46,7 +46,7 @@ Jika bug ditemukan, tambahkan entri dengan format berikut:
 - Status:
 ```
 
-- Keterbatasan: tiket support belum dikirim ke Telegram atau kanal eksternal.
+- Keterbatasan Phase E: command owner, resolve/close via Telegram, webhook deployment, dan multi-runner belum tersedia. Crash tepat setelah Telegram menerima pesan tetapi sebelum status `sent` tersimpan dapat menyebabkan satu retry duplikat setelah lease; ini adalah batas eksternal yang didokumentasikan, bukan klaim exactly-once.
 ## V1.7 Phase D — security fixes
 
 - Logger network pihak ketiga dibatasi dan output memiliki credential redaction.

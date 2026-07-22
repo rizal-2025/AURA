@@ -2,6 +2,22 @@
 
 Semua perubahan penting pada AURA dicatat di dokumen ini. Repository belum memiliki tag rilis, sehingga entri berikut mengikuti riwayat commit proyek.
 
+## 2026-07-21 - Telegram Owner Notification Outbox (V1.8 Phase E)
+
+### Added
+
+- Model dan migrasi manual `support_ticket_notifications` dengan FK tiket, channel/status/attempt CHECK, unique ticket-channel, serta index due-job dan lease.
+- Transaksi atomik tiket baru dan satu job `telegram_owner`; reuse tiket dan pesan dalam lock tidak menambah job.
+- Dispatcher sequential runner-only dengan PostgreSQL `FOR UPDATE SKIP LOCKED`, processing lease, bounded exponential backoff, recovery lease kedaluwarsa, dan error code allowlisted.
+- Renderer plain text Indonesia dari field tiket allowlisted serta konfigurasi owner Telegram yang divalidasi hanya saat runner dimulai.
+- Unit test offline dan PostgreSQL integration test opt-in memakai schema disposable serta `TEST_DATABASE_URL` saja.
+
+### Security notes
+
+- Outbox tidak menyimpan owner chat ID, customer UUID, raw Telegram ID, identity HMAC, session reference, pesan/transcript, rendered body, token, secret, URL, response body, atau exception text.
+- FastAPI tidak memulai dispatcher dan tetap dapat berjalan saat konfigurasi owner Telegram hilang atau malformed.
+- Telegram memiliki crash window eksternal setelah API menerima pesan sebelum status lokal menjadi `sent`; lease mengurangi risiko, tetapi bukan jaminan exactly-once delivery.
+
 ## 2026-07-20 - Persistent Support Ticket Hardening (V1.6 Phase C Fix 2)
 
 ### Added

@@ -5,13 +5,20 @@ from sqlalchemy.exc import IntegrityError
 from app.core.ownership import require_owner_customer_id
 from app.db.models.support_ticket import validate_ticket_fields
 from app.db.repositories.support_ticket_repository import SupportTicketRepository
+from app.services.handoff.notification_outbox_service import NotificationOutboxService
 
 
 class TicketService:
     """Persistent ticket creation with no raw session or conversation storage."""
 
-    def __init__(self, repository=None):
+    def __init__(self, repository=None, notification_service=None):
         self.repository = repository or SupportTicketRepository()
+        # Production repositories always receive the transactional outbox.
+        # Lightweight repositories injected by existing unit tests remain
+        # usable unless an outbox test explicitly injects its service.
+        self.notification_service = notification_service
+        if notification_service is None and isinstance(self.repository, SupportTicketRepository):
+            self.notification_service = NotificationOutboxService()
 
     @staticmethod
     def hash_session_reference(memory_key: str) -> str:
@@ -37,8 +44,7 @@ class TicketService:
         if existing is not None:
             return existing
         try:
-            return self.repository.create(
-                db,
+            create_values = dict(
                 owner_customer_id=owner_customer_id,
                 session_reference_hash=session_hash,
                 category=category,
@@ -46,6 +52,13 @@ class TicketService:
                 priority=priority,
                 attempt_count=handoff_state["attempt_count"],
             )
+            if self.notification_service is None:
+                return self.repository.create(db, **create_values)
+            ticket = self.repository.create(db, **create_values)
+            self.notification_service.enqueue_new_ticket(db, ticket=ticket)
+            db.commit()
+            db.refresh(ticket)
+            return ticket
         except IntegrityError:
             # The repository has already rolled back its failed INSERT. Calling
             # rollback again is safe for SQLAlchemy sessions and also protects a
@@ -58,6 +71,9 @@ class TicketService:
             )
             if existing is not None:
                 return existing
+            raise
+        except Exception:
+            db.rollback()
             raise
 
     def get_active(self, db, *, owner_customer_id, memory_key):

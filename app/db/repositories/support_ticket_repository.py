@@ -30,6 +30,11 @@ class SupportTicketRepository:
         )
 
     def create(self, db, *, owner_customer_id, session_reference_hash, category, reason_code, priority, attempt_count, status="open"):
+        """Stage a ticket in the caller transaction; never commit independently.
+
+        TicketService is the production transaction boundary and commits only
+        after the required notification outbox row has also been staged.
+        """
         require_owner_customer_id(owner_customer_id)
         validate_ticket_fields(
             category=category,
@@ -68,8 +73,6 @@ class SupportTicketRepository:
             ticket.ticket_number = f"CS-{ticket_year}-{ticket.id:06d}"
             if ticket.ticket_number.startswith("PENDING-"):
                 raise RuntimeError("Support ticket number was not assigned.")
-            db.commit()
-            db.refresh(ticket)
             return ticket
         except Exception:
             # Roll back both database failures and pre-commit failures so the

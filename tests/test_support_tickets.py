@@ -150,6 +150,8 @@ class TestSupportTickets(unittest.TestCase):
 
         db.fail_on = None
         ticket = repository.create(db, **values)
+        db.commit()
+        db.refresh(ticket)
         self.assertEqual(ticket.ticket_number, f"CS-{ticket.created_at.year}-000002")
         self.assertEqual(len(db.commit_snapshots), 1)
 
@@ -269,6 +271,8 @@ class TestSupportTickets(unittest.TestCase):
             priority="high",
             attempt_count=1,
         )
+        db.commit()
+        db.refresh(ticket)
 
         committed_number, committed_at = db.commit_snapshots[0]
         self.assertEqual(ticket.ticket_number, committed_number)
