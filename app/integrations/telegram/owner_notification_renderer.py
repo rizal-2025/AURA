@@ -57,7 +57,7 @@ def _safe_summary(ticket) -> str:
     return summary[:SAFE_SUMMARY_LIMIT]
 
 
-def _format_created_at(value) -> str:
+def format_telegram_timestamp(value) -> str:
     if not isinstance(value, datetime):
         return "Waktu tersedia pada sistem"
     aware = value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
@@ -80,8 +80,7 @@ def render_owner_notification(ticket) -> list[str]:
         f"Kategori: {_safe_label(CATEGORY_LABELS, getattr(ticket, 'category', None), 'Bantuan pelanggan')}\n"
         f"Prioritas: {_safe_label(PRIORITY_LABELS, getattr(ticket, 'priority', None), 'Perlu ditinjau')}\n"
         f"Status: {_safe_label(STATUS_LABELS, getattr(ticket, 'status', None), 'Perlu ditinjau')}\n"
-        f"Waktu dibuat: {_format_created_at(getattr(ticket, 'created_at', None))}\n"
+        f"Waktu dibuat: {format_telegram_timestamp(getattr(ticket, 'created_at', None))}\n"
         f"Ringkasan: {_safe_summary(ticket)}"
     )
     return split_telegram_reply(message)
-

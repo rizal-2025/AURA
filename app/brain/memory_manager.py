@@ -36,3 +36,10 @@ class MemoryManager:
 
     def clear_session(self, memory_key: str) -> None:
         self._sessions.pop(memory_key, None)
+
+    def remove_session_keys(self, memory_key: str, keys) -> dict[str, Any]:
+        """Remove only explicitly selected internal state from one conversation."""
+        session = self.create_session(memory_key)
+        for key in keys:
+            session.pop(key, None)
+        return session

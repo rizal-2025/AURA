@@ -4,6 +4,8 @@
 
 Temuan audit Phase D tentang token logging, validasi konfigurasi runner, handler failure, status tiket, dan partial-schema migration telah diperbaiki. Phase E menambahkan transactional outbox dan masih memerlukan verifikasi PostgreSQL opt-in serta UAT aman sebelum aktivasi pada lingkungan normal.
 
+Audit Phase F menemukan lock handoff memory dapat tetap aktif setelah tiket diselesaikan di PostgreSQL pada proses yang masih berjalan. Masalah tersebut telah diperbaiki: pesan berikutnya merekonsiliasi tiket aktif berdasarkan authenticated customer-session, melepas hanya state handoff bila tiket sudah terminal, dan mempertahankan state workflow lain. Lock akibat kegagalan awal persistensi tiket tetap fail-safe.
+
 Pencarian pada source juga tidak menemukan penanda `TODO`, `FIXME`, `BUG`, atau `HACK` yang menunjuk ke issue terbuka.
 
 ## Audit V1.5 Phase 3A - fixed
@@ -46,7 +48,7 @@ Jika bug ditemukan, tambahkan entri dengan format berikut:
 - Status:
 ```
 
-- Keterbatasan Phase E: command owner, resolve/close via Telegram, webhook deployment, dan multi-runner belum tersedia. Crash tepat setelah Telegram menerima pesan tetapi sebelum status `sent` tersimpan dapat menyebabkan satu retry duplikat setelah lease; ini adalah batas eksternal yang didokumentasikan, bukan klaim exactly-once.
+- Keterbatasan saat ini: customer status notification, webhook deployment, dan multi-runner belum tersedia. Crash tepat setelah Telegram menerima pesan tetapi sebelum status `sent` tersimpan dapat menyebabkan satu retry duplikat setelah lease; ini adalah batas eksternal yang didokumentasikan, bukan klaim exactly-once.
 ## V1.7 Phase D — security fixes
 
 - Logger network pihak ketiga dibatasi dan output memiliki credential redaction.

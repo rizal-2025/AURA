@@ -88,7 +88,7 @@ Dispatcher berjalan sebagai satu task sequential milik proses polling, setelah p
 
 Telegram `sendMessage` tidak menyediakan idempotency key umum. Crash setelah Telegram menerima pesan tetapi sebelum AURA menandai job `sent` dapat menyebabkan satu pengiriman ulang setelah lease kedaluwarsa. Stable ticket number, deterministic outbox identity, dan lease mencegah duplikasi pada operasi normal, tetapi Phase E tidak mengklaim exactly-once delivery eksternal.
 
-Phase E belum menyediakan command owner/admin, resolve/close lewat Telegram, webhook deployment, maupun multi-runner deployment. Jangan menjalankan lebih dari satu polling instance pada demo ini.
+Phase E tidak mengirim notifikasi status tiket kepada pelanggan. Webhook deployment dan multi-runner deployment juga belum tersedia. Jangan menjalankan lebih dari satu polling instance pada demo ini.
 
 UAT lokal Phase E yang aman dilakukan setelah test PostgreSQL disposable lulus dan migrasi normal ditinjau/di-backup:
 
@@ -102,6 +102,21 @@ UAT lokal Phase E yang aman dilakukan setelah test PostgreSQL disposable lulus d
 Migrasi tidak membuat job untuk tiket historis. Failure dispatch tidak menghapus, menutup, atau menyembunyikan tiket support yang sudah tersimpan.
 
 Logger pihak ketiga `httpx`, `httpcore`, dan Telegram dibatasi agar URL Bot API tidak mencatat token. Filter redaction tetap diterapkan sebagai lapisan kedua. Jika token pernah muncul di log, segera rotasi melalui BotFather dan perlakukan seluruh salinan log sebagai data sensitif.
+
+## Pengelolaan tiket oleh owner Telegram (V1.9 Phase F)
+
+Phase F menyediakan command private-chat yang dinonaktifkan secara default:
+
+- `/tickets` menampilkan maksimal 10 tiket aktif (`open`/`in_progress`) dari yang paling lama.
+- `/ticket <ticket_number>` menampilkan detail allowlisted untuk tiket aktif maupun terminal.
+- `/take <ticket_number>` menjalankan transisi `open` ke `in_progress`.
+- `/resolve <ticket_number>` menjalankan transisi `open` atau `in_progress` ke `resolved`.
+
+Aktifkan dengan `TELEGRAM_OWNER_COMMANDS_ENABLED=true` dan isi `TELEGRAM_OWNER_CHAT_ID` hanya di `.env` lokal. Flag command dan `TELEGRAM_OWNER_NOTIFICATIONS_ENABLED` independen; salah satu atau keduanya dapat diaktifkan. Runner memvalidasi ID sebagai integer positif. Handler mensyaratkan private chat serta kesamaan `effective_chat.id` dan `effective_user.id`; ID tidak disimpan, dicatat, atau diterima dari argumen command.
+
+Command berulang bersifat deterministik dan tidak membuka kembali tiket terminal. Command owner tidak membuat job outbox "tiket baru" dan tidak mengklaim pelanggan telah diberi notifikasi. Customer status notification belum tersedia. Setelah `/resolve`, pesan pelanggan berikutnya merekonsiliasi lock dengan status PostgreSQL; hanya state handoff customer-session terkait yang dilepas.
+
+Phase F tidak menambahkan migrasi. Runner tetap mendukung satu polling instance saja. UAT aman dilakukan dengan bot/database pengembangan setelah unit test dan PostgreSQL test disposable lulus: aktifkan flag command, verifikasi akun non-owner selalu mendapat `Perintah tidak tersedia.`, lalu uji `/tickets`, `/ticket`, `/take`, dan `/resolve` tanpa memasukkan ID/token ke log atau dokumentasi. Bila bot token pernah bocor, rotasi melalui BotFather sebelum UAT.
 
 Untuk uji PostgreSQL integrasi, gunakan `TEST_DATABASE_URL` terpisah yang nama databasenya mengandung `test`; jangan pernah menggunakan `DATABASE_URL` utama. Tidak ada request ke Telegram nyata di test otomatis.
 
@@ -153,6 +168,12 @@ PostgreSQL integration tests bersifat opt-in. Gunakan database disposable khusus
 ```powershell
 $env:TEST_DATABASE_URL = "postgresql+psycopg://TEST_USERNAME:TEST_PASSWORD@localhost:5432/aura_test"
 .\.venv\Scripts\python.exe -m unittest discover -s tests\integration -v
+```
+
+Test Phase F saja dapat dijalankan dengan:
+
+```powershell
+.\.venv\Scripts\python.exe -m unittest tests.integration.test_telegram_owner_commands_postgresql -v
 ```
 
 Jika `TEST_DATABASE_URL` tidak tersedia, integration tests dilewati dengan alasan yang jelas. Test membuat schema unik dan hanya membersihkan schema tersebut.

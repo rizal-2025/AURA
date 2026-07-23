@@ -84,17 +84,23 @@ class HandoffService:
         return state
 
     def restore_active_handoff(self, memory_key: str, db, owner_customer_id):
-        """Restore only allowlisted handoff state from an active persisted ticket."""
+        """Reconcile memory with the trusted active ticket for this owner/session."""
         require_owner_customer_id(owner_customer_id)
-        if self.is_required(memory_key):
-            return self.get_state(memory_key)
-
+        had_memory_lock = self.is_required(memory_key)
         ticket = self.ticket_service.get_active(
             db,
             owner_customer_id=owner_customer_id,
             memory_key=memory_key,
         )
         if ticket is None:
+            if had_memory_lock:
+                state = self.get_state(memory_key) or {}
+                # A ticket persistence failure has no trusted terminal state.
+                # Keep the existing fail-safe automation lock; only a formerly
+                # persisted ticket that is no longer active may release it.
+                if state.get("ticket_creation_failed"):
+                    return state
+                self.clear_handoff_state(memory_key)
             return None
         if ticket.status not in ACTIVE_TICKET_STATUSES:
             return None
@@ -128,11 +134,24 @@ class HandoffService:
         )
         return dict(state_data)
 
+    def clear_handoff_state(self, memory_key: str) -> None:
+        """Clear only handoff-related state while preserving workflow memory."""
+        self.memory_manager.remove_session_keys(
+            memory_key,
+            {
+                self.REQUIRED_KEY,
+                self.STATE_KEY,
+                "misunderstanding_count",
+                "ambiguity_count",
+                "invalid_input_context",
+                "invalid_input_count",
+            },
+        )
+
     def clear_for_test(self, memory_key: str) -> None:
         """Internal-only reset hook; deliberately not exposed through an API."""
+        self.clear_handoff_state(memory_key)
         session = self.memory_manager.get_session(memory_key)
-        session[self.REQUIRED_KEY] = False
-        session[self.STATE_KEY] = None
         session["misunderstanding_count"] = 0
         session["ambiguity_count"] = 0
         session["invalid_input_context"] = None

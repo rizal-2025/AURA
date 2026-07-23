@@ -66,11 +66,13 @@ class OwnerNotificationConfigurationTests(unittest.TestCase):
             DATABASE_URL="sqlite://",
             AUTH_JWT_SECRET="x" * 32,
             TELEGRAM_OWNER_NOTIFICATIONS_ENABLED="malformed",
+            TELEGRAM_OWNER_COMMANDS_ENABLED="malformed",
             TELEGRAM_OWNER_CHAT_ID="secret-invalid-id",
             TELEGRAM_OWNER_NOTIFICATION_POLL_SECONDS="bad",
         )
-        self.assertEqual(configured.TELEGRAM_OWNER_NOTIFICATIONS_ENABLED, "malformed")
-        self.assertEqual(configured.TELEGRAM_OWNER_CHAT_ID, "secret-invalid-id")
+        self.assertFalse(hasattr(configured, "TELEGRAM_OWNER_NOTIFICATIONS_ENABLED"))
+        self.assertFalse(hasattr(configured, "TELEGRAM_OWNER_COMMANDS_ENABLED"))
+        self.assertFalse(hasattr(configured, "TELEGRAM_OWNER_CHAT_ID"))
 
     def test_enabled_requires_strict_private_owner_chat_id(self):
         for value in (None, "", " ", True, False, 0, -1, 1.0, "1.0", "-5", "abc", 2**63):

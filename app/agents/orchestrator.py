@@ -1,3 +1,5 @@
+import re
+
 from app.agents.workflow import AgentWorkflow
 from app.agents.cancel_reservation_agent import CancelReservationAgent
 from app.agents.update_reservation_agent import UpdateReservationAgent
@@ -267,7 +269,14 @@ class AgentOrchestrator:
 
             return response_text
 
-        return await self.ai.chat(message)
+        try:
+            return await self.ai.chat(message)
+        except Exception as error:
+            logger.error(
+                "AI PROVIDER FAILURE: operation=general_chat exception=%s",
+                self._safe_exception_name(error),
+            )
+            raise
 
     def _is_view_reservation_request(
         self,
@@ -423,6 +432,10 @@ class AgentOrchestrator:
             db=db,
             owner_customer_id=owner_customer_id,
         )
+
+    @staticmethod
+    def _safe_exception_name(error: Exception) -> str:
+        return re.sub(r"[^A-Za-z0-9_]", "", type(error).__name__) or "UnknownError"
 
     @staticmethod
     def _is_handoff_status_request(message: str) -> bool:

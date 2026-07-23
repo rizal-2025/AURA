@@ -2,6 +2,26 @@
 
 Semua perubahan penting pada AURA dicatat di dokumen ini. Repository belum memiliki tag rilis, sehingga entri berikut mengikuti riwayat commit proyek.
 
+## 2026-07-22 - Telegram Owner Ticket Management (V1.9 Phase F)
+
+### Added
+
+- Command owner private-chat `/tickets`, `/ticket`, `/take`, dan `/resolve` dengan konfigurasi runner yang nonaktif secara default.
+- Otorisasi fail-closed yang memeriksa message, private chat, user/chat ID yang sama, serta menolak sender/forwarded/channel context sebelum parsing dan akses database.
+- Read model immutable berisi hanya nomor tiket, kategori, prioritas, status, dan timestamp; renderer plain text Indonesia memakai chunk maksimum 4096 karakter.
+- Transisi tiket ter-lock berdasarkan public ticket number dengan hasil idempoten dan rollback aman.
+- Unit test offline serta PostgreSQL integration test opt-in untuk authorization, routing, privacy, concurrency, lock release, dan isolasi outbox.
+
+### Fixed
+
+- Lock handoff dalam memory sekarang direkonsiliasi dengan tiket aktif PostgreSQL pada pesan berikutnya. Tiket resolved/closed melepas hanya state handoff terkait tanpa menghapus state reservasi lain.
+
+### Security notes
+
+- Owner ID tidak diterima dari command/API/database dan tidak ditulis pada log atau respons.
+- Command owner tidak memanggil `TicketService.create_or_get()`, tidak membuat notification outbox baru, dan tidak mengirim status kepada pelanggan.
+- Phase F tidak menambahkan atau menjalankan migrasi database.
+
 ## 2026-07-21 - Telegram Owner Notification Outbox (V1.8 Phase E)
 
 ### Added

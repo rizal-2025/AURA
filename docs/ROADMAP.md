@@ -27,6 +27,7 @@ Dokumen ini merangkum status pengembangan berdasarkan baseline kode AURA saat in
 - Persistent Support Tickets (V1.6 Phase C): constraint database, satu tiket aktif per customer-session, lifecycle resolved/closed, race recovery, dan pemulihan automation lock setelah restart.
 - Telegram Customer Bot (V1.7 Phase D): private long polling, persistent HMAC identity, shared authenticated chat workflow, dan `/start`, `/help`, `/status`.
 - Telegram Owner Notification (V1.8 Phase E): transactional outbox tiket baru, runner-only sequential dispatcher, safe renderer, lease recovery, dan bounded retry.
+- Telegram Owner Ticket Management (V1.9 Phase F): command owner private-chat, read model allowlisted, locked/idempotent take-resolve, serta pelepasan automation lock melalui revalidasi tiket persisten.
 
 ### Fondasi pendukung
 
@@ -44,8 +45,8 @@ Dokumen ini merangkum status pengembangan berdasarkan baseline kode AURA saat in
 - Memperkuat reliabilitas provider AI dengan timeout, retry, dan error handling yang jelas.
 - Menambah pengujian end-to-end yang terisolasi, termasuk database uji dan tanggal/waktu yang deterministik.
 - Menjalankan suite PostgreSQL opt-in secara rutin pada CI dengan database disposable melalui `TEST_DATABASE_URL`.
-- Phase F: autentikasi owner serta command terbatas untuk mengambil, resolve, atau close tiket tanpa membuka boundary customer.
 - Uji migration/concurrency Phase E secara rutin pada PostgreSQL disposable di CI.
+- Menambahkan customer status notification terpisah bila kebutuhan produk dan privasinya telah ditetapkan.
 
 ## Future
 

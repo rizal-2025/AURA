@@ -13,6 +13,15 @@ from app.db.models.support_ticket import (
 
 
 class SupportTicketRepository:
+    OWNER_SAFE_COLUMNS = (
+        SupportTicket.ticket_number,
+        SupportTicket.category,
+        SupportTicket.priority,
+        SupportTicket.status,
+        SupportTicket.created_at,
+        SupportTicket.updated_at,
+    )
+
     def get_active_by_owner_and_session_hash(self, db, owner_customer_id, session_reference_hash: str):
         require_owner_customer_id(owner_customer_id)
         return db.execute(select(SupportTicket).where(
@@ -28,6 +37,31 @@ class SupportTicketRepository:
             owner_customer_id,
             session_reference_hash,
         )
+
+    def list_active_for_owner_management(self, db, *, limit: int = 10):
+        """Return only the owner-command read-model columns."""
+        return db.execute(
+            select(*self.OWNER_SAFE_COLUMNS)
+            .where(SupportTicket.status.in_(ACTIVE_TICKET_STATUSES))
+            .order_by(SupportTicket.created_at.asc(), SupportTicket.id.asc())
+            .limit(limit)
+        ).all()
+
+    def get_for_owner_management(self, db, *, ticket_number: str):
+        """Return only the owner-command read-model columns."""
+        return db.execute(
+            select(*self.OWNER_SAFE_COLUMNS).where(
+                SupportTicket.ticket_number == ticket_number
+            )
+        ).one_or_none()
+
+    def get_for_owner_transition(self, db, *, ticket_number: str):
+        """Lock one ticket for a serialized owner lifecycle transition."""
+        return db.execute(
+            select(SupportTicket)
+            .where(SupportTicket.ticket_number == ticket_number)
+            .with_for_update()
+        ).scalar_one_or_none()
 
     def create(self, db, *, owner_customer_id, session_reference_hash, category, reason_code, priority, attempt_count, status="open"):
         """Stage a ticket in the caller transaction; never commit independently.

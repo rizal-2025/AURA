@@ -1,9 +1,16 @@
 import asyncio
+import io
+import logging
 import unittest
+from unittest.mock import AsyncMock
 
 from app.agents.orchestrator import AgentOrchestrator
 from app.agents.workflow import AgentWorkflow
+from app.brain.classifier import IntentClassifier
 from app.brain.planner import Planner
+from app.brain.memory_manager import MemoryManager
+from app.core.logger import logger
+from app.services.handoff.service import HandoffService
 
 
 class TestMultiIntentRouter(unittest.TestCase):
@@ -72,6 +79,56 @@ class TestMultiIntentRouter(unittest.TestCase):
         )
 
         self.assertEqual(response, "stubbed greeting")
+
+    def test_deterministic_greeting_bypasses_failing_provider(self):
+        provider = type("FailingProvider", (), {
+            "chat": AsyncMock(side_effect=ConnectionError("private provider failure")),
+        })()
+        orchestrator = AgentOrchestrator()
+        orchestrator.intent_classifier = IntentClassifier(provider=provider)
+        orchestrator.ai = provider
+
+        response = asyncio.run(
+            orchestrator.handle("greeting-session", "Halo!", object(), "test-owner"),
+        )
+
+        self.assertIn("Halo! Saya AURA", response)
+        provider.chat.assert_not_awaited()
+        self.assertFalse(orchestrator.handoff_service.is_required("greeting-session"))
+
+    def test_non_greeting_provider_failure_creates_safe_internal_handoff_without_raw_log(self):
+        provider = type("FailingProvider", (), {
+            "chat": AsyncMock(side_effect=ConnectionError("private provider failure")),
+        })()
+
+        class TicketRecorder:
+            def __init__(self):
+                self.created = []
+            def create_or_get(self, _db, **kwargs):
+                self.created.append(kwargs)
+                return type("Ticket", (), {"id": 1, "ticket_number": "CS-TEST-000001"})()
+
+        orchestrator = AgentOrchestrator()
+        recorder = TicketRecorder()
+        orchestrator.handoff_service = HandoffService(MemoryManager(), ticket_service=recorder)
+        orchestrator.memory_manager = orchestrator.handoff_service.memory_manager
+        orchestrator.intent_classifier = IntentClassifier(provider=provider)
+        stream = io.StringIO()
+        handler = logging.StreamHandler(stream)
+        logger.addHandler(handler)
+        try:
+            response = asyncio.run(
+                orchestrator.handle("failure-session", "Apa kabar?", object(), "test-owner"),
+            )
+        finally:
+            logger.removeHandler(handler)
+
+        state = orchestrator.memory_manager.get_session("failure-session")
+        self.assertIn("perlu diteruskan", response)
+        self.assertEqual(state["handoff_state"]["category"], "internal_error")
+        self.assertEqual(len(recorder.created), 1)
+        self.assertEqual(provider.chat.await_count, 1)
+        self.assertNotIn("private provider failure", stream.getvalue())
 
 
 if __name__ == "__main__":

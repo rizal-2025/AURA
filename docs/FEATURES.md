@@ -117,4 +117,14 @@ Rencana untuk melengkapi fondasi tersebut dicatat di [ROADMAP.md](ROADMAP.md).
 - Persistent transactional outbox mempertahankan job setelah restart, menghindari enqueue ganda, dan memulihkan lease `sending` yang kedaluwarsa.
 - Klaim job memakai locking PostgreSQL, sementara retry memakai backoff dan maksimum attempt yang dibatasi konfigurasi.
 - Isi notifikasi hanya memakai field support ticket yang diizinkan dan tidak menyimpan atau menampilkan identitas pelanggan, raw message, session reference, credential, atau detail reservasi.
-- FastAPI tidak menjalankan dispatcher; Phase E tetap memakai single Telegram polling instance dan belum memiliki command pengelolaan tiket oleh owner.
+- FastAPI tidak menjalankan dispatcher; Phase E tetap memakai single Telegram polling instance.
+
+# Telegram Owner Ticket Management (V1.9 Phase F)
+
+- Command `/tickets`, `/ticket`, `/take`, dan `/resolve` hanya tersedia bagi private owner chat yang dikonfigurasi dan tervalidasi runner.
+- `/tickets` menampilkan maksimal 10 tiket aktif dengan urutan waktu pembuatan menaik; `/ticket` dapat melihat status aktif maupun terminal melalui DTO allowlisted.
+- `/take` mengubah `open` menjadi `in_progress`; `/resolve` mengubah `open`/`in_progress` menjadi `resolved`. Pengulangan bersifat idempoten dan tiket terminal tidak dibuka kembali.
+- Transisi memakai row lock PostgreSQL dan satu commit service; exception database selalu di-rollback tanpa dibocorkan ke Telegram.
+- Penyelesaian tiket melepaskan automation lock customer-session terkait pada pesan berikutnya tanpa menghapus state reservasi lain.
+- Command owner dan notification dispatcher dikonfigurasi independen. Command owner tidak membuat outbox notifikasi baru dan customer status notification belum tersedia.
+- Tidak ada migrasi Phase F; owner command tetap mengikuti batas satu Telegram polling instance.

@@ -68,6 +68,38 @@ class TestBrainIntentClassifier(unittest.TestCase):
 
         ai.chat.assert_not_awaited()
 
+    def test_classifies_complete_safe_greetings_without_ai(self):
+        ai = type("FailingAI", (), {"chat": AsyncMock(side_effect=AssertionError("AI must not run"))})()
+        classifier = IntentClassifier(provider=ai)
+        for message in (
+            "Halo",
+            "  Hai!  ",
+            "HI...",
+            "hello",
+            "Selamat pagi",
+            "SELAMAT SIANG!",
+            "Selamat sore",
+            "Selamat malam.",
+        ):
+            with self.subTest(message=message):
+                result = asyncio.run(classifier.classify(message))
+                self.assertEqual(result, {"intent": "greeting", "confidence": 0.99})
+        ai.chat.assert_not_awaited()
+
+    def test_mixed_greeting_messages_are_not_reduced_to_greeting(self):
+        ai = type("DummyAI", (), {"chat": AsyncMock(return_value='{"intent":"general","confidence":0.9}')})()
+        classifier = IntentClassifier(provider=ai)
+        cases = {
+            "Halo, saya mau reservasi": "reservation",
+            "Hai, batalkan reservasi saya": "cancel_reservation",
+            "Selamat pagi, saya ingin bicara dengan petugas": "general",
+        }
+        for message, expected in cases.items():
+            with self.subTest(message=message):
+                result = asyncio.run(classifier.classify(message))
+                self.assertEqual(result["intent"], expected)
+        self.assertEqual(ai.chat.await_count, 1)
+
     def test_negated_informational_and_mixed_actions_remain_general(self):
         classifier = IntentClassifier(
             provider=type("DummyAI", (), {"chat": AsyncMock(return_value="{}")})(),

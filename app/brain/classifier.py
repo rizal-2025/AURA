@@ -2,6 +2,7 @@ import json
 import re
 from typing import Any
 
+from app.core.logger import logger
 from app.services.ai.factory import get_ai_provider
 
 
@@ -33,6 +34,16 @@ class IntentClassifier:
         "jelaskan",
         "cara ",
     )
+    _GREETING_PHRASES = frozenset({
+        "halo",
+        "hai",
+        "hi",
+        "hello",
+        "selamat pagi",
+        "selamat siang",
+        "selamat sore",
+        "selamat malam",
+    })
 
     def __init__(self, provider: Any | None = None):
         self.ai = provider or get_ai_provider()
@@ -45,8 +56,19 @@ class IntentClassifier:
                 "confidence": 0.99 if rule_based_intent != "general" else 0.0,
             }
 
+        greeting_intent = self.detect_greeting_intent(message)
+        if greeting_intent is not None:
+            return {"intent": greeting_intent, "confidence": 0.99}
+
         prompt = self._build_prompt(message)
-        response = await self.ai.chat(prompt)
+        try:
+            response = await self.ai.chat(prompt)
+        except Exception as error:
+            logger.error(
+                "AI PROVIDER FAILURE: operation=classify exception=%s",
+                self._safe_exception_name(error),
+            )
+            raise
 
         try:
             data = json.loads(response)
@@ -145,6 +167,18 @@ class IntentClassifier:
         if len(matched_intents) > 1:
             return "general"
         return None
+
+    @classmethod
+    def detect_greeting_intent(cls, message: str) -> str | None:
+        """Recognize only complete, punctuation-tolerant safe greetings."""
+        if not isinstance(message, str):
+            return None
+        normalized = " ".join(re.findall(r"[a-z]+", message.lower()))
+        return "greeting" if normalized in cls._GREETING_PHRASES else None
+
+    @staticmethod
+    def _safe_exception_name(error: Exception) -> str:
+        return re.sub(r"[^A-Za-z0-9_]", "", type(error).__name__) or "UnknownError"
 
     def _build_prompt(self, message: str) -> str:
         intents = self._get_supported_intents()

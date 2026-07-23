@@ -4,6 +4,8 @@ import asyncio
 import re
 from dataclasses import dataclass
 
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
 from app.core.config import (
     DEFAULT_TELEGRAM_POLL_TIMEOUT_SECONDS,
     DEFAULT_TELEGRAM_OWNER_NOTIFICATION_POLL_SECONDS,
@@ -11,10 +13,13 @@ from app.core.config import (
     DEFAULT_TELEGRAM_OWNER_NOTIFICATION_RETRY_BASE_SECONDS,
     DEFAULT_TELEGRAM_OWNER_NOTIFICATION_LEASE_SECONDS,
     MINIMUM_TELEGRAM_IDENTITY_SECRET_LENGTH,
-    settings,
 )
 from app.core.logger import configure_safe_logging, logger
 from app.integrations.telegram.handlers import TelegramCustomerHandlers
+from app.integrations.telegram.owner_command_handlers import (
+    TelegramOwnerCommandHandlers,
+    unknown_command,
+)
 from app.integrations.telegram.owner_notification_dispatcher import OwnerNotificationDispatcher
 from app.db.database import SessionLocal
 
@@ -27,6 +32,25 @@ class TelegramWebhookConflictError(RuntimeError):
     """Refuse polling while a webhook remains active unless explicitly cleared."""
 
 
+class TelegramRunnerEnvironment(BaseSettings):
+    """Runner-only raw environment; validation happens immediately afterward."""
+
+    TELEGRAM_BOT_TOKEN: object = None
+    TELEGRAM_IDENTITY_SECRET: object = None
+    TELEGRAM_CLEAR_WEBHOOK_ON_START: object = False
+    TELEGRAM_DROP_PENDING_UPDATES: object = False
+    TELEGRAM_POLL_TIMEOUT_SECONDS: object = DEFAULT_TELEGRAM_POLL_TIMEOUT_SECONDS
+    TELEGRAM_OWNER_NOTIFICATIONS_ENABLED: object = False
+    TELEGRAM_OWNER_COMMANDS_ENABLED: object = False
+    TELEGRAM_OWNER_CHAT_ID: object = None
+    TELEGRAM_OWNER_NOTIFICATION_POLL_SECONDS: object = DEFAULT_TELEGRAM_OWNER_NOTIFICATION_POLL_SECONDS
+    TELEGRAM_OWNER_NOTIFICATION_MAX_ATTEMPTS: object = DEFAULT_TELEGRAM_OWNER_NOTIFICATION_MAX_ATTEMPTS
+    TELEGRAM_OWNER_NOTIFICATION_RETRY_BASE_SECONDS: object = DEFAULT_TELEGRAM_OWNER_NOTIFICATION_RETRY_BASE_SECONDS
+    TELEGRAM_OWNER_NOTIFICATION_LEASE_SECONDS: object = DEFAULT_TELEGRAM_OWNER_NOTIFICATION_LEASE_SECONDS
+
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+
 @dataclass(frozen=True)
 class TelegramRunnerConfiguration:
     bot_token: str
@@ -35,6 +59,7 @@ class TelegramRunnerConfiguration:
     drop_pending_updates: bool
     poll_timeout_seconds: int
     owner_notifications_enabled: bool
+    owner_commands_enabled: bool
     owner_chat_id: int | None
     owner_notification_poll_seconds: int
     owner_notification_max_attempts: int
@@ -42,7 +67,8 @@ class TelegramRunnerConfiguration:
     owner_notification_lease_seconds: int
 
 
-def validate_runner_configuration(config=settings) -> TelegramRunnerConfiguration:
+def validate_runner_configuration(config=None) -> TelegramRunnerConfiguration:
+    config = config or TelegramRunnerEnvironment()
     token = getattr(config, "TELEGRAM_BOT_TOKEN", None)
     secret = getattr(config, "TELEGRAM_IDENTITY_SECRET", None)
     timeout = getattr(config, "TELEGRAM_POLL_TIMEOUT_SECONDS", DEFAULT_TELEGRAM_POLL_TIMEOUT_SECONDS)
@@ -86,12 +112,19 @@ def validate_runner_configuration(config=settings) -> TelegramRunnerConfiguratio
         else:
             parsed = None
         if parsed is None or not minimum <= parsed <= maximum:
-            raise TelegramRunnerConfigurationError("Telegram owner notification integer configuration is invalid.")
+            raise TelegramRunnerConfigurationError("Telegram owner integer configuration is invalid.")
         return parsed
 
     owner_enabled = strict_boolean("TELEGRAM_OWNER_NOTIFICATIONS_ENABLED", False)
+    owner_commands_enabled = strict_boolean("TELEGRAM_OWNER_COMMANDS_ENABLED", False)
     owner_chat_id = None
     if owner_enabled:
+        owner_chat_id = strict_integer(
+            "TELEGRAM_OWNER_CHAT_ID", 0, 1, 9_223_372_036_854_775_807
+        )
+    if owner_commands_enabled:
+        # Validate independently so owner commands do not depend on the Phase E
+        # notification feature being enabled.
         owner_chat_id = strict_integer(
             "TELEGRAM_OWNER_CHAT_ID", 0, 1, 9_223_372_036_854_775_807
         )
@@ -103,6 +136,7 @@ def validate_runner_configuration(config=settings) -> TelegramRunnerConfiguratio
         drop_pending_updates=strict_boolean("TELEGRAM_DROP_PENDING_UPDATES", False),
         poll_timeout_seconds=parsed_timeout,
         owner_notifications_enabled=owner_enabled,
+        owner_commands_enabled=owner_commands_enabled,
         owner_chat_id=owner_chat_id,
         owner_notification_poll_seconds=strict_integer(
             "TELEGRAM_OWNER_NOTIFICATION_POLL_SECONDS",
@@ -173,7 +207,7 @@ async def shutdown_owner_notifications(application) -> None:
     application.bot_data.pop("aura_owner_notification_dispatcher", None)
 
 
-def build_application(config=settings, **handler_dependencies):
+def build_application(config=None, **handler_dependencies):
     configure_safe_logging()
     runner_config = validate_runner_configuration(config)
     try:
@@ -183,6 +217,7 @@ def build_application(config=settings, **handler_dependencies):
             "Telegram dependency is unavailable. Install the project dependencies."
         ) from error
 
+    owner_ticket_service = handler_dependencies.pop("owner_ticket_service", None)
     handlers = TelegramCustomerHandlers(
         identity_secret=runner_config.identity_secret,
         **handler_dependencies,
@@ -200,6 +235,17 @@ def build_application(config=settings, **handler_dependencies):
     application.add_handler(CommandHandler("start", handlers.start))
     application.add_handler(CommandHandler("help", handlers.help))
     application.add_handler(CommandHandler("status", handlers.status))
+    if runner_config.owner_commands_enabled:
+        owner_handlers = TelegramOwnerCommandHandlers(
+            owner_chat_id=runner_config.owner_chat_id,
+            session_factory=handler_dependencies.get("session_factory", SessionLocal),
+            ticket_service=owner_ticket_service,
+        )
+        application.add_handler(CommandHandler("tickets", owner_handlers.tickets))
+        application.add_handler(CommandHandler("ticket", owner_handlers.ticket))
+        application.add_handler(CommandHandler("take", owner_handlers.take))
+        application.add_handler(CommandHandler("resolve", owner_handlers.resolve))
+    application.add_handler(MessageHandler(filters.COMMAND, unknown_command))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.text_message))
     application.add_handler(MessageHandler(filters.ALL, handlers.non_text_message))
     application.add_error_handler(safe_ptb_error_handler)
@@ -222,8 +268,9 @@ async def safe_ptb_error_handler(update, context) -> None:
 
 def main() -> None:
     try:
-        runner_config = validate_runner_configuration(settings)
-        application = build_application(settings)
+        runner_environment = TelegramRunnerEnvironment()
+        runner_config = validate_runner_configuration(runner_environment)
+        application = build_application(runner_environment)
         application.run_polling(
             allowed_updates=["message"],
             drop_pending_updates=runner_config.drop_pending_updates,
