@@ -10,8 +10,18 @@ from app.schemas.chat import ChatRequest
 
 
 class DummyDB:
+    def __init__(self):
+        self.commits = 0
+        self.rollbacks = 0
+
     def execute(self, _statement):
         return SimpleNamespace(scalar_one_or_none=lambda: None)
+
+    def commit(self):
+        self.commits += 1
+
+    def rollback(self):
+        self.rollbacks += 1
 
     def close(self):
         pass

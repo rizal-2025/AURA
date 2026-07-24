@@ -61,51 +61,39 @@ class SupportTicketNotificationRepository:
             .with_for_update(skip_locked=True)
             .limit(1)
         )
-        try:
-            notification = db.execute(statement).scalar_one_or_none()
-            if notification is None:
-                db.rollback()
-                return None
-            notification.status = "sending"
-            notification.lease_expires_at = timestamp + timedelta(seconds=lease_seconds)
-            notification.updated_at = timestamp
-            db.commit()
-            db.refresh(notification)
-            return notification
-        except Exception:
-            db.rollback()
-            raise
+        notification = db.execute(statement).scalar_one_or_none()
+        if notification is None:
+            return None
+        notification.status = "sending"
+        notification.lease_expires_at = timestamp + timedelta(seconds=lease_seconds)
+        notification.updated_at = timestamp
+        db.flush()
+        return notification
 
     def mark_sent(self, db, *, notification_id: int, telegram_message_id=None, now=None):
         timestamp = now or datetime.now(timezone.utc)
-        try:
-            notification = db.execute(
-                select(SupportTicketNotification)
-                .where(
-                    SupportTicketNotification.id == notification_id,
-                    SupportTicketNotification.status == "sending",
-                )
-                .with_for_update()
-            ).scalar_one_or_none()
-            if notification is None:
-                db.rollback()
-                return None
-            if telegram_message_id is not None and (
-                isinstance(telegram_message_id, bool) or not isinstance(telegram_message_id, int)
-            ):
-                telegram_message_id = None
-            notification.status = "sent"
-            notification.sent_at = timestamp
-            notification.telegram_message_id = telegram_message_id
-            notification.last_error_code = None
-            notification.lease_expires_at = None
-            notification.updated_at = timestamp
-            db.commit()
-            db.refresh(notification)
-            return notification
-        except Exception:
-            db.rollback()
-            raise
+        notification = db.execute(
+            select(SupportTicketNotification)
+            .where(
+                SupportTicketNotification.id == notification_id,
+                SupportTicketNotification.status == "sending",
+            )
+            .with_for_update()
+        ).scalar_one_or_none()
+        if notification is None:
+            return None
+        if telegram_message_id is not None and (
+            isinstance(telegram_message_id, bool) or not isinstance(telegram_message_id, int)
+        ):
+            telegram_message_id = None
+        notification.status = "sent"
+        notification.sent_at = timestamp
+        notification.telegram_message_id = telegram_message_id
+        notification.last_error_code = None
+        notification.lease_expires_at = None
+        notification.updated_at = timestamp
+        db.flush()
+        return notification
 
     def mark_failed_attempt(
         self,
@@ -122,35 +110,28 @@ class SupportTicketNotificationRepository:
         if error_code not in VALID_NOTIFICATION_ERROR_CODES:
             error_code = "unknown"
         timestamp = now or datetime.now(timezone.utc)
-        try:
-            notification = db.execute(
-                select(SupportTicketNotification)
-                .where(
-                    SupportTicketNotification.id == notification_id,
-                    SupportTicketNotification.status == "sending",
-                )
-                .with_for_update()
-            ).scalar_one_or_none()
-            if notification is None:
-                db.rollback()
-                return None
-            notification.attempt_count += 1
-            notification.last_error_code = error_code
-            notification.lease_expires_at = None
-            notification.updated_at = timestamp
-            if retryable and notification.attempt_count < max_attempts:
-                exponential = retry_base_seconds * (2 ** (notification.attempt_count - 1))
-                delay = min(exponential, 3600)
-                if retry_after_seconds is not None:
-                    delay = min(max(delay, retry_after_seconds), 3600)
-                notification.status = "pending"
-                notification.next_attempt_at = timestamp + timedelta(seconds=delay)
-            else:
-                notification.status = "failed"
-            db.commit()
-            db.refresh(notification)
-            return notification
-        except Exception:
-            db.rollback()
-            raise
-
+        notification = db.execute(
+            select(SupportTicketNotification)
+            .where(
+                SupportTicketNotification.id == notification_id,
+                SupportTicketNotification.status == "sending",
+            )
+            .with_for_update()
+        ).scalar_one_or_none()
+        if notification is None:
+            return None
+        notification.attempt_count += 1
+        notification.last_error_code = error_code
+        notification.lease_expires_at = None
+        notification.updated_at = timestamp
+        if retryable and notification.attempt_count < max_attempts:
+            exponential = retry_base_seconds * (2 ** (notification.attempt_count - 1))
+            delay = min(exponential, 3600)
+            if retry_after_seconds is not None:
+                delay = min(max(delay, retry_after_seconds), 3600)
+            notification.status = "pending"
+            notification.next_attempt_at = timestamp + timedelta(seconds=delay)
+        else:
+            notification.status = "failed"
+        db.flush()
+        return notification

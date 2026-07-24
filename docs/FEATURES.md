@@ -32,6 +32,38 @@ FastAPI juga menyediakan spesifikasi OpenAPI dan antarmuka dokumentasi interakti
   FastAPI dan Telegram pada proses terpisah tidak berbagi lock; distributed
   coordination belum tersedia.
 
+## Transaction foundation - V2.0 G1D-A1
+
+- **Ownership eksplisit:** ingress membuat/menutup session, service memiliki
+  transaksi bisnis, dan repository hanya menjadi participant.
+- **Satu commit:** mutation reservasi, lifecycle tiket owner, identity, serta
+  fase database outbox memiliki satu controlled commit boundary.
+- **Rollback aman:** kegagalan yang terbukti terjadi sebelum commit di-rollback;
+  kegagalan pada batas commit dilaporkan sebagai outcome tidak pasti tanpa
+  retry mutation otomatis.
+- **DTO immutable:** caller tidak menerima ORM object yang memerlukan lazy load
+  atau refresh setelah commit. DTO record persistence terpisah dari schema
+  input sehingga record legacy tidak divalidasi ulang dengan batas Create
+  terbaru, sementara setiap input baru tetap memakai validator ketat.
+- **Ticket/outbox atomik:** tiket support baru dan satu pending notification
+  distage dalam transaksi yang sama.
+- **Network di luar transaksi:** AI/provider dan Telegram send tidak menahan
+  transaksi database; send failure tidak membatalkan state yang sudah commit.
+- **Adapter persistence aman:** error transaksi chat diteruskan ke respons
+  channel-specific (`503` HTTP atau pesan generik Telegram), bukan diubah
+  menjadi internal-error handoff.
+- **Dispatcher terpisah:** klasifikasi failure Telegram hanya berlaku pada
+  network send; failure database saat `mark_sent` mempertahankan row lease
+  untuk rekonsiliasi.
+- **UoW single-use:** satu instance hanya dapat memiliki satu lifecycle dan
+  cleanup dependency mempertahankan exception aplikasi authoritatif.
+- **Cancel reconciliation:** hasil mutation nol dapat diikuti owner-filtered
+  read transaction baru setelah transaction mutation selesai.
+- **ID reservasi nyata:** konfirmasi Create memakai primary key database yang
+  benar, bukan UUID sesi buatan.
+- **Batas tahap:** belum ada snapshot/recovery memory G1D-A2 dan belum ada
+  idempotensi retry Create G1D-B. Tidak ada migration G1D-A1.
+
 ## Orkestrasi chat berbasis AI
 
 - **Provider AI yang dapat dipilih:** AURA dapat memakai Ollama atau OpenAI melalui factory provider yang sama.
@@ -48,7 +80,8 @@ FastAPI juga menyediakan spesifikasi OpenAPI dan antarmuka dokumentasi interakti
 - **Koreksi konteks:** perubahan sederhana dengan kata seperti `ganti` atau `ubah` dapat memperbarui data reservasi yang telah tersimpan di sesi.
 - **Konfirmasi:** setelah semua field lengkap, AURA menampilkan ringkasan dan meminta jawaban **Ya** atau **Tidak**.
 - **Penyimpanan:** jawaban positif membuat reservasi melalui service dan repository database; record baru memiliki status awal `pending` serta `owner_customer_id` dari bearer token tervalidasi.
-- **Nomor reservasi sesi:** setelah konfirmasi berhasil, AURA menyimpan UUID sebagai nomor reservasi pada state sesi dan menampilkannya pada respons.
+- **Nomor reservasi:** setelah konfirmasi berhasil, AURA menyimpan dan
+  menampilkan ID reservasi database yang benar pada state sesi.
 
 ## Reservation Management (READ) - V1.1
 

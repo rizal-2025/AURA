@@ -239,8 +239,14 @@ class ReservationValidationTests(unittest.TestCase):
         service = ReservationService()
         service.repository = MagicMock()
         owner_customer_id = uuid4()
-        expected = object()
-        service.repository.create.return_value = expected
+        def persist(_db, validated, **_kwargs):
+            return SimpleNamespace(
+                id=7,
+                **validated.model_dump(),
+                status="pending",
+            )
+
+        service.repository.create.side_effect = persist
         data = ReservationCreate(
             name="  José   D’Angelo ",
             people=4,
@@ -254,7 +260,7 @@ class ReservationValidationTests(unittest.TestCase):
             owner_customer_id=owner_customer_id,
         )
 
-        self.assertIs(result, expected)
+        self.assertEqual(result.id, 7)
         forwarded = service.repository.create.call_args.args[1]
         self.assertIsNot(forwarded, data)
         self.assertEqual(forwarded.name, "José D’Angelo")
@@ -325,6 +331,14 @@ class ReservationValidationTests(unittest.TestCase):
             owner_customer_id=attacker_owner,
             status="cancelled",
             id=999,
+        )
+        service.repository.create.return_value = SimpleNamespace(
+            id=8,
+            name="Valid Name",
+            people=4,
+            date="2028-02-29",
+            time="19:00",
+            status="pending",
         )
 
         service.create_reservation(

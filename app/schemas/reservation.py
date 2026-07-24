@@ -55,6 +55,7 @@ class ReservationResponse(ReservationCreate):
 
     model_config = ConfigDict(
         extra="forbid",
+        frozen=True,
         from_attributes=True,
         hide_input_in_errors=True,
     )

@@ -8,6 +8,39 @@ Audit Phase F menemukan lock handoff memory dapat tetap aktif setelah tiket dise
 
 Pencarian pada source juga tidak menemukan penanda `TODO`, `FIXME`, `BUG`, atau `HACK` yang menunjuk ke issue terbuka.
 
+## Audit V2.0 Phase G1D-A1 - transaction foundation
+
+- Kepemilikan transaksi kini eksplisit: ingress membuat/menutup session,
+  service commit tepat sekali, dan repository tidak commit/rollback/close.
+- Kegagalan pre-commit, outcome commit yang tidak pasti, dan session unusable
+  memiliki error stabil tanpa raw SQL, identifier, atau nilai database.
+- Reservation Create API/chat memakai service yang sama dan menampilkan ID
+  database asli.
+- Ticket dan outbox distage dalam satu transaksi; send failure setelah commit
+  tidak mencoba rollback data bisnis.
+- Read identity/ticket dimaterialisasi dan transaksinya diakhiri sebelum
+  AI/provider atau Telegram await.
+- Tidak ada schema atau migration G1D-A1.
+
+Koreksi adversarial 2026-07-25 telah menutup temuan A1 berikut:
+
+- transaction exception pada chat tidak lagi berubah menjadi handoff;
+- failure database `mark_sent` tidak lagi diklasifikasikan sebagai failure
+  Telegram;
+- record reservasi legacy tidak lagi melewati validator input Create saat
+  dimaterialisasi;
+- UoW menolak re-entry;
+- cleanup rollback tidak mengganti exception aplikasi authoritatif;
+- error handler persistence aman untuk subclass;
+- outbox participant tidak lagi dipilih melalui boolean public.
+
+Cancel tetap boleh melakukan secondary read yang owner-filtered, tetapi read
+tersebut adalah transaksi baru setelah mutation transaction berakhir.
+
+Keterbatasan yang masih terbuka: A1 belum menyediakan snapshot/recovery memory
+G1D-A2. Retry Reservation Create setelah commit-before-response belum idempoten
+dan tetap scope G1D-B. Karena itu paid-pilot readiness belum diklaim.
+
 ## Audit V2.0 Phase G1A - fixed
 
 - `APP_ENV` kini wajib dan exact; production tidak dapat diinferensikan dari default.

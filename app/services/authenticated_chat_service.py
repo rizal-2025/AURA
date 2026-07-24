@@ -8,6 +8,11 @@ from app.core.input_validation import (
     validate_session_reference,
 )
 from app.core.ownership import require_owner_customer_id
+from app.core.transaction_errors import (
+    PersistenceOperationError,
+    PersistenceOutcomeUnknownError,
+    TransactionSessionUnusableError,
+)
 
 
 class AuthenticatedChatService:
@@ -31,6 +36,12 @@ class AuthenticatedChatService:
                     db,
                     owner_customer_id,
                 )
+            except (
+                PersistenceOperationError,
+                PersistenceOutcomeUnknownError,
+                TransactionSessionUnusableError,
+            ):
+                raise
             except Exception:
                 # Do not let a recovery failure fall through into a reservation
                 # or general AI workflow.

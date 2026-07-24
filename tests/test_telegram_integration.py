@@ -292,7 +292,7 @@ class TelegramHandlerTests(unittest.TestCase):
         asyncio.run(handlers.text_message(update, None))
         self.assertEqual(update.effective_message.replies, [(CONVERSATION_BUSY_REPLY, {})])
         self.assertLessEqual(len(update.effective_message.replies[0][0]), 4096)
-        self.assertEqual(self.db.rollbacks, 1)
+        self.assertEqual(self.db.rollbacks, 0)
 
     def test_busy_ticket_status_returns_safe_reply(self):
         class BusyChatService(FakeChatService):
@@ -312,7 +312,7 @@ class TelegramHandlerTests(unittest.TestCase):
         update = private_update(text="/status")
         asyncio.run(handlers.status(update, None))
         self.assertEqual(update.effective_message.replies, [(CONVERSATION_BUSY_REPLY, {})])
-        self.assertEqual(self.db.rollbacks, 1)
+        self.assertEqual(self.db.rollbacks, 0)
 
     def test_group_and_non_text_messages_do_not_reach_chat_service(self):
         handlers = self.make_handlers()
@@ -392,7 +392,7 @@ class TelegramHandlerTests(unittest.TestCase):
         update.effective_message = FakeMessage("halo", failures=2)
         asyncio.run(handlers.text_message(update, None))
         self.assertEqual(update.effective_message.calls, 2)
-        self.assertEqual(self.db.rollbacks, 1)
+        self.assertEqual(self.db.rollbacks, 0)
         self.assertTrue(self.db.closed)
 
     def test_status_is_deterministic_and_does_not_call_general_chat(self):
@@ -446,16 +446,30 @@ class TelegramIdentityServiceTests(unittest.TestCase):
         def __init__(self, customer):
             self.customer = customer
             self.get_calls = 0
+            self.commits = 0
+            self.rollbacks = 0
 
         def get(self, model, identifier):
             self.get_calls += 1
             return self.customer
 
+        def commit(self):
+            self.commits += 1
+
+        def rollback(self):
+            self.rollbacks += 1
+
     def test_inactive_identity_customer_and_missing_customer_fail_closed(self):
         customer_id = uuid4()
         cases = (
-            (SimpleNamespace(is_active=False, customer_id=customer_id), SimpleNamespace(id=customer_id, is_active=True)),
-            (SimpleNamespace(is_active=True, customer_id=customer_id), SimpleNamespace(id=customer_id, is_active=False)),
+            (
+                SimpleNamespace(is_active=False, customer_id=customer_id),
+                SimpleNamespace(id=customer_id, is_active=True, token_version=1),
+            ),
+            (
+                SimpleNamespace(is_active=True, customer_id=customer_id),
+                SimpleNamespace(id=customer_id, is_active=False, token_version=1),
+            ),
             (SimpleNamespace(is_active=True, customer_id=customer_id), None),
         )
         for identity, customer in cases:

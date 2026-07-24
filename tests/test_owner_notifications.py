@@ -313,7 +313,7 @@ class OwnerNotificationRepositoryTests(unittest.TestCase):
         finally:
             db.close()
 
-    def test_database_failure_rolls_back_and_session_can_be_reused(self):
+    def test_repository_leaves_database_failure_rollback_to_service(self):
         class FailingDb:
             def __init__(self):
                 self.rollbacks = 0
@@ -324,7 +324,7 @@ class OwnerNotificationRepositoryTests(unittest.TestCase):
         db = FailingDb()
         with self.assertRaises(RuntimeError):
             SupportTicketNotificationRepository().claim_due(db, lease_seconds=60)
-        self.assertEqual(db.rollbacks, 1)
+        self.assertEqual(db.rollbacks, 0)
 
 
 class OwnerNotificationDispatcherTests(unittest.TestCase):

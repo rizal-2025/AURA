@@ -18,6 +18,18 @@ from app.services.handoff.service import HandoffService
 from app.services.handoff.ticket_service import TicketService
 
 
+class TransactionDB:
+    def __init__(self):
+        self.commits = 0
+        self.rollbacks = 0
+
+    def commit(self):
+        self.commits += 1
+
+    def rollback(self):
+        self.rollbacks += 1
+
+
 class InMemoryLifecycleRepository:
     def __init__(self):
         self.tickets = []
@@ -75,6 +87,9 @@ class InMemoryLifecycleRepository:
     def close(self, _db, *, ticket_id, owner_customer_id):
         return self._set_status(ticket_id, owner_customer_id, "closed")
 
+    def update_status(self, _db, *, ticket_id, owner_customer_id, status):
+        return self._set_status(ticket_id, owner_customer_id, status)
+
 
 def handoff_state(category="explicit_human_request"):
     return {
@@ -130,21 +145,21 @@ class TestSupportTicketLifecycle(unittest.TestCase):
         memory_key = "customer-a:chat-01"
 
         resolved = service.create_or_get(
-            object(), owner_customer_id=owner, memory_key=memory_key,
+            TransactionDB(), owner_customer_id=owner, memory_key=memory_key,
             handoff_state=handoff_state(),
         )
-        service.resolve(object(), ticket_id=resolved.id, owner_customer_id=owner)
+        service.resolve(TransactionDB(), ticket_id=resolved.id, owner_customer_id=owner)
         self.assertIsNone(
-            service.get_active(object(), owner_customer_id=owner, memory_key=memory_key)
+            service.get_active(TransactionDB(), owner_customer_id=owner, memory_key=memory_key)
         )
 
         closed = service.create_or_get(
-            object(), owner_customer_id=owner, memory_key=memory_key,
+            TransactionDB(), owner_customer_id=owner, memory_key=memory_key,
             handoff_state=handoff_state(),
         )
-        service.close(object(), ticket_id=closed.id, owner_customer_id=owner)
+        service.close(TransactionDB(), ticket_id=closed.id, owner_customer_id=owner)
         self.assertIsNone(
-            service.get_active(object(), owner_customer_id=owner, memory_key=memory_key)
+            service.get_active(TransactionDB(), owner_customer_id=owner, memory_key=memory_key)
         )
 
     def test_resolved_and_closed_tickets_allow_new_ticket_numbers(self):
@@ -155,14 +170,14 @@ class TestSupportTicketLifecycle(unittest.TestCase):
                 owner = "customer-a"
                 memory_key = f"customer-a:{terminal_status}"
                 first = service.create_or_get(
-                    object(), owner_customer_id=owner, memory_key=memory_key,
+                    TransactionDB(), owner_customer_id=owner, memory_key=memory_key,
                     handoff_state=handoff_state(),
                 )
                 getattr(service, "resolve" if terminal_status == "resolved" else "close")(
-                    object(), ticket_id=first.id, owner_customer_id=owner,
+                    TransactionDB(), ticket_id=first.id, owner_customer_id=owner,
                 )
                 second = service.create_or_get(
-                    object(), owner_customer_id=owner, memory_key=memory_key,
+                    TransactionDB(), owner_customer_id=owner, memory_key=memory_key,
                     handoff_state=handoff_state(),
                 )
                 self.assertNotEqual(first.ticket_number, second.ticket_number)
@@ -174,18 +189,21 @@ class TestSupportTicketLifecycle(unittest.TestCase):
         owner = "customer-a"
         memory_key = "customer-a:in-progress"
         ticket = service.create_or_get(
-            object(), owner_customer_id=owner, memory_key=memory_key,
+            TransactionDB(), owner_customer_id=owner, memory_key=memory_key,
             handoff_state=handoff_state(),
         )
         updated = service.mark_in_progress(
-            object(), ticket_id=ticket.id, owner_customer_id=owner,
+            TransactionDB(), ticket_id=ticket.id, owner_customer_id=owner,
         )
         self.assertEqual(updated.status, "in_progress")
         self.assertIsNone(updated.resolved_at)
-        self.assertIs(
-            service.get_active(object(), owner_customer_id=owner, memory_key=memory_key),
-            ticket,
+        active = service.get_active(
+            TransactionDB(),
+            owner_customer_id=owner,
+            memory_key=memory_key,
         )
+        self.assertEqual(active.id, ticket.id)
+        self.assertEqual(active.status, "in_progress")
 
     def test_restart_recovery_restores_lock_and_blocks_update_and_cancel(self):
         repository = InMemoryLifecycleRepository()
@@ -198,7 +216,7 @@ class TestSupportTicketLifecycle(unittest.TestCase):
         initial.require_handoff(
             memory_key,
             "explicit_human_request",
-            db=object(),
+            db=TransactionDB(),
             owner_customer_id=owner,
         )
 
@@ -209,7 +227,7 @@ class TestSupportTicketLifecycle(unittest.TestCase):
         )
         restored = restarted_handoff.restore_active_handoff(
             memory_key,
-            object(),
+            TransactionDB(),
             owner,
         )
         self.assertTrue(restored["handoff_required"])
@@ -224,10 +242,10 @@ class TestSupportTicketLifecycle(unittest.TestCase):
         orchestrator.cancel_reservation_agent.run = AsyncMock()
 
         update_reply = asyncio.run(orchestrator.handle(
-            memory_key, "ubah reservasi saya", object(), owner,
+            memory_key, "ubah reservasi saya", TransactionDB(), owner,
         ))
         cancel_reply = asyncio.run(orchestrator.handle(
-            memory_key, "batalkan reservasi saya", object(), owner,
+            memory_key, "batalkan reservasi saya", TransactionDB(), owner,
         ))
         self.assertIn("menunggu bantuan petugas", update_reply)
         self.assertIn("CS-2026-000001", update_reply)
@@ -246,16 +264,16 @@ class TestSupportTicketLifecycle(unittest.TestCase):
         HandoffService(first_memory, ticket_service=service).require_handoff(
             key_a,
             "explicit_human_request",
-            db=object(),
+            db=TransactionDB(),
             owner_customer_id="customer-a",
         )
 
         restarted = HandoffService(MemoryManager(), ticket_service=service)
         self.assertIsNotNone(
-            restarted.restore_active_handoff(key_a, object(), "customer-a")
+            restarted.restore_active_handoff(key_a, TransactionDB(), "customer-a")
         )
         self.assertIsNone(
-            restarted.restore_active_handoff(key_b, object(), "customer-b")
+            restarted.restore_active_handoff(key_b, TransactionDB(), "customer-b")
         )
         self.assertFalse(restarted.is_required(key_b))
 
@@ -266,7 +284,7 @@ class TestSupportTicketLifecycle(unittest.TestCase):
             ticket_service=TicketService(repository),
         )
         with self.assertRaises(MissingOwnerCustomerError):
-            handoff.restore_active_handoff("unscoped", object(), None)
+            handoff.restore_active_handoff("unscoped", TransactionDB(), None)
         self.assertEqual(repository.lookup_count, 0)
 
     def test_recovery_database_error_returns_safe_response_before_workflow(self):
@@ -281,7 +299,7 @@ class TestSupportTicketLifecycle(unittest.TestCase):
             ),
             patch.object(chat_agent, "handle", AsyncMock()) as handle,
         ):
-            response = asyncio.run(chat(request, db=object(), current_customer=customer))
+            response = asyncio.run(chat(request, db=TransactionDB(), current_customer=customer))
 
         self.assertIn("belum dapat diperiksa", response.reply)
         self.assertNotIn(database_error, response.reply)
@@ -297,7 +315,7 @@ class TestSupportTicketLifecycle(unittest.TestCase):
         HandoffService(MemoryManager(), ticket_service=service).require_handoff(
             memory_key,
             "explicit_human_request",
-            db=object(),
+            db=TransactionDB(),
             owner_customer_id=owner,
         )
 
@@ -307,7 +325,7 @@ class TestSupportTicketLifecycle(unittest.TestCase):
         aura_logger = logging.getLogger("AURA")
         aura_logger.addHandler(handler)
         try:
-            restored = restarted.restore_active_handoff(memory_key, object(), owner)
+            restored = restarted.restore_active_handoff(memory_key, TransactionDB(), owner)
             reply = restarted.waiting_response(memory_key)
         finally:
             aura_logger.removeHandler(handler)

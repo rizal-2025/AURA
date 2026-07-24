@@ -5,6 +5,11 @@ from dataclasses import dataclass
 from datetime import timedelta
 
 from app.core.logger import logger
+from app.core.transaction_errors import (
+    PersistenceOperationError,
+    PersistenceOutcomeUnknownError,
+    TransactionSessionUnusableError,
+)
 from app.db.models.support_ticket import SupportTicket
 from app.integrations.telegram.owner_notification_renderer import render_owner_notification
 from app.services.handoff.notification_outbox_service import NotificationOutboxService
@@ -93,37 +98,72 @@ class OwnerNotificationDispatcher:
             self._mark_failure(notification_id, TelegramFailure("unknown", False))
             return True
 
+        last_message_id = None
         try:
-            last_message_id = None
             for chunk in chunks:
                 sent = await self.bot.send_message(chat_id=self.owner_chat_id, text=chunk)
                 candidate = getattr(sent, "message_id", None)
                 if isinstance(candidate, int) and not isinstance(candidate, bool):
                     last_message_id = candidate
-            update_db = self.session_factory()
-            try:
-                self.outbox_service.mark_sent(
-                    update_db,
-                    notification_id=notification_id,
-                    telegram_message_id=last_message_id,
-                )
-            finally:
-                update_db.close()
-            logger.info(
-                "OWNER NOTIFICATION: operation=send notification_id=%s status=sent",
-                notification_id,
-            )
         except asyncio.CancelledError:
             raise
         except Exception as error:
             failure = classify_telegram_failure(error)
-            self._mark_failure(notification_id, failure)
+            self._record_network_failure(notification_id, failure)
             logger.warning(
-                "OWNER NOTIFICATION: operation=send notification_id=%s status=failed code=%s",
-                notification_id,
+                "OWNER NOTIFICATION: operation=send status=failed code=%s",
                 failure.code,
             )
+            return True
+
+        update_db = self.session_factory()
+        try:
+            self.outbox_service.mark_sent(
+                update_db,
+                notification_id=notification_id,
+                telegram_message_id=last_message_id,
+            )
+        except (
+            PersistenceOperationError,
+            PersistenceOutcomeUnknownError,
+            TransactionSessionUnusableError,
+        ) as error:
+            logger.error(
+                "OWNER NOTIFICATION: operation=mark_sent status=failed code=%s",
+                error.code,
+            )
+        except Exception:
+            logger.error(
+                "OWNER NOTIFICATION: operation=mark_sent status=failed "
+                "code=persistence_error",
+            )
+        else:
+            logger.info("OWNER NOTIFICATION: operation=send status=sent")
+        finally:
+            update_db.close()
         return True
+
+    def _record_network_failure(
+        self,
+        notification_id: int,
+        failure: TelegramFailure,
+    ) -> None:
+        try:
+            self._mark_failure(notification_id, failure)
+        except (
+            PersistenceOperationError,
+            PersistenceOutcomeUnknownError,
+            TransactionSessionUnusableError,
+        ) as error:
+            logger.error(
+                "OWNER NOTIFICATION: operation=mark_failed status=failed code=%s",
+                error.code,
+            )
+        except Exception:
+            logger.error(
+                "OWNER NOTIFICATION: operation=mark_failed status=failed "
+                "code=persistence_error",
+            )
 
     def _mark_failure(self, notification_id: int, failure: TelegramFailure) -> None:
         db = self.session_factory()

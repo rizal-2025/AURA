@@ -165,8 +165,9 @@ class TestSecureCustomerIdentity(unittest.TestCase):
             token_version=1,
         )
         db.add.assert_called_once_with(created_customer)
+        db.flush.assert_called_once_with()
         db.commit.assert_called_once()
-        db.refresh.assert_called_once_with(created_customer)
+        db.refresh.assert_not_called()
         token_customer_id, token_version = validate_customer_access_token(
             response.access_token
         )
@@ -276,8 +277,11 @@ class TestSecureCustomerIdentity(unittest.TestCase):
 
         result = get_current_customer(self._credentials(token), db)
 
-        self.assertIs(result, customer)
+        self.assertEqual(result.id, customer.id)
+        self.assertEqual(result.token_version, customer.token_version)
+        self.assertTrue(result.is_active)
         db.get.assert_called_once_with(Customer, self.customer_id)
+        db.commit.assert_called_once()
 
     def test_missing_token_is_rejected(self):
         db = MagicMock()

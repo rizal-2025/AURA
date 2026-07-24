@@ -35,6 +35,13 @@ Dokumen ini merangkum status pengembangan berdasarkan baseline kode AURA saat in
 - Per-Conversation Serialization (V2.0 G1C): keyed async lock in-process untuk
   authenticated customer-session, timeout 15 detik, HTTP/Telegram busy mapping,
   serialized ticket status, dan bounded Telegram concurrency delapan update.
+- Transaction Foundation (V2.0 G1D-A1): ingress memiliki lifetime session,
+  service memiliki satu commit transaksi, repository hanya participant,
+  ticket/outbox distage atomik, DTO persistence immutable terpisah dari
+  validator input, UoW single-use, exception persistence diteruskan ke adapter
+  aman, dan network send dipisahkan dari finalisasi database. Cancel
+  reconciliation dapat memakai read transaction baru setelah mutation
+  berakhir. Tidak ada perubahan schema atau migration.
 
 ### Fondasi pendukung
 
@@ -44,7 +51,10 @@ Dokumen ini merangkum status pengembangan berdasarkan baseline kode AURA saat in
 
 ## Next Version
 
-- V2.0 G1D: transaction ownership reservasi, atomic status policy, dan handoff recovery sementara yang bounded.
+- V2.0 G1D-A2: snapshot dan recovery memory-database serta koordinasi handoff
+  yang bounded. G1D-A1 tidak mengklaim atomicity memory/database.
+- V2.0 G1D-B: idempotensi Reservation Create untuk retry setelah commit berhasil
+  tetapi respons tidak diterima.
 - Menyelesaikan siklus reservasi setelah dibuat: cek status per pengguna dan jadwal ulang lanjutan.
 - Mengganti agent placeholder untuk cek reservasi, greeting, dan pertanyaan umum dengan perilaku yang benar-benar fungsional.
 - Menyatukan daftar intent pada classifier, planner, dan workflow; melengkapi handler khusus untuk menu, promo, FAQ, dan keluhan.

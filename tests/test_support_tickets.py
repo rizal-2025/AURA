@@ -51,6 +51,7 @@ class FakeTicketDB:
         self.fail_on = fail_on
         self.added = []
         self.rollback_calls = 0
+        self.commit_calls = 0
         self.commit_snapshots = []
         self.execute_calls = 0
 
@@ -65,8 +66,10 @@ class FakeTicketDB:
     def commit(self):
         if self.fail_on == "commit":
             raise SQLAlchemyError("simulated commit failure")
-        ticket = self.added[-1]
-        self.commit_snapshots.append((ticket.ticket_number, ticket.created_at))
+        self.commit_calls += 1
+        if self.added:
+            ticket = self.added[-1]
+            self.commit_snapshots.append((ticket.ticket_number, ticket.created_at))
 
     def refresh(self, _ticket):
         return None
@@ -114,8 +117,9 @@ class TestSupportTickets(unittest.TestCase):
         owner = "customer-a"
         memory_key = "customer-a:private-session"
 
-        handoff.require_handoff(memory_key, "explicit_human_request", db=object(), owner_customer_id=owner)
-        handoff.require_handoff(memory_key, "explicit_human_request", db=object(), owner_customer_id=owner)
+        db = FakeTicketDB()
+        handoff.require_handoff(memory_key, "explicit_human_request", db=db, owner_customer_id=owner)
+        handoff.require_handoff(memory_key, "explicit_human_request", db=db, owner_customer_id=owner)
 
         state = handoff.get_state(memory_key)
         self.assertEqual(len(repository.created), 1)
@@ -132,7 +136,7 @@ class TestSupportTickets(unittest.TestCase):
             service.hash_session_reference("customer-b:chat-01"),
         )
 
-    def test_repository_rolls_back_after_create_failure_and_session_is_usable(self):
+    def test_repository_leaves_rollback_to_transaction_owner(self):
         repository = SupportTicketRepository()
         db = FakeTicketDB(fail_on="flush")
         values = {
@@ -146,8 +150,9 @@ class TestSupportTickets(unittest.TestCase):
 
         with self.assertRaises(SQLAlchemyError):
             repository.create(db, **values)
-        self.assertEqual(db.rollback_calls, 1)
+        self.assertEqual(db.rollback_calls, 0)
 
+        db.rollback()
         db.fail_on = None
         ticket = repository.create(db, **values)
         db.commit()
@@ -174,7 +179,8 @@ class TestSupportTickets(unittest.TestCase):
             },
         )
 
-        self.assertIs(result, winner)
+        self.assertEqual(result.id, winner.id)
+        self.assertEqual(result.ticket_number, winner.ticket_number)
         self.assertEqual(repository.create_count, 1)
         self.assertEqual(repository.lookup_count, 2)
         self.assertEqual(db.rollback_calls, 1)
@@ -231,7 +237,7 @@ class TestSupportTickets(unittest.TestCase):
             "customer-a:chat-01",
             "repeated_misunderstanding",
             attempt_count=2,
-            db=object(),
+            db=FakeTicketDB(),
             owner_customer_id="customer-a",
         )
 
@@ -244,7 +250,7 @@ class TestSupportTickets(unittest.TestCase):
         raw_text = "Rizal untuk 7 orang besok jam 19:00 dengan token rahasia"
 
         service.create_or_get(
-            object(),
+            FakeTicketDB(),
             owner_customer_id="customer-a",
             memory_key="customer-a:chat-01",
             handoff_state={

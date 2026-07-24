@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy.orm import Session
 
 from app.core.security import create_customer_access_token
+from app.core.unit_of_work import UnitOfWork
 from app.db.database import get_db
 from app.db.models.customer import Customer
 from app.schemas.auth import GuestTokenResponse
@@ -36,9 +37,10 @@ def create_guest_customer(
         ) from None
 
     customer = Customer(id=customer_id, token_version=token_version)
-    db.add(customer)
-    db.commit()
-    db.refresh(customer)
+    with UnitOfWork(db) as unit:
+        db.add(customer)
+        db.flush()
+        unit.commit()
     response.headers["Cache-Control"] = "no-store"
     return GuestTokenResponse(
         access_token=access_token,

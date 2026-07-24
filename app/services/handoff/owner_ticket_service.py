@@ -4,6 +4,7 @@ import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
+from app.core.unit_of_work import UnitOfWork
 from app.db.repositories.support_ticket_repository import SupportTicketRepository
 
 
@@ -64,36 +65,42 @@ class OwnerTicketService:
             updated_at=row.updated_at,
         )
 
-    @staticmethod
-    def _rollback(db) -> None:
-        try:
-            db.rollback()
-        except Exception:
-            pass
-
     def list_active_tickets(self, db, *, limit: int = 10) -> OwnerTicketResult:
         if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 10:
             return OwnerTicketResult("invalid_argument")
         try:
-            rows = self.repository.list_active_for_owner_management(db, limit=limit)
-            tickets = tuple(self._dto(row) for row in rows)
-            return OwnerTicketResult("success", tickets=tickets) if tickets else OwnerTicketResult("empty")
+            with UnitOfWork(db) as unit:
+                rows = self.repository.list_active_for_owner_management(
+                    db,
+                    limit=limit,
+                )
+                tickets = tuple(self._dto(row) for row in rows)
+                result = (
+                    OwnerTicketResult("success", tickets=tickets)
+                    if tickets
+                    else OwnerTicketResult("empty")
+                )
+                unit.commit()
+            return result
         except Exception:
-            self._rollback(db)
             return OwnerTicketResult("database_error")
 
     def get_ticket(self, db, ticket_number: str) -> OwnerTicketResult:
         if not self.valid_ticket_number(ticket_number):
             return OwnerTicketResult("invalid_argument")
         try:
-            row = self.repository.get_for_owner_management(
-                db, ticket_number=ticket_number
-            )
-            if row is None:
-                return OwnerTicketResult("not_available")
-            return OwnerTicketResult("success", ticket=self._dto(row))
+            with UnitOfWork(db) as unit:
+                row = self.repository.get_for_owner_management(
+                    db, ticket_number=ticket_number
+                )
+                result = (
+                    OwnerTicketResult("not_available")
+                    if row is None
+                    else OwnerTicketResult("success", ticket=self._dto(row))
+                )
+                unit.commit()
+            return result
         except Exception:
-            self._rollback(db)
             return OwnerTicketResult("database_error")
 
     def take_ticket(self, db, ticket_number: str) -> OwnerTicketResult:
@@ -106,52 +113,55 @@ class OwnerTicketService:
         if not self.valid_ticket_number(ticket_number):
             return OwnerTicketResult("invalid_argument")
         try:
-            ticket = self.repository.get_for_owner_transition(
-                db, ticket_number=ticket_number
-            )
-            if ticket is None:
-                self._rollback(db)
-                return OwnerTicketResult("not_available")
-
-            if operation == "take":
-                if ticket.status == "in_progress":
-                    result_ticket = self._dto(ticket)
-                    self._rollback(db)
-                    return OwnerTicketResult("already_in_progress", ticket=result_ticket)
-                if ticket.status == "resolved":
-                    self._rollback(db)
-                    return OwnerTicketResult("not_available")
-                if ticket.status == "closed":
-                    self._rollback(db)
-                    return OwnerTicketResult("closed")
-                if ticket.status != "open":
-                    self._rollback(db)
-                    return OwnerTicketResult("not_available")
-                now = datetime.now(timezone.utc)
-                ticket.status = "in_progress"
-                ticket.updated_at = now
-                ticket.resolved_at = None
-            elif operation == "resolve":
-                if ticket.status == "resolved":
-                    result_ticket = self._dto(ticket)
-                    self._rollback(db)
-                    return OwnerTicketResult("already_resolved", ticket=result_ticket)
-                if ticket.status == "closed":
-                    self._rollback(db)
-                    return OwnerTicketResult("closed")
-                if ticket.status not in {"open", "in_progress"}:
-                    self._rollback(db)
-                    return OwnerTicketResult("not_available")
-                now = datetime.now(timezone.utc)
-                ticket.status = "resolved"
-                ticket.updated_at = now
-                ticket.resolved_at = now
-            else:
-                raise ValueError("Unsupported owner ticket operation.")
-
-            result_ticket = self._dto(ticket)
-            db.commit()
-            return OwnerTicketResult("success", ticket=result_ticket)
+            with UnitOfWork(db) as unit:
+                ticket = self.repository.get_for_owner_transition(
+                    db, ticket_number=ticket_number
+                )
+                if ticket is None:
+                    result = OwnerTicketResult("not_available")
+                elif operation == "take":
+                    if ticket.status == "in_progress":
+                        result = OwnerTicketResult(
+                            "already_in_progress",
+                            ticket=self._dto(ticket),
+                        )
+                    elif ticket.status == "resolved":
+                        result = OwnerTicketResult("not_available")
+                    elif ticket.status == "closed":
+                        result = OwnerTicketResult("closed")
+                    elif ticket.status != "open":
+                        result = OwnerTicketResult("not_available")
+                    else:
+                        now = datetime.now(timezone.utc)
+                        ticket.status = "in_progress"
+                        ticket.updated_at = now
+                        ticket.resolved_at = None
+                        result = OwnerTicketResult(
+                            "success",
+                            ticket=self._dto(ticket),
+                        )
+                elif operation == "resolve":
+                    if ticket.status == "resolved":
+                        result = OwnerTicketResult(
+                            "already_resolved",
+                            ticket=self._dto(ticket),
+                        )
+                    elif ticket.status == "closed":
+                        result = OwnerTicketResult("closed")
+                    elif ticket.status not in {"open", "in_progress"}:
+                        result = OwnerTicketResult("not_available")
+                    else:
+                        now = datetime.now(timezone.utc)
+                        ticket.status = "resolved"
+                        ticket.updated_at = now
+                        ticket.resolved_at = now
+                        result = OwnerTicketResult(
+                            "success",
+                            ticket=self._dto(ticket),
+                        )
+                else:
+                    raise ValueError("Unsupported owner ticket operation.")
+                unit.commit()
+            return result
         except Exception:
-            self._rollback(db)
             return OwnerTicketResult("database_error")

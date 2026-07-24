@@ -2,7 +2,9 @@ from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
 
+from app.core.customer_identity import AuthenticatedCustomer
 from app.core.security import InvalidCustomerToken, validate_customer_access_token
+from app.core.unit_of_work import UnitOfWork
 from app.db.database import get_db
 from app.db.models.customer import Customer
 
@@ -22,7 +24,7 @@ def _unauthorized() -> HTTPException:
 def get_current_customer(
     credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
     db: Session = Depends(get_db),
-) -> Customer:
+) -> AuthenticatedCustomer:
     """Resolve a trusted customer from a validated bearer token."""
     if credentials is None or credentials.scheme.lower() != "bearer":
         raise _unauthorized()
@@ -34,12 +36,23 @@ def get_current_customer(
     except (InvalidCustomerToken, RuntimeError):
         raise _unauthorized() from None
 
-    customer = db.get(Customer, customer_id)
-    if (
-        customer is None
-        or not customer.is_active
-        or customer.token_version != token_version
-    ):
+    with UnitOfWork(db) as unit:
+        customer = db.get(Customer, customer_id)
+        if (
+            customer is None
+            or not customer.is_active
+            or customer.token_version != token_version
+        ):
+            current_customer = None
+        else:
+            current_customer = AuthenticatedCustomer(
+                id=customer.id,
+                token_version=int(customer.token_version),
+                is_active=bool(customer.is_active),
+            )
+        unit.commit()
+
+    if current_customer is None:
         raise _unauthorized()
 
-    return customer
+    return current_customer

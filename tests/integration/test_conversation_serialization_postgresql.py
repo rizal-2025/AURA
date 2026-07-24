@@ -15,13 +15,13 @@ from uuid import uuid4
 
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import make_url
-from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import sessionmaker
 
 from app.brain.memory_manager import MemoryManager
 from app.core.config import settings
 from app.core.conversation_lock_manager import ConversationLockManager
 from app.core.conversation_memory import build_authenticated_memory_key
+from app.core.transaction_errors import PersistenceOperationError
 from app.db.repositories.support_ticket_repository import SupportTicketRepository
 from app.services.authenticated_chat_service import AuthenticatedChatService
 from app.services.handoff.owner_ticket_service import OwnerTicketService
@@ -31,6 +31,7 @@ from migrations.add_support_ticket_notifications import (
     migrate as migrate_notifications,
 )
 from migrations.add_support_tickets import migrate as migrate_tickets
+from tests.integration.disposable_schema import DisposableSchemaResources
 
 
 def _database_identity(url):
@@ -189,6 +190,13 @@ class TestConversationSerializationPostgreSQL(unittest.TestCase):
         cls.test_url = os.environ["TEST_DATABASE_URL"]
         cls.admin_engine = create_engine(cls.test_url, pool_pre_ping=True)
         cls.schema = f"aura_g1c_test_{uuid4().hex[:12]}"
+        cls.schema_resources = DisposableSchemaResources(
+            admin_engine=cls.admin_engine,
+            schema=cls.schema,
+            allowed_prefixes=("aura_g1c_test_",),
+            dispose_admin=True,
+        )
+        cls.addClassCleanup(cls.schema_resources.cleanup)
         with cls.admin_engine.begin() as connection:
             connection.execute(text(f'CREATE SCHEMA "{cls.schema}"'))
             connection.execute(text(f"""
@@ -204,6 +212,7 @@ class TestConversationSerializationPostgreSQL(unittest.TestCase):
             "options": f"-csearch_path={cls.schema},public",
         })
         cls.engine = create_engine(schema_url, pool_pre_ping=True)
+        cls.schema_resources.track_engine(cls.engine)
         cls.SessionLocal = sessionmaker(
             bind=cls.engine,
             autoflush=False,
@@ -211,13 +220,6 @@ class TestConversationSerializationPostgreSQL(unittest.TestCase):
         )
         migrate_tickets(cls.engine, schema=cls.schema)
         migrate_notifications(cls.engine, schema=cls.schema)
-
-    @classmethod
-    def tearDownClass(cls):
-        cls.engine.dispose()
-        with cls.admin_engine.begin() as connection:
-            connection.execute(text(f'DROP SCHEMA "{cls.schema}" CASCADE'))
-        cls.admin_engine.dispose()
 
     @classmethod
     def _table(cls, name):
@@ -328,13 +330,17 @@ class TestConversationSerializationPostgreSQL(unittest.TestCase):
         service = AuthenticatedChatService(agent=agent, lock_manager=manager)
         db = self.SessionLocal()
         try:
-            with self.assertRaises(SQLAlchemyError):
+            with self.assertRaises(PersistenceOperationError) as raised:
                 asyncio.run(service.process(
                     db=db,
                     customer=customer,
                     session_reference=session_reference,
                     message="first",
                 ))
+            rendered = str(raised.exception)
+            self.assertEqual(rendered, "PERSISTENCE_OPERATION_FAILED")
+            self.assertNotIn("g1c_controlled_missing_table", rendered)
+            self.assertNotIn("SELECT", rendered)
             self.assertEqual(db.execute(text("SELECT 1")).scalar_one(), 1)
 
             response = asyncio.run(service.process(

@@ -21,12 +21,35 @@ from app.core.input_validation import (
     SAFE_INPUT_CODES,
 )
 from app.core.logger import logger
+from app.core.transaction_errors import (
+    PersistenceOperationError,
+    PersistenceOutcomeUnknownError,
+    TransactionSessionUnusableError,
+)
 
 
 REQUEST_BODY_TOO_LARGE = "REQUEST_BODY_TOO_LARGE"
 INVALID_REQUEST_FRAMING = "INVALID_REQUEST_FRAMING"
 REQUEST_VALIDATION_FAILED = "REQUEST_VALIDATION_FAILED"
 CONVERSATION_BUSY = "CONVERSATION_BUSY"
+
+_PERSISTENCE_DETAILS = (
+    (
+        PersistenceOutcomeUnknownError,
+        "PERSISTENCE_OUTCOME_UNKNOWN",
+        "The operation status is uncertain. Please verify status before retrying.",
+    ),
+    (
+        TransactionSessionUnusableError,
+        "PERSISTENCE_SESSION_UNAVAILABLE",
+        "The persistence service is temporarily unavailable.",
+    ),
+    (
+        PersistenceOperationError,
+        "PERSISTENCE_OPERATION_FAILED",
+        "The operation could not be saved. Please try again safely.",
+    ),
+)
 
 _KNOWN_FIELD_CODES = {
     "session_id": CHAT_SESSION_ID_INVALID,
@@ -70,6 +93,29 @@ async def conversation_busy_exception_handler(
         content={
             "code": CONVERSATION_BUSY,
             "detail": "This conversation is still processing a previous message.",
+        },
+    )
+
+
+async def transaction_exception_handler(
+    _request: Request,
+    error: (
+        PersistenceOperationError
+        | PersistenceOutcomeUnknownError
+        | TransactionSessionUnusableError
+    ),
+) -> JSONResponse:
+    code, detail = next(
+        (code, detail)
+        for error_type, code, detail in _PERSISTENCE_DETAILS
+        if isinstance(error, error_type)
+    )
+    logger.info("HTTP REQUEST: status=503 code=%s", code)
+    return JSONResponse(
+        status_code=503,
+        content={
+            "code": code,
+            "detail": detail,
         },
     )
 

@@ -67,7 +67,7 @@ konsisten melalui satu ingress process. Multiple FastAPI instance, distributed
 locking, Redis, advisory lock, dan queue belum didukung.
 
 Lock ini tidak menyediakan rollback memory atau transaction ownership. Database
-transaction hardening tetap menjadi pekerjaan V2.0 G1D. G1C tidak menambah
+transaction ownership dasarnya kini tersedia melalui G1D-A1. G1C tidak menambah
 schema atau migration.
 
 Perintah tiket owner dan pemrosesan percakapan customer tidak memakai lock
@@ -78,6 +78,46 @@ petugas. Pesan customer berikutnya merekonsiliasi status terminal dan melepas
 handoff state yang sudah tidak aktif. Koordinasi lifecycle/transaction secara
 penuh tetap scope G1D; keterbatasan ini tidak diperbaiki atau diklaim selesai
 oleh G1C dan tidak memerlukan migration schema.
+
+## Transaction foundation V2.0 G1D-A1
+
+Ingress HTTP atau Telegram tetap membuat dan menutup SQLAlchemy `Session`.
+Application service kini menjadi satu-satunya pemilik transaksi bisnis:
+repository hanya query, add, execute, dan flush; repository tidak commit,
+rollback, refresh setelah commit, atau menutup session. Satu unit of work
+sinkron menyediakan tepat satu batas commit dan membedakan kegagalan
+pre-commit, outcome commit yang tidak dapat dipastikan, serta session yang
+tidak dapat dipakai kembali. Setiap instance unit of work bersifat single-use:
+instance yang sudah commit, rollback, atau gagal tidak dapat dimasuki kembali.
+Jika cleanup dependency database juga gagal, exception aplikasi yang
+authoritatif tetap dipertahankan dan cleanup failure hanya dicatat dengan kode
+operasional aman.
+
+Create, Update, dan Cancel reservasi memakai jalur `ReservationService` yang
+sama untuk API langsung dan percakapan. DTO persistence immutable dibentuk
+sebelum commit tanpa menerapkan ulang validator input Create/Update, sehingga
+record legacy yang masih valid menurut schema database tetap dapat dibaca.
+Konfirmasi chat menampilkan ID reservasi database yang benar. Cancel dengan
+hasil mutasi nol dapat membuka transaksi read baru setelah transaksi mutasi
+sepenuhnya berakhir untuk membedakan secara aman record milik pelanggan yang
+sudah cancelled dari record yang tidak tersedia.
+
+Pembuatan tiket dan satu row outbox notifikasi distage dalam transaksi yang
+sama. Transaksi claim, mark-sent, dan mark-failed outbox dimiliki service
+secara terpisah; pengiriman Telegram selalu berlangsung setelah transaksi
+database berakhir. Failure network Telegram diklasifikasikan terpisah dari
+failure database `mark_sent`. Outcome `mark_sent` yang tidak pasti tidak
+diubah menjadi kegagalan Telegram permanen dan row tetap tersedia untuk
+rekonsiliasi lease. Kegagalan pengiriman tidak mencoba me-rollback data yang
+sudah committed. Exception persistence dari chat diteruskan ke adapter aman:
+HTTP mengembalikan `503`, sedangkan Telegram memakai pesan persistence generik
+dan terbatas; exception tersebut tidak membuat internal-error handoff.
+
+G1D-A1 tidak mengubah schema dan tidak membutuhkan migration. Tahap ini belum
+menyediakan snapshot/rollback memory atau rekonsiliasi memory-database; hal itu
+tetap scope G1D-A2. Retry Reservation Create setelah commit berhasil tetapi
+respons terputus juga belum idempoten dan tetap scope G1D-B. Karena dua batas
+tersebut, implementasi ini belum dinyatakan siap paid pilot.
 
 ## Migrasi V1.5
 
@@ -267,9 +307,9 @@ Jika `TEST_DATABASE_URL` tidak tersedia, integration tests dilewati dengan alasa
 ## AURA V2.0 Phase G1
 
 Phase G1A environment/configuration hardening dan G1B input/HTTP body bounds
-sudah selesai. Keduanya tidak memerlukan migrasi. G1C (serialisasi percakapan
-customer-session) dan G1D (transaction ownership serta handoff recovery)
-masih pending.
+sudah selesai. G1C serialisasi percakapan dan G1D-A1 transaction foundation
+juga sudah tersedia. Seluruh tahap tersebut tidak memerlukan migrasi.
+Memory/database recovery G1D-A2 serta idempotensi Create G1D-B masih pending.
 
 ### Batas input G1B
 

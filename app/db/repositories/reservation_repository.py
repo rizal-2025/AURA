@@ -56,15 +56,12 @@ class ReservationRepository:
             .where(
                 Reservation.id == reservation_id,
                 Reservation.owner_customer_id == owner_customer_id,
+                func.lower(Reservation.status) != "cancelled",
             )
             .values({field_name: new_value})
+            .returning(Reservation)
         )
-        result = db.execute(statement)
-        if result.rowcount != 1:
-            return None
-
-        db.commit()
-        return self.get_by_id(db, reservation_id, owner_customer_id)
+        return db.execute(statement).scalar_one_or_none()
 
     def cancel_reservation(
         self,
@@ -81,13 +78,9 @@ class ReservationRepository:
                 func.lower(Reservation.status) != "cancelled",
             )
             .values(status="cancelled")
+            .returning(Reservation)
         )
-        result = db.execute(statement)
-        if result.rowcount != 1:
-            return None
-
-        db.commit()
-        return self.get_by_id(db, reservation_id, owner_customer_id)
+        return db.execute(statement).scalar_one_or_none()
 
     def create(
         self,
@@ -110,7 +103,6 @@ class ReservationRepository:
         )
 
         db.add(data)
-        db.commit()
-        db.refresh(data)
+        db.flush()
 
         return data

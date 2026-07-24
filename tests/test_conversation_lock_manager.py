@@ -391,7 +391,10 @@ class ConversationLockManagerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(manager.registry_size_for_test, 0)
 
     async def test_timeout_storm_does_not_leak_or_poison_key(self):
-        manager = ConversationLockManager(wait_timeout_seconds=0.02)
+        # Keep a wide margin between task scheduling and the timeout itself.
+        # This still exercises 100 genuine timeouts without depending on a
+        # heavily loaded CI worker scheduling every coroutine within 20 ms.
+        manager = ConversationLockManager(wait_timeout_seconds=0.25)
         holder_entered = asyncio.Event()
         release_holder = asyncio.Event()
         entered_by_timed_out_waiter = 0
@@ -414,7 +417,7 @@ class ConversationLockManagerTests(unittest.IsolatedAsyncioTestCase):
         await holder_entered.wait()
         results = await asyncio.wait_for(
             asyncio.gather(*(waiter() for _ in range(100))),
-            timeout=1,
+            timeout=5,
         )
         self.assertEqual(results, ["busy"] * 100)
         self.assertEqual(entered_by_timed_out_waiter, 0)

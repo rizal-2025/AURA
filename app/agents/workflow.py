@@ -30,6 +30,7 @@ class AgentWorkflow:
         user_message: str,
         session_id: str | None = None,
         owner_customer_id=None,
+        db=None,
     ) -> dict[str, Any]:
         intent = plan.get("intent", "general")
         steps = plan.get("steps", [])
@@ -54,6 +55,7 @@ class AgentWorkflow:
                 user_message,
                 session_id=session_id,
                 owner_customer_id=owner_customer_id,
+                db=db,
             )
 
         return await agent.run(steps, session_state, user_message, session_id=session_id)

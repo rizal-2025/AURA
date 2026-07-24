@@ -18,12 +18,23 @@ from app.main import app
 class FakeCustomerDB:
     def __init__(self, customers):
         self.customers = customers
+        self.commits = 0
+        self.rollbacks = 0
 
     def get(self, _model, customer_id):
         return self.customers.get(customer_id)
 
     def execute(self, _statement):
         return SimpleNamespace(scalar_one_or_none=lambda: None)
+
+    def commit(self):
+        self.commits += 1
+
+    def rollback(self):
+        self.rollbacks += 1
+
+    def flush(self):
+        return None
 
 
 class TestSecureReservationCreate(unittest.TestCase):
@@ -142,12 +153,10 @@ class TestSecureReservationCreate(unittest.TestCase):
     def test_custom_aura_logs_do_not_include_bearer_token_or_secret(self):
         token = self._token_for(self.customer_a)
         session_id = "session-payload-sensitive"
-        reservation_db = MagicMock()
         with (
-            patch("app.agents.reservation_agent.SessionLocal", return_value=reservation_db),
             patch(
                 "app.agents.reservation_agent.ReservationService.create_reservation",
-                return_value=MagicMock(),
+                return_value=SimpleNamespace(id=91),
             ),
             self.assertLogs("AURA", level="INFO") as captured,
         ):
@@ -175,28 +184,20 @@ class TestSecureReservationCreate(unittest.TestCase):
         self.assertNotIn("4", log_output)
 
     def test_valid_token_allows_chat_create_and_uses_authenticated_owner(self):
-        reservation_db = MagicMock()
-        with (
-            patch("app.agents.reservation_agent.SessionLocal", return_value=reservation_db),
-            patch(
-                "app.agents.reservation_agent.ReservationService.create_reservation",
-                return_value=MagicMock(),
-            ) as create_reservation,
-        ):
+        with patch(
+            "app.agents.reservation_agent.ReservationService.create_reservation",
+            return_value=SimpleNamespace(id=92),
+        ) as create_reservation:
             self._confirm_chat_reservation("chat-customer-a", self.customer_a, create_reservation)
 
         self.assertNotIn("customer_id", create_reservation.call_args.kwargs)
-        reservation_db.close.assert_called_once()
+        self.assertIs(create_reservation.call_args.args[0], self.db)
 
     def test_same_token_with_different_session_ids_keeps_same_owner(self):
-        reservation_db = MagicMock()
-        with (
-            patch("app.agents.reservation_agent.SessionLocal", return_value=reservation_db),
-            patch(
-                "app.agents.reservation_agent.ReservationService.create_reservation",
-                return_value=MagicMock(),
-            ) as create_reservation,
-        ):
+        with patch(
+            "app.agents.reservation_agent.ReservationService.create_reservation",
+            return_value=SimpleNamespace(id=93),
+        ) as create_reservation:
             self._confirm_chat_reservation("chat-session-one", self.customer_a, create_reservation)
             self._confirm_chat_reservation("chat-session-two", self.customer_a, create_reservation)
 
@@ -207,14 +208,10 @@ class TestSecureReservationCreate(unittest.TestCase):
         self.assertEqual(owners, [self.customer_a.id, self.customer_a.id])
 
     def test_different_customer_tokens_create_distinct_owners(self):
-        reservation_db = MagicMock()
-        with (
-            patch("app.agents.reservation_agent.SessionLocal", return_value=reservation_db),
-            patch(
-                "app.agents.reservation_agent.ReservationService.create_reservation",
-                return_value=MagicMock(),
-            ) as create_reservation,
-        ):
+        with patch(
+            "app.agents.reservation_agent.ReservationService.create_reservation",
+            return_value=SimpleNamespace(id=94),
+        ) as create_reservation:
             self._confirm_chat_reservation("chat-customer-a", self.customer_a, create_reservation)
             self._confirm_chat_reservation("chat-customer-b", self.customer_b, create_reservation)
 

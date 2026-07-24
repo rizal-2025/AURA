@@ -1,5 +1,4 @@
 import re
-import uuid
 from typing import Any
 
 from app.brain.context_resolver import ContextResolver
@@ -9,7 +8,6 @@ from app.brain.reservation_entity_extractor import (
     ReservationEntityExtractor,
     normalize_natural_reservation_name,
 )
-from app.db.database import SessionLocal
 from app.core.input_validation import (
     InputValidationError,
     validate_reservation_field,
@@ -64,6 +62,7 @@ class ReservationAgent:
         user_message: str,
         session_id: str | None = None,
         owner_customer_id=None,
+        db=None,
     ) -> dict[str, Any]:
         current_session_id = session_id or str(session_state.get("session_id") or "default")
         if session_state.get("awaiting_confirmation"):
@@ -71,6 +70,7 @@ class ReservationAgent:
                 user_message,
                 current_session_id,
                 owner_customer_id=owner_customer_id,
+                db=db,
             )
 
         step = steps[0] if steps else None
@@ -206,6 +206,7 @@ class ReservationAgent:
         user_message: str,
         session_id: str,
         owner_customer_id=None,
+        db=None,
     ) -> dict[str, Any]:
         session = self.memory_manager.get_session(session_id)
         editing_field = session.get("editing_field")
@@ -233,6 +234,11 @@ class ReservationAgent:
                     "status": "awaiting_confirmation",
                     "response": "Identitas pelanggan tidak tersedia. Silakan coba lagi.",
                 }
+            if db is None:
+                return {
+                    "status": "awaiting_confirmation",
+                    "response": "Layanan reservasi belum tersedia. Silakan coba lagi.",
+                }
 
             canonical_values = {}
             for field_name in self.EDITABLE_FIELDS:
@@ -256,17 +262,12 @@ class ReservationAgent:
                 canonical_values[field_name] = canonical_value
             self.memory_manager.update_session(session_id, canonical_values)
             reservation_data = ReservationCreate(**canonical_values)
-            db = SessionLocal()
-            try:
-                reservation = self.reservation_service.create_reservation(
-                    db,
-                    reservation_data,
-                    owner_customer_id=owner_customer_id,
-                )
-            finally:
-                db.close()
-
-            reservation_id = str(uuid.uuid4())
+            reservation = self.reservation_service.create_reservation(
+                db,
+                reservation_data,
+                owner_customer_id=owner_customer_id,
+            )
+            reservation_id = reservation.id
             self.memory_manager.update_session(session_id, {
                 "completed": True,
                 "awaiting_confirmation": False,

@@ -2,6 +2,73 @@
 
 Semua perubahan penting pada AURA dicatat di dokumen ini. Repository belum memiliki tag rilis, sehingga entri berikut mengikuti riwayat commit proyek.
 
+## 2026-07-25 - G1D-A1 Adversarial Corrections
+
+### Fixed
+
+- Exception persistence Create/Update/Cancel tidak lagi ditelan orchestrator
+  atau diubah menjadi internal-error handoff; HTTP menerima envelope `503` dan
+  Telegram menerima respons persistence generik.
+- Dispatcher membedakan failure network Telegram dari failure database
+  `mark_sent`; outcome commit yang tidak pasti tidak ditandai sebagai failure
+  Telegram permanen atau dikirim ulang pada iterasi yang sama.
+- Materialisasi record reservasi memakai DTO persistence immutable terpisah
+  dan tidak menerapkan ulang batas validator input terbaru pada record legacy.
+- Unit of work menjadi single-use dan menolak re-entry sebelum menyentuh
+  transaksi.
+- Cleanup dependency database mempertahankan exception aplikasi authoritatif
+  walaupun rollback cleanup ikut gagal.
+- Pemetaan error persistence HTTP menerima subclass tanpa exact-type lookup.
+- Boolean bypass transaction participant pada outbox diganti dengan method
+  internal staging yang eksplisit.
+- Timing test 100 waiter G1C diberi scheduling margin deterministik tanpa
+  melemahkan assertion leak, timeout, atau recovery.
+
+### Clarified
+
+- Cancel dapat melakukan read transaction terpisah setelah atomic mutation
+  berakhir untuk rekonsiliasi `already cancelled` yang tetap owner-filtered.
+- PostgreSQL suite G1D-A1 tetap opt-in melalui `TEST_DATABASE_URL`, memakai
+  `expire_on_commit=True`, dan tidak menjalankan migration.
+- G1D-A2 dan idempotensi G1D-B tetap belum diimplementasikan.
+
+## 2026-07-24 - Transaction Foundation (V2.0 Phase G1D-A1)
+
+### Added
+
+- Unit of work sinkron untuk session SQLAlchemy yang dibuat ingress, dengan
+  fase `pre_commit`, `committing`, dan `committed`.
+- Error transaksi stabil dan aman untuk kegagalan pre-commit, outcome commit
+  yang tidak dapat dipastikan, dan session yang tidak dapat digunakan.
+- Pemetaan HTTP `503` generik untuk ketiga kategori error persistence.
+- Regression tests offline dan PostgreSQL opt-in untuk ownership transaksi,
+  rollback, atomic ticket/outbox, race tiket, dan persistensi setelah send
+  failure.
+
+### Changed
+
+- Reservation, ticket, outbox, owner-ticket, guest auth, dan Telegram identity
+  kini memiliki pemilik transaksi eksplisit di service/route.
+- Repository hanya menjadi participant dan tidak lagi commit, rollback,
+  refresh setelah commit, atau menutup session.
+- Create API langsung dan Create percakapan memakai jalur
+  `ReservationService` yang sama; respons konfirmasi memakai ID database asli.
+- Ticket dan satu pending owner-notification distage sebelum satu commit.
+- Claim/mark outbox menutup transaksi database sebelum network send.
+- Kegagalan `reply_text` Telegram tidak mencoba membatalkan data bisnis yang
+  sudah committed.
+- Hasil persistence dan identity dimaterialisasi sebagai DTO/context immutable
+  sebelum transaksi berakhir.
+
+### Limitations
+
+- G1D-A1 tidak mengimplementasikan snapshot atau recovery memory-database;
+  G1D-A2 tetap pending.
+- Reservation Create belum memiliki idempotency key untuk retry setelah
+  commit-before-response; pekerjaan tersebut tetap G1D-B.
+- Tidak ada perubahan schema atau migration, dan belum ada klaim paid-pilot
+  readiness.
+
 ## 2026-07-24 - Per-Conversation Serialization (V2.0 Phase G1C)
 
 ### Added

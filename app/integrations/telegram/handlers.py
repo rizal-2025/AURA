@@ -3,6 +3,11 @@
 from app.core.conversation_lock_manager import ConversationBusyError
 from app.core.input_validation import InputValidationError, normalize_chat_message
 from app.core.logger import logger
+from app.core.transaction_errors import (
+    PersistenceOperationError,
+    PersistenceOutcomeUnknownError,
+    TransactionSessionUnusableError,
+)
 from app.integrations.telegram.identity import derive_telegram_session_reference
 from app.integrations.telegram.identity_service import (
     TelegramIdentityService,
@@ -16,6 +21,9 @@ IDENTITY_UNAVAILABLE_REPLY = "Identitas Telegram tidak tersedia. Silakan coba la
 SERVICE_UNAVAILABLE_REPLY = "Maaf, layanan AURA sedang tidak tersedia. Silakan coba lagi."
 INVALID_INPUT_REPLY = "Pesan tidak valid atau terlalu panjang. Silakan periksa kembali."
 CONVERSATION_BUSY_REPLY = "Pesan sebelumnya masih diproses. Silakan coba lagi sebentar."
+PERSISTENCE_UNAVAILABLE_REPLY = (
+    "Maaf, perubahan belum dapat dipastikan. Silakan periksa status lalu coba lagi."
+)
 WELCOME_REPLY = (
     "Halo, saya AURA. Saya dapat membantu reservasi, melihat, mengubah, atau "
     "membatalkan reservasi Anda."
@@ -111,7 +119,6 @@ class TelegramCustomerHandlers:
             )
             return db, customer, session_reference
         except Exception:
-            db.rollback()
             db.close()
             raise
 
@@ -141,18 +148,24 @@ class TelegramCustomerHandlers:
             if await self._safe_reply(telegram_message, response):
                 logger.info("TELEGRAM UPDATE: outcome=handled")
             else:
-                db.rollback()
                 await self._safe_reply(telegram_message, SERVICE_UNAVAILABLE_REPLY)
         except ConversationBusyError:
-            db.rollback()
             logger.info("TELEGRAM UPDATE: outcome=busy")
             await self._safe_reply(telegram_message, CONVERSATION_BUSY_REPLY)
         except InputValidationError:
-            db.rollback()
             logger.info("TELEGRAM UPDATE: outcome=rejected category=input_invalid")
             await self._safe_reply(telegram_message, INVALID_INPUT_REPLY)
+        except (
+            PersistenceOperationError,
+            PersistenceOutcomeUnknownError,
+            TransactionSessionUnusableError,
+        ):
+            logger.info("TELEGRAM UPDATE: outcome=persistence_error")
+            await self._safe_reply(
+                telegram_message,
+                PERSISTENCE_UNAVAILABLE_REPLY,
+            )
         except Exception:
-            db.rollback()
             logger.info("TELEGRAM UPDATE: outcome=service_error")
             await self._safe_reply(telegram_message, SERVICE_UNAVAILABLE_REPLY)
         finally:
@@ -206,14 +219,18 @@ class TelegramCustomerHandlers:
                 customer=customer,
                 session_reference=session_reference,
             )
-            if not await self._safe_reply(message, response):
-                db.rollback()
+            await self._safe_reply(message, response)
         except ConversationBusyError:
-            db.rollback()
             logger.info("TELEGRAM UPDATE: outcome=busy")
             await self._safe_reply(message, CONVERSATION_BUSY_REPLY)
+        except (
+            PersistenceOperationError,
+            PersistenceOutcomeUnknownError,
+            TransactionSessionUnusableError,
+        ):
+            logger.info("TELEGRAM UPDATE: outcome=persistence_error")
+            await self._safe_reply(message, PERSISTENCE_UNAVAILABLE_REPLY)
         except Exception:
-            db.rollback()
             logger.info("TELEGRAM UPDATE: outcome=status_error")
             await self._safe_reply(message, SERVICE_UNAVAILABLE_REPLY)
         finally:

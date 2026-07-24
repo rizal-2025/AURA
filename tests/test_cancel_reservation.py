@@ -107,8 +107,11 @@ class FakeCancelQuery:
 
 
 class FakeAtomicResult:
-    def __init__(self, rowcount):
-        self.rowcount = rowcount
+    def __init__(self, value):
+        self.value = value
+
+    def scalar_one_or_none(self):
+        return self.value
 
 
 class TestCancelReservation(unittest.TestCase):
@@ -237,23 +240,19 @@ class TestCancelReservation(unittest.TestCase):
             owner_customer_id=self.service.OWNER_ID,
         )
         db = MagicMock()
-        db.execute.return_value = FakeAtomicResult(rowcount=1)
+        db.execute.return_value = FakeAtomicResult(reservation)
         repository = ReservationRepository()
 
-        with patch.object(
-            repository,
-            "get_by_id",
-            return_value=reservation,
-        ) as get_by_id:
-            updated = repository.cancel_reservation(
-                db,
-                2,
-                self.service.OWNER_ID,
-            )
+        updated = repository.cancel_reservation(
+            db,
+            2,
+            self.service.OWNER_ID,
+        )
 
         self.assertIs(updated, reservation)
-        db.commit.assert_called_once()
-        get_by_id.assert_called_once_with(db, 2, self.service.OWNER_ID)
+        db.commit.assert_not_called()
+        db.rollback.assert_not_called()
+        db.refresh.assert_not_called()
         statement = db.execute.call_args.args[0]
         self.assertIn("reservations.id", str(statement))
         self.assertIn("owner_customer_id", str(statement))
@@ -262,7 +261,7 @@ class TestCancelReservation(unittest.TestCase):
 
     def test_repository_atomic_cancel_rejects_non_owner_or_cancelled_record(self):
         db = MagicMock()
-        db.execute.return_value = FakeAtomicResult(rowcount=0)
+        db.execute.return_value = FakeAtomicResult(None)
         repository = ReservationRepository()
 
         result = repository.cancel_reservation(

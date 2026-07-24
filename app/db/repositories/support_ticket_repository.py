@@ -98,21 +98,15 @@ class SupportTicketRepository:
             created_at=created_at,
             updated_at=created_at,
         )
-        try:
-            db.add(ticket)
-            db.flush()
-            if ticket.id is None:
-                raise RuntimeError("Support ticket identifier was not assigned.")
-            ticket_year = ticket.created_at.astimezone(timezone.utc).year
-            ticket.ticket_number = f"CS-{ticket_year}-{ticket.id:06d}"
-            if ticket.ticket_number.startswith("PENDING-"):
-                raise RuntimeError("Support ticket number was not assigned.")
-            return ticket
-        except Exception:
-            # Roll back both database failures and pre-commit failures so the
-            # caller never receives a Session left in a failed transaction.
-            db.rollback()
-            raise
+        db.add(ticket)
+        db.flush()
+        if ticket.id is None:
+            raise RuntimeError("Support ticket identifier was not assigned.")
+        ticket_year = ticket.created_at.astimezone(timezone.utc).year
+        ticket.ticket_number = f"CS-{ticket_year}-{ticket.id:06d}"
+        if ticket.ticket_number.startswith("PENDING-"):
+            raise RuntimeError("Support ticket number was not assigned.")
+        return ticket
 
     def update_status(self, db, *, ticket_id: int, owner_customer_id, status: str):
         require_owner_customer_id(owner_customer_id)
@@ -134,17 +128,7 @@ class SupportTicketRepository:
             .values(status=status, updated_at=now, resolved_at=resolved_at)
             .returning(SupportTicket)
         )
-        try:
-            ticket = db.execute(statement).scalar_one_or_none()
-            if ticket is None:
-                db.rollback()
-                return None
-            db.commit()
-            db.refresh(ticket)
-            return ticket
-        except Exception:
-            db.rollback()
-            raise
+        return db.execute(statement).scalar_one_or_none()
 
     def mark_in_progress(self, db, *, ticket_id: int, owner_customer_id):
         return self.update_status(

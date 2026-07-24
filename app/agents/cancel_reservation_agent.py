@@ -187,6 +187,10 @@ class CancelReservationAgent:
             owner_customer_id=owner_customer_id,
         )
         if cancelled_reservation is None:
+            # cancel_reservation owns and fully ends the atomic mutation
+            # transaction. This ownership-filtered reconciliation is a new,
+            # separate read transaction used only to preserve the safe
+            # already-cancelled versus unavailable response distinction.
             current_reservation = self.reservation_service.get_reservation_by_id(
                 db,
                 reservation_id,

@@ -96,11 +96,6 @@ class TelegramOwnerCommandHandlers:
             else:
                 result = self.ticket_service.resolve_ticket(db, arguments[0])
         except Exception:
-            if db is not None:
-                try:
-                    db.rollback()
-                except Exception:
-                    pass
             result = OwnerTicketResult("database_error")
         finally:
             if db is not None:

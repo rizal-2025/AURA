@@ -15,12 +15,14 @@ from app.api.chat import agent as chat_agent
 from app.core.config import settings
 from app.core.conversation_memory import build_authenticated_memory_key
 from app.core.security import create_customer_access_token
+from app.core.transaction_errors import PersistenceOperationError
 from app.db.database import get_db
 from app.db.repositories.support_ticket_repository import SupportTicketRepository
 from app.main import app
 from app.services.handoff.ticket_service import TicketService
 from migrations.add_support_tickets import migrate as migrate_support_tickets
 from migrations.add_support_ticket_notifications import migrate as migrate_notifications
+from tests.integration.disposable_schema import DisposableSchemaResources
 
 
 def migrate(target_engine, *, schema=None):
@@ -83,6 +85,13 @@ class TestSupportTicketsPostgreSQL(unittest.TestCase):
         cls.test_url = os.environ["TEST_DATABASE_URL"]
         cls.admin_engine = create_engine(cls.test_url, pool_pre_ping=True)
         cls.schema = f"aura_support_ticket_test_{uuid4().hex[:12]}"
+        cls.schema_resources = DisposableSchemaResources(
+            admin_engine=cls.admin_engine,
+            schema=cls.schema,
+            allowed_prefixes=("aura_support_ticket_test_",),
+            dispose_admin=True,
+        )
+        cls.addClassCleanup(cls.schema_resources.cleanup)
         schema_name = f'"{cls.schema}"'
         with cls.admin_engine.begin() as connection:
             connection.execute(text(f"CREATE SCHEMA {schema_name}"))
@@ -108,15 +117,12 @@ class TestSupportTicketsPostgreSQL(unittest.TestCase):
             "options": f"-csearch_path={cls.schema},public",
         })
         cls.engine = create_engine(schema_url, pool_pre_ping=True)
+        cls.schema_resources.track_engine(cls.engine)
         cls.SessionLocal = sessionmaker(bind=cls.engine, autoflush=False, autocommit=False)
 
     @classmethod
     def tearDownClass(cls):
         app.dependency_overrides.clear()
-        cls.engine.dispose()
-        with cls.admin_engine.begin() as connection:
-            connection.execute(text(f'DROP SCHEMA "{cls.schema}" CASCADE'))
-        cls.admin_engine.dispose()
 
     @classmethod
     def _table(cls, name):
@@ -360,38 +366,73 @@ class TestSupportTicketsPostgreSQL(unittest.TestCase):
         migrate(self.engine, schema=self.schema)
         owner = self._insert_customer()
         session_hash = uuid4().hex * 2
-        repository = SupportTicketRepository()
         db = self.SessionLocal()
         try:
-            repository.create(
+            original = TicketService().create_or_get(
                 db,
                 owner_customer_id=owner,
-                session_reference_hash=session_hash,
-                category="explicit_human_request",
-                reason_code="explicit_human_request",
-                priority="high",
-                attempt_count=1,
+                memory_key=session_hash,
+                handoff_state={
+                    "category": "explicit_human_request",
+                    "reason_code": "explicit_human_request",
+                    "priority": "high",
+                    "attempt_count": 1,
+                },
             )
-            db.commit()
-            with self.assertRaises(IntegrityError):
-                repository.create(
+
+            class ForcedConflictRepository(SupportTicketRepository):
+                def __init__(self):
+                    self.lookups = 0
+                    self.transaction_states = []
+
+                def get_active_by_owner_and_session_hash(
+                    self,
                     db,
-                    owner_customer_id=owner,
-                    session_reference_hash=session_hash,
-                    category="explicit_human_request",
-                    reason_code="explicit_human_request",
-                    priority="high",
-                    attempt_count=1,
-                )
+                    owner_customer_id,
+                    session_reference_hash,
+                ):
+                    self.transaction_states.append(bool(db.in_transaction()))
+                    self.lookups += 1
+                    if self.lookups == 1:
+                        # Force the real INSERT/partial-unique conflict path.
+                        return None
+                    return super().get_active_by_owner_and_session_hash(
+                        db,
+                        owner_customer_id,
+                        session_reference_hash,
+                    )
+
+            repository = ForcedConflictRepository()
+            converged = TicketService(repository).create_or_get(
+                db,
+                owner_customer_id=owner,
+                memory_key=session_hash,
+                handoff_state={
+                    "category": "explicit_human_request",
+                    "reason_code": "explicit_human_request",
+                    "priority": "high",
+                    "attempt_count": 1,
+                },
+            )
+            self.assertEqual(converged.ticket_number, original.ticket_number)
+            # The winner query starts only after UnitOfWork rolled back the
+            # failed INSERT transaction.
+            self.assertEqual(repository.transaction_states, [False, False])
             self.assertEqual(db.execute(text("SELECT 1")).scalar_one(), 1)
         finally:
             db.close()
 
         with self.engine.connect() as connection:
+            active_count = connection.execute(text(f"""
+                SELECT COUNT(*) FROM {self._table('support_tickets')}
+                WHERE owner_customer_id = :owner
+                  AND status IN ('open', 'in_progress')
+            """), {"owner": owner}).scalar_one()
             pending_count = connection.execute(text(f"""
                 SELECT COUNT(*) FROM {self._table('support_tickets')}
                 WHERE ticket_number LIKE 'PENDING-%'
             """)).scalar_one()
+        self.assertEqual(active_count, 1)
         self.assertEqual(pending_count, 0)
 
     def test_06_authenticated_chat_restores_lock_and_does_not_duplicate_ticket(self):

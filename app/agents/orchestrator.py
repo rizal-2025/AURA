@@ -9,6 +9,11 @@ from app.brain.memory_manager import MemoryManager
 from app.brain.planner import Planner
 from app.core.ownership import MissingOwnerCustomerError, require_owner_customer_id
 from app.core.logger import logger
+from app.core.transaction_errors import (
+    PersistenceOperationError,
+    PersistenceOutcomeUnknownError,
+    TransactionSessionUnusableError,
+)
 from app.memory.session import memory
 from app.services.ai.factory import get_ai_provider
 from app.services.handoff import HandoffDetector, HandoffService
@@ -74,6 +79,14 @@ class AgentOrchestrator:
                 db,
                 owner_customer_id,
             )
+        except (
+            PersistenceOperationError,
+            PersistenceOutcomeUnknownError,
+            TransactionSessionUnusableError,
+        ):
+            # Persistence adapters own the safe channel-specific response.
+            # Never turn a transaction failure into a memory-only handoff.
+            raise
         except Exception:
             self._create_handoff(session_id, "internal_error", 1, db, owner_customer_id)
             logger.error("HANDOFF TRANSITION: category=internal_error")
@@ -237,6 +250,7 @@ class AgentOrchestrator:
                 message,
                 session_id=session_id,
                 owner_customer_id=owner_customer_id,
+                db=db,
             )
 
             response_text = workflow_result.get("response", "")
