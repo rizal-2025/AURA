@@ -2,8 +2,9 @@
 
 import asyncio
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app.core.config import (
@@ -13,30 +14,63 @@ from app.core.config import (
     DEFAULT_TELEGRAM_OWNER_NOTIFICATION_RETRY_BASE_SECONDS,
     DEFAULT_TELEGRAM_OWNER_NOTIFICATION_LEASE_SECONDS,
     MINIMUM_TELEGRAM_IDENTITY_SECRET_LENGTH,
+    get_ai_settings,
+    get_database_settings,
+    get_environment_settings,
+)
+from app.core.config_validation import (
+    CFG_AI_OLLAMA_INVALID,
+    CFG_AI_OPENAI_INVALID,
+    CFG_AI_PROVIDER_INVALID,
+    CFG_DATABASE_INVALID,
+    CFG_ENV_INVALID,
+    CFG_TELEGRAM_IDENTITY_INVALID,
+    CFG_TELEGRAM_OPTION_INVALID,
+    CFG_TELEGRAM_OWNER_INVALID,
+    CFG_TELEGRAM_TOKEN_INVALID,
+    ConfigurationError,
+    parse_strict_boolean,
+    parse_strict_positive_integer,
+    validate_app_environment,
+    validate_secret,
+    validate_telegram_bot_token,
 )
 from app.core.logger import configure_safe_logging, logger
-from app.integrations.telegram.handlers import TelegramCustomerHandlers
-from app.integrations.telegram.owner_command_handlers import (
-    TelegramOwnerCommandHandlers,
-    unknown_command,
+from app.integrations.telegram.owner_notification_dispatcher import (
+    OwnerNotificationDispatcher,
 )
-from app.integrations.telegram.owner_notification_dispatcher import OwnerNotificationDispatcher
-from app.db.database import SessionLocal
 
 
 class TelegramRunnerConfigurationError(RuntimeError):
     """Configuration error whose text never includes a secret or token."""
+
+    SAFE_CODES = {
+        CFG_ENV_INVALID,
+        CFG_DATABASE_INVALID,
+        CFG_AI_PROVIDER_INVALID,
+        CFG_AI_OPENAI_INVALID,
+        CFG_AI_OLLAMA_INVALID,
+        CFG_TELEGRAM_TOKEN_INVALID,
+        CFG_TELEGRAM_IDENTITY_INVALID,
+        CFG_TELEGRAM_OWNER_INVALID,
+        CFG_TELEGRAM_OPTION_INVALID,
+    }
+
+    def __init__(self, code: str):
+        self.code = code if code in self.SAFE_CODES else CFG_TELEGRAM_OPTION_INVALID
+        super().__init__(self.code)
 
 
 class TelegramWebhookConflictError(RuntimeError):
     """Refuse polling while a webhook remains active unless explicitly cleared."""
 
 
-class TelegramRunnerEnvironment(BaseSettings):
+class TelegramRunnerSettings(BaseSettings):
     """Runner-only raw environment; validation happens immediately afterward."""
 
-    TELEGRAM_BOT_TOKEN: object = None
-    TELEGRAM_IDENTITY_SECRET: object = None
+    APP_ENV: object = None
+    TELEGRAM_BOT_TOKEN: object = Field(default=None, repr=False)
+    TELEGRAM_IDENTITY_SECRET: object = Field(default=None, repr=False)
     TELEGRAM_CLEAR_WEBHOOK_ON_START: object = False
     TELEGRAM_DROP_PENDING_UPDATES: object = False
     TELEGRAM_POLL_TIMEOUT_SECONDS: object = DEFAULT_TELEGRAM_POLL_TIMEOUT_SECONDS
@@ -48,13 +82,21 @@ class TelegramRunnerEnvironment(BaseSettings):
     TELEGRAM_OWNER_NOTIFICATION_RETRY_BASE_SECONDS: object = DEFAULT_TELEGRAM_OWNER_NOTIFICATION_RETRY_BASE_SECONDS
     TELEGRAM_OWNER_NOTIFICATION_LEASE_SECONDS: object = DEFAULT_TELEGRAM_OWNER_NOTIFICATION_LEASE_SECONDS
 
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        extra="ignore",
+        frozen=True,
+        hide_input_in_errors=True,
+    )
+
+
+TelegramRunnerEnvironment = TelegramRunnerSettings
 
 
 @dataclass(frozen=True)
 class TelegramRunnerConfiguration:
-    bot_token: str
-    identity_secret: str
+    bot_token: str = field(repr=False)
+    identity_secret: str = field(repr=False)
     clear_webhook_on_start: bool
     drop_pending_updates: bool
     poll_timeout_seconds: int
@@ -68,52 +110,53 @@ class TelegramRunnerConfiguration:
 
 
 def validate_runner_configuration(config=None) -> TelegramRunnerConfiguration:
-    config = config or TelegramRunnerEnvironment()
+    config = config or TelegramRunnerSettings()
+    try:
+        validate_app_environment(getattr(config, "APP_ENV", None))
+    except ConfigurationError as error:
+        raise TelegramRunnerConfigurationError(error.code) from None
+
     token = getattr(config, "TELEGRAM_BOT_TOKEN", None)
     secret = getattr(config, "TELEGRAM_IDENTITY_SECRET", None)
     timeout = getattr(config, "TELEGRAM_POLL_TIMEOUT_SECONDS", DEFAULT_TELEGRAM_POLL_TIMEOUT_SECONDS)
-    if not isinstance(token, str) or not re.fullmatch(r"[0-9]+:[A-Za-z0-9_-]{20,}", token.strip()):
-        raise TelegramRunnerConfigurationError("Telegram bot token is missing or invalid.")
-    if (
-        not isinstance(secret, str)
-        or len(secret) < MINIMUM_TELEGRAM_IDENTITY_SECRET_LENGTH
-        or not secret.strip()
-        or any(ord(character) < 32 or ord(character) == 127 for character in secret)
-    ):
-        raise TelegramRunnerConfigurationError("Telegram identity configuration is missing or invalid.")
-
-    if isinstance(timeout, bool):
-        parsed_timeout = None
-    elif isinstance(timeout, int):
-        parsed_timeout = timeout
-    elif isinstance(timeout, str) and re.fullmatch(r"[1-9][0-9]*", timeout):
-        parsed_timeout = int(timeout)
-    else:
-        parsed_timeout = None
-    if parsed_timeout is None or not 1 <= parsed_timeout <= 60:
-        raise TelegramRunnerConfigurationError("Telegram polling timeout is invalid.")
+    try:
+        validated_token = validate_telegram_bot_token(token)
+        validated_secret = validate_secret(
+            secret,
+            code=CFG_TELEGRAM_IDENTITY_INVALID,
+            minimum_length=MINIMUM_TELEGRAM_IDENTITY_SECRET_LENGTH,
+        )
+        parsed_timeout = parse_strict_positive_integer(
+            timeout,
+            minimum=1,
+            maximum=60,
+            code=CFG_TELEGRAM_OPTION_INVALID,
+        )
+    except ConfigurationError as error:
+        raise TelegramRunnerConfigurationError(error.code) from None
 
     def strict_boolean(name: str, default: bool) -> bool:
         value = getattr(config, name, default)
-        if isinstance(value, bool):
-            return value
-        if isinstance(value, str) and value.strip().lower() in {"true", "false"}:
-            return value.strip().lower() == "true"
-        raise TelegramRunnerConfigurationError("Telegram boolean configuration is invalid.")
+        try:
+            return parse_strict_boolean(value, code=CFG_TELEGRAM_OPTION_INVALID)
+        except ConfigurationError as error:
+            raise TelegramRunnerConfigurationError(error.code) from None
 
     def strict_integer(name: str, default: int, minimum: int, maximum: int) -> int:
         value = getattr(config, name, default)
-        if isinstance(value, bool):
-            parsed = None
-        elif isinstance(value, int):
-            parsed = value
-        elif isinstance(value, str) and re.fullmatch(r"[1-9][0-9]*", value):
-            parsed = int(value)
-        else:
-            parsed = None
-        if parsed is None or not minimum <= parsed <= maximum:
-            raise TelegramRunnerConfigurationError("Telegram owner integer configuration is invalid.")
-        return parsed
+        try:
+            return parse_strict_positive_integer(
+                value,
+                minimum=minimum,
+                maximum=maximum,
+                code=(
+                    CFG_TELEGRAM_OWNER_INVALID
+                    if name == "TELEGRAM_OWNER_CHAT_ID"
+                    else CFG_TELEGRAM_OPTION_INVALID
+                ),
+            )
+        except ConfigurationError as error:
+            raise TelegramRunnerConfigurationError(error.code) from None
 
     owner_enabled = strict_boolean("TELEGRAM_OWNER_NOTIFICATIONS_ENABLED", False)
     owner_commands_enabled = strict_boolean("TELEGRAM_OWNER_COMMANDS_ENABLED", False)
@@ -130,8 +173,8 @@ def validate_runner_configuration(config=None) -> TelegramRunnerConfiguration:
         )
 
     return TelegramRunnerConfiguration(
-        bot_token=token.strip(),
-        identity_secret=secret,
+        bot_token=validated_token,
+        identity_secret=validated_secret,
         clear_webhook_on_start=strict_boolean("TELEGRAM_CLEAR_WEBHOOK_ON_START", False),
         drop_pending_updates=strict_boolean("TELEGRAM_DROP_PENDING_UPDATES", False),
         poll_timeout_seconds=parsed_timeout,
@@ -210,12 +253,23 @@ async def shutdown_owner_notifications(application) -> None:
 def build_application(config=None, **handler_dependencies):
     configure_safe_logging()
     runner_config = validate_runner_configuration(config)
+    # Validate every non-Telegram runner dependency before constructing PTB.
+    get_environment_settings()
+    get_database_settings()
+    get_ai_settings()
     try:
         from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters
     except ImportError as error:
         raise TelegramRunnerConfigurationError(
             "Telegram dependency is unavailable. Install the project dependencies."
         ) from error
+
+    from app.db.database import SessionLocal
+    from app.integrations.telegram.handlers import TelegramCustomerHandlers
+    from app.integrations.telegram.owner_command_handlers import (
+        TelegramOwnerCommandHandlers,
+        unknown_command,
+    )
 
     owner_ticket_service = handler_dependencies.pop("owner_ticket_service", None)
     handlers = TelegramCustomerHandlers(
@@ -268,16 +322,33 @@ async def safe_ptb_error_handler(update, context) -> None:
 
 def main() -> None:
     try:
-        runner_environment = TelegramRunnerEnvironment()
+        runner_environment = TelegramRunnerSettings()
         runner_config = validate_runner_configuration(runner_environment)
+        get_environment_settings()
+        get_database_settings()
+        get_ai_settings()
         application = build_application(runner_environment)
         application.run_polling(
             allowed_updates=["message"],
             drop_pending_updates=runner_config.drop_pending_updates,
             timeout=runner_config.poll_timeout_seconds,
         )
-    except (TelegramRunnerConfigurationError, TelegramWebhookConflictError) as error:
-        logger.error("TELEGRAM RUNNER: status=failed category=%s", type(error).__name__)
+    except TelegramRunnerConfigurationError as error:
+        logger.error(
+            "TELEGRAM RUNNER: status=failed category=configuration_error code=%s",
+            error.code,
+        )
+        raise SystemExit("Telegram runner failed to start safely.") from None
+    except ConfigurationError as error:
+        logger.error(
+            "TELEGRAM RUNNER: status=failed category=configuration_error code=%s",
+            error.code,
+        )
+        raise SystemExit("Telegram runner failed to start safely.") from None
+    except TelegramWebhookConflictError:
+        logger.error(
+            "TELEGRAM RUNNER: status=failed category=webhook_conflict"
+        )
         raise SystemExit("Telegram runner failed to start safely.") from None
     except Exception as error:
         logger.error("TELEGRAM RUNNER: status=failed category=%s", type(error).__name__)

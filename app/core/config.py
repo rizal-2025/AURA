@@ -1,95 +1,387 @@
-import re
+"""Focused, lazy configuration boundaries for AURA processes."""
 
-from pydantic import ValidationError, field_validator
+from __future__ import annotations
+
+from dataclasses import dataclass
+from functools import lru_cache
+
+from pydantic import Field, ValidationError, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from app.core.config_validation import (
+    CFG_AI_OLLAMA_INVALID,
+    CFG_AI_OPENAI_INVALID,
+    CFG_AI_PROVIDER_INVALID,
+    CFG_AUTH_AUDIENCE_INVALID,
+    CFG_AUTH_EXPIRY_INVALID,
+    CFG_AUTH_ISSUER_INVALID,
+    CFG_AUTH_SECRET_INVALID,
+    CFG_DATABASE_INVALID,
+    CFG_ENV_INVALID,
+    MAXIMUM_JWT_EXPIRE_MINUTES,
+    MINIMUM_SECRET_LENGTH,
+    ConfigurationError,
+    parse_strict_boolean,
+    parse_strict_positive_integer,
+    validate_ai_provider,
+    validate_app_environment,
+    validate_deployed_identity_label,
+    validate_model_name,
+    validate_ollama_url,
+    validate_openai_api_key,
+    validate_secret,
+)
 
-MINIMUM_JWT_SECRET_LENGTH = 32
-MINIMUM_TELEGRAM_IDENTITY_SECRET_LENGTH = 32
-MAXIMUM_JWT_EXPIRE_MINUTES = 1440
+
+MINIMUM_JWT_SECRET_LENGTH = MINIMUM_SECRET_LENGTH
+MINIMUM_TELEGRAM_IDENTITY_SECRET_LENGTH = MINIMUM_SECRET_LENGTH
 DEFAULT_TELEGRAM_POLL_TIMEOUT_SECONDS = 30
 DEFAULT_TELEGRAM_OWNER_NOTIFICATION_POLL_SECONDS = 5
 DEFAULT_TELEGRAM_OWNER_NOTIFICATION_MAX_ATTEMPTS = 5
 DEFAULT_TELEGRAM_OWNER_NOTIFICATION_RETRY_BASE_SECONDS = 10
 DEFAULT_TELEGRAM_OWNER_NOTIFICATION_LEASE_SECONDS = 60
 
+_BASE_SETTINGS_CONFIG = SettingsConfigDict(
+    env_file=".env",
+    extra="ignore",
+    validate_default=True,
+    hide_input_in_errors=True,
+    frozen=True,
+)
 
-class Settings(BaseSettings):
+
+def _safe_code_from_validation(error: ValidationError, fallback: str) -> str:
+    for item in error.errors(include_input=False):
+        message = str(item.get("msg", ""))
+        for code in (
+            CFG_ENV_INVALID,
+            CFG_DATABASE_INVALID,
+            CFG_AUTH_SECRET_INVALID,
+            CFG_AUTH_EXPIRY_INVALID,
+            CFG_AUTH_ISSUER_INVALID,
+            CFG_AUTH_AUDIENCE_INVALID,
+            CFG_AI_PROVIDER_INVALID,
+            CFG_AI_OPENAI_INVALID,
+            CFG_AI_OLLAMA_INVALID,
+        ):
+            if code in message:
+                return code
+    return fallback
+
+
+class AppEnvironmentSettings(BaseSettings):
+    APP_ENV: object
     APP_NAME: str = "AURA"
     VERSION: str = "1.0.0"
 
-    AI_PROVIDER: str = "ollama"
-    OLLAMA_BASE_URL: str = "http://localhost:11434/v1"
-    OLLAMA_MODEL: str = "qwen2.5:3b"
-    OPENAI_MODEL: str = "gpt-5"
-    DATABASE_URL: str
-    OPENAI_API_KEY: str | None = None
+    model_config = _BASE_SETTINGS_CONFIG
 
-    AUTH_JWT_SECRET: str | None = None
-    AUTH_JWT_ISSUER: str = "aura"
-    AUTH_JWT_AUDIENCE: str = "aura-api"
-    AUTH_JWT_EXPIRE_MINUTES: int = 60
-    SQL_ECHO: bool = False
+    @field_validator("APP_ENV", mode="before")
+    @classmethod
+    def validate_environment(cls, value):
+        return validate_app_environment(value)
 
-    # Telegram is optional for the FastAPI process. The runner validates these
-    # values immediately before starting local long polling.
-    TELEGRAM_BOT_TOKEN: str | None = None
-    TELEGRAM_IDENTITY_SECRET: str | None = None
-    # Keep Telegram values unparsed here. FastAPI does not depend on the runner
-    # and must remain startable even when optional Telegram settings are bad.
-    TELEGRAM_CLEAR_WEBHOOK_ON_START: object = False
-    TELEGRAM_DROP_PENDING_UPDATES: object = False
-    TELEGRAM_POLL_TIMEOUT_SECONDS: object = DEFAULT_TELEGRAM_POLL_TIMEOUT_SECONDS
-    model_config = SettingsConfigDict(
-        env_file=".env",
-        extra="ignore",
-        validate_default=True,
-    )
+
+class DatabaseSettings(BaseSettings):
+    DATABASE_URL: str = Field(repr=False)
+    SQL_ECHO: object = False
+
+    model_config = _BASE_SETTINGS_CONFIG
+
+    @field_validator("DATABASE_URL", mode="before")
+    @classmethod
+    def validate_database_url(cls, value):
+        if not isinstance(value, str) or not value or value != value.strip():
+            raise ConfigurationError(CFG_DATABASE_INVALID)
+        return value
+
+    @field_validator("SQL_ECHO", mode="before")
+    @classmethod
+    def validate_sql_echo(cls, value):
+        return parse_strict_boolean(value, code=CFG_DATABASE_INVALID)
+
+
+class AuthSettings(BaseSettings):
+    APP_ENV: object
+    AUTH_JWT_SECRET: object = Field(repr=False)
+    AUTH_JWT_ISSUER: object = "aura"
+    AUTH_JWT_AUDIENCE: object = "aura-api"
+    AUTH_JWT_EXPIRE_MINUTES: object = 60
+
+    model_config = _BASE_SETTINGS_CONFIG
+
+    @field_validator("APP_ENV", mode="before")
+    @classmethod
+    def validate_environment(cls, value):
+        return validate_app_environment(value)
 
     @field_validator("AUTH_JWT_SECRET", mode="before")
     @classmethod
-    def validate_jwt_secret(cls, value: str | None) -> str:
-        if not isinstance(value, str) or len(value) < MINIMUM_JWT_SECRET_LENGTH:
-            raise ValueError(
-                "AUTH_JWT_SECRET must be configured and be at least "
-                f"{MINIMUM_JWT_SECRET_LENGTH} characters long."
-            )
-        return value
+    def validate_jwt_secret(cls, value):
+        return validate_secret(value, code=CFG_AUTH_SECRET_INVALID)
 
     @field_validator("AUTH_JWT_EXPIRE_MINUTES", mode="before")
     @classmethod
-    def validate_jwt_expiry(cls, value: int | str) -> int:
-        if isinstance(value, bool):
-            raise ValueError("AUTH_JWT_EXPIRE_MINUTES must be a strict integer.")
-        if isinstance(value, int):
-            expires_minutes = value
-        elif isinstance(value, str) and re.fullmatch(r"[1-9][0-9]*", value):
-            expires_minutes = int(value)
-        else:
-            raise ValueError("AUTH_JWT_EXPIRE_MINUTES must be a strict integer.")
+    def validate_jwt_expiry(cls, value):
+        return parse_strict_positive_integer(
+            value,
+            minimum=1,
+            maximum=MAXIMUM_JWT_EXPIRE_MINUTES,
+            code=CFG_AUTH_EXPIRY_INVALID,
+        )
 
-        if not 1 <= expires_minutes <= MAXIMUM_JWT_EXPIRE_MINUTES:
-            raise ValueError(
-                "AUTH_JWT_EXPIRE_MINUTES must be between 1 and "
-                f"{MAXIMUM_JWT_EXPIRE_MINUTES}."
+    @model_validator(mode="after")
+    def validate_identity_labels(self):
+        object.__setattr__(
+            self,
+            "AUTH_JWT_ISSUER",
+            validate_deployed_identity_label(
+                self.AUTH_JWT_ISSUER,
+                app_env=self.APP_ENV,
+                development_value="aura",
+                code=CFG_AUTH_ISSUER_INVALID,
+            ),
+        )
+        object.__setattr__(
+            self,
+            "AUTH_JWT_AUDIENCE",
+            validate_deployed_identity_label(
+                self.AUTH_JWT_AUDIENCE,
+                app_env=self.APP_ENV,
+                development_value="aura-api",
+                code=CFG_AUTH_AUDIENCE_INVALID,
+            ),
+        )
+        return self
+
+
+class AISettings(BaseSettings):
+    APP_ENV: object
+    AI_PROVIDER: object
+    OLLAMA_BASE_URL: object = None
+    OLLAMA_MODEL: object = None
+    OPENAI_MODEL: object = None
+    OPENAI_API_KEY: object = Field(default=None, repr=False)
+
+    model_config = _BASE_SETTINGS_CONFIG
+
+    @field_validator("APP_ENV", mode="before")
+    @classmethod
+    def validate_environment(cls, value):
+        return validate_app_environment(value)
+
+    @field_validator("AI_PROVIDER", mode="before")
+    @classmethod
+    def validate_provider(cls, value):
+        return validate_ai_provider(value)
+
+    @model_validator(mode="after")
+    def validate_selected_provider(self):
+        if self.AI_PROVIDER == "openai":
+            object.__setattr__(
+                self,
+                "OPENAI_API_KEY",
+                validate_openai_api_key(self.OPENAI_API_KEY),
             )
-        return expires_minutes
+            object.__setattr__(
+                self,
+                "OPENAI_MODEL",
+                validate_model_name(
+                    self.OPENAI_MODEL,
+                    code=CFG_AI_OPENAI_INVALID,
+                ),
+            )
+        else:
+            object.__setattr__(
+                self,
+                "OLLAMA_BASE_URL",
+                validate_ollama_url(
+                    self.OLLAMA_BASE_URL,
+                    app_env=self.APP_ENV,
+                ),
+            )
+            object.__setattr__(
+                self,
+                "OLLAMA_MODEL",
+                validate_model_name(
+                    self.OLLAMA_MODEL,
+                    code=CFG_AI_OLLAMA_INVALID,
+                ),
+            )
+        return self
 
-try:
-    settings = Settings()
-except ValidationError as error:
-    invalid_fields = {item["loc"][0] for item in error.errors()}
-    if "AUTH_JWT_SECRET" in invalid_fields:
-        raise RuntimeError(
-            "Invalid AURA authentication configuration: AUTH_JWT_SECRET must be "
-            f"configured and at least {MINIMUM_JWT_SECRET_LENGTH} characters long."
+
+@dataclass(frozen=True)
+class ApplicationSettings:
+    environment: AppEnvironmentSettings
+    database: DatabaseSettings
+    auth: AuthSettings
+    ai: AISettings
+
+    _FIELD_COMPONENT = {
+        "APP_ENV": "environment",
+        "APP_NAME": "environment",
+        "VERSION": "environment",
+        "DATABASE_URL": "database",
+        "SQL_ECHO": "database",
+        "AUTH_JWT_SECRET": "auth",
+        "AUTH_JWT_ISSUER": "auth",
+        "AUTH_JWT_AUDIENCE": "auth",
+        "AUTH_JWT_EXPIRE_MINUTES": "auth",
+        "AI_PROVIDER": "ai",
+        "OLLAMA_BASE_URL": "ai",
+        "OLLAMA_MODEL": "ai",
+        "OPENAI_MODEL": "ai",
+        "OPENAI_API_KEY": "ai",
+    }
+
+    def __getattr__(self, name):
+        component_name = self._FIELD_COMPONENT.get(name)
+        if component_name is None:
+            raise AttributeError(name)
+        return getattr(getattr(self, component_name), name)
+
+def _construct(model, fallback_code: str, **values):
+    try:
+        return model(**values)
+    except ConfigurationError:
+        raise
+    except ValidationError as error:
+        raise ConfigurationError(
+            _safe_code_from_validation(error, fallback_code)
         ) from None
-    if "AUTH_JWT_EXPIRE_MINUTES" in invalid_fields:
-        raise RuntimeError(
-            "Invalid AURA authentication configuration: "
-            "AUTH_JWT_EXPIRE_MINUTES must be a strict integer between 1 and "
-            f"{MAXIMUM_JWT_EXPIRE_MINUTES}."
-        ) from None
-    raise RuntimeError(
-        "Invalid AURA configuration. Check required environment variables."
-    ) from None
+
+
+def _settings_values(values):
+    return {key: value for key, value in values.items() if not key.startswith("_")}
+
+
+def build_environment_settings(*, _env_file=".env", **values) -> AppEnvironmentSettings:
+    return _construct(
+        AppEnvironmentSettings,
+        CFG_ENV_INVALID,
+        _env_file=_env_file,
+        **_settings_values(values),
+    )
+
+
+def build_database_settings(*, _env_file=".env", **values) -> DatabaseSettings:
+    return _construct(
+        DatabaseSettings,
+        CFG_DATABASE_INVALID,
+        _env_file=_env_file,
+        **_settings_values(values),
+    )
+
+
+def build_auth_settings(*, _env_file=".env", **values) -> AuthSettings:
+    return _construct(
+        AuthSettings,
+        CFG_AUTH_SECRET_INVALID,
+        _env_file=_env_file,
+        **_settings_values(values),
+    )
+
+
+def build_ai_settings(*, _env_file=".env", **values) -> AISettings:
+    return _construct(
+        AISettings,
+        CFG_AI_PROVIDER_INVALID,
+        _env_file=_env_file,
+        **_settings_values(values),
+    )
+
+
+def build_application_settings(*, _env_file=".env", **values) -> ApplicationSettings:
+    values = _settings_values(values)
+    environment = build_environment_settings(
+        _env_file=_env_file,
+        **values,
+    )
+    scoped_values = dict(values)
+    scoped_values["APP_ENV"] = environment.APP_ENV
+    return ApplicationSettings(
+        environment=environment,
+        database=build_database_settings(
+            _env_file=_env_file,
+            **scoped_values,
+        ),
+        auth=build_auth_settings(
+            _env_file=_env_file,
+            **scoped_values,
+        ),
+        ai=build_ai_settings(
+            _env_file=_env_file,
+            **scoped_values,
+        ),
+    )
+
+
+class Settings:
+    """Compatibility constructor returning the focused application aggregate."""
+
+    def __new__(cls, _env_file=".env", **values):
+        return build_application_settings(_env_file=_env_file, **values)
+
+
+@lru_cache
+def get_environment_settings() -> AppEnvironmentSettings:
+    return _construct(AppEnvironmentSettings, CFG_ENV_INVALID)
+
+
+@lru_cache
+def get_database_settings() -> DatabaseSettings:
+    get_environment_settings()
+    return _construct(DatabaseSettings, CFG_DATABASE_INVALID)
+
+
+@lru_cache
+def get_auth_settings() -> AuthSettings:
+    environment = get_environment_settings()
+    return _construct(
+        AuthSettings,
+        CFG_AUTH_SECRET_INVALID,
+        APP_ENV=environment.APP_ENV,
+    )
+
+
+@lru_cache
+def get_ai_settings() -> AISettings:
+    environment = get_environment_settings()
+    return _construct(
+        AISettings,
+        CFG_AI_PROVIDER_INVALID,
+        APP_ENV=environment.APP_ENV,
+    )
+
+
+@lru_cache
+def get_application_settings() -> ApplicationSettings:
+    return ApplicationSettings(
+        environment=get_environment_settings(),
+        database=get_database_settings(),
+        auth=get_auth_settings(),
+        ai=get_ai_settings(),
+    )
+
+
+def clear_settings_cache() -> None:
+    get_application_settings.cache_clear()
+    get_ai_settings.cache_clear()
+    get_auth_settings.cache_clear()
+    get_database_settings.cache_clear()
+    get_environment_settings.cache_clear()
+
+
+class _LazyApplicationSettings:
+    def __getattr__(self, name):
+        return getattr(get_application_settings(), name)
+
+    def __setattr__(self, name, value):
+        raise TypeError(
+            "AURA settings are immutable; use validated factories or scoped "
+            "dependency injection."
+        )
+
+
+settings = _LazyApplicationSettings()

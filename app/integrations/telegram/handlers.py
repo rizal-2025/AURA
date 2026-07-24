@@ -1,15 +1,12 @@
 """Private-chat Telegram handlers that delegate to the shared chat boundary."""
 
-from app.core.config import settings
 from app.core.logger import logger
-from app.db.database import SessionLocal
 from app.integrations.telegram.identity import derive_telegram_session_reference
 from app.integrations.telegram.identity_service import (
     TelegramIdentityService,
     TelegramIdentityUnavailableError,
 )
 from app.integrations.telegram.message_utils import split_telegram_reply
-from app.services.authenticated_chat_service import authenticated_chat_service
 
 
 PRIVATE_CHAT_ONLY_REPLY = "Bot ini saat ini hanya mendukung chat pribadi."
@@ -31,15 +28,32 @@ class TelegramCustomerHandlers:
     def __init__(
         self,
         *,
-        identity_secret: str | None = None,
+        identity_secret: str,
         session_factory=None,
         identity_service=None,
         chat_service=None,
     ):
-        self.identity_secret = identity_secret or settings.TELEGRAM_IDENTITY_SECRET
-        self.session_factory = session_factory or SessionLocal
+        if not isinstance(identity_secret, str) or not identity_secret:
+            raise ValueError("Validated Telegram identity configuration is required.")
+        self.identity_secret = identity_secret
+        self.session_factory = session_factory or self._default_session_factory
         self.identity_service = identity_service or TelegramIdentityService()
-        self.chat_service = chat_service or authenticated_chat_service
+        self.chat_service = chat_service
+
+    @staticmethod
+    def _default_session_factory():
+        from app.db.database import SessionLocal
+
+        return SessionLocal()
+
+    def _chat_service(self):
+        if self.chat_service is None:
+            from app.services.authenticated_chat_service import (
+                authenticated_chat_service,
+            )
+
+            self.chat_service = authenticated_chat_service
+        return self.chat_service
 
     async def _validated_private_context(self, update):
         if update is None:
@@ -114,7 +128,7 @@ class TelegramCustomerHandlers:
             return
 
         try:
-            response = await self.chat_service.process(
+            response = await self._chat_service().process(
                 db=db,
                 customer=customer,
                 session_reference=session_reference,
@@ -175,7 +189,7 @@ class TelegramCustomerHandlers:
             await self._safe_reply(message, SERVICE_UNAVAILABLE_REPLY)
             return
         try:
-            response = self.chat_service.ticket_status(
+            response = self._chat_service().ticket_status(
                 db=db,
                 customer=customer,
                 session_reference=session_reference,

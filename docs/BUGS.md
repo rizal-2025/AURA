@@ -8,6 +8,19 @@ Audit Phase F menemukan lock handoff memory dapat tetap aktif setelah tiket dise
 
 Pencarian pada source juga tidak menemukan penanda `TODO`, `FIXME`, `BUG`, atau `HACK` yang menunjuk ke issue terbuka.
 
+## Audit V2.0 Phase G1A - fixed
+
+- `APP_ENV` kini wajib dan exact; production tidak dapat diinferensikan dari default.
+- Konfigurasi FastAPI tidak lagi memuat secret Telegram dan handler tidak memiliki fallback identity secret global.
+- Secret JWT/Telegram menolak placeholder, whitespace luar, control character, panjang tidak aman, dan pengulangan trivial.
+- Provider AI tidak lagi fallback diam-diam ke Ollama; OpenAI tidak lagi menggunakan dummy key.
+- URL Ollama remote plaintext ditolak pada staging/production, sementara loopback development tetap didukung.
+- Kegagalan konfigurasi hanya mengeluarkan kode `CFG_*` tanpa raw secret, token, URL, ID, atau environment value.
+- Temuan adversarial lanjutan tentang mutation bypass, secret-bearing `repr`, bootstrap environment test, Unicode format/control, placeholder embedded, repetisi unit panjang, dan urutan konstruksi startup telah diperbaiki.
+- Full test discovery kini dibedakan dari test top-level dan selalu menemukan suite `tests/integration`; PostgreSQL tetap opt-in melalui `TEST_DATABASE_URL`.
+
+G1A tidak mengubah schema/database. Batas input/body, serialisasi percakapan, dan hardening transaksi tetap dicatat sebagai G1B/G1C/G1D, bukan bug yang diklaim selesai.
+
 ## Audit V1.5 Phase 3A - fixed
 
 Audit rilis sebelumnya menemukan beberapa risiko yang telah ditangani pada Phase 3A:

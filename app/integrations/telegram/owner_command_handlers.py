@@ -1,7 +1,6 @@
 """Thin Telegram callbacks for owner-only support-ticket management."""
 
 from app.core.logger import logger
-from app.db.database import SessionLocal
 from app.integrations.telegram.handlers import TelegramCustomerHandlers
 from app.integrations.telegram.message_utils import split_telegram_reply
 from app.integrations.telegram.owner_authorization import authorize_owner_update
@@ -15,8 +14,14 @@ from app.services.handoff.owner_ticket_service import OwnerTicketResult, OwnerTi
 class TelegramOwnerCommandHandlers:
     def __init__(self, *, owner_chat_id: int, session_factory=None, ticket_service=None):
         self.owner_chat_id = owner_chat_id
-        self.session_factory = session_factory or SessionLocal
+        self.session_factory = session_factory or self._default_session_factory
         self.ticket_service = ticket_service or OwnerTicketService()
+
+    @staticmethod
+    def _default_session_factory():
+        from app.db.database import SessionLocal
+
+        return SessionLocal()
 
     @staticmethod
     async def _send_chunks(message, chunks: list[str]) -> bool:

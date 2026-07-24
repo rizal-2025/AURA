@@ -66,8 +66,13 @@ FastAPI juga menyediakan spesifikasi OpenAPI dan antarmuka dokumentasi interakti
 
 ## Konfigurasi keamanan
 
-- `AUTH_JWT_SECRET` wajib minimal 32 karakter dan tidak boleh dicatat atau dikomit.
-- `AUTH_JWT_EXPIRE_MINUTES` wajib integer positif. `AUTH_JWT_ISSUER` dan `AUTH_JWT_AUDIENCE` ikut divalidasi di dalam token.
+- `APP_ENV` wajib persis salah satu dari `development`, `test`, `staging`, atau `production`; production tidak pernah diinferensikan.
+- FastAPI, database/migrasi, dan runner Telegram memakai batas settings berbeda, sehingga secret Telegram tidak diperlukan oleh proses API.
+- `AUTH_JWT_SECRET` wajib 32–512 karakter, bebas whitespace luar/control/placeholder/pengulangan trivial, dan tidak boleh dicatat atau dikomit.
+- `AUTH_JWT_EXPIRE_MINUTES` wajib integer ketat 1–1440. Staging/production membutuhkan issuer/audience non-development.
+- `AI_PROVIDER` hanya menerima `ollama` atau `openai`. Tidak ada fallback provider atau dummy OpenAI key.
+- Runner Telegram menolak token/identity secret malformed, placeholder, control, dan whitespace luar; owner ID hanya wajib ketika command atau notification diaktifkan.
+- Kegagalan startup menggunakan kode `CFG_*` tanpa raw nilai konfigurasi.
 - Custom logger AURA hanya mencatat state transisi operasional; bearer token, secret, dan header `Authorization` tidak dicatat.
 
 ## Data dan memori

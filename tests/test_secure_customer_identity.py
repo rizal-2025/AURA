@@ -1,5 +1,6 @@
 import importlib.util
 from datetime import timedelta
+import os
 from pathlib import Path
 import unittest
 from types import SimpleNamespace
@@ -12,7 +13,12 @@ from fastapi.security import HTTPAuthorizationCredentials
 
 from app.api.auth import create_guest_customer
 from app.api.dependencies import get_current_customer
-from app.core.config import MAXIMUM_JWT_EXPIRE_MINUTES, Settings, settings
+from app.core.config import (
+    MAXIMUM_JWT_EXPIRE_MINUTES,
+    Settings,
+    clear_settings_cache,
+    settings,
+)
 from app.db.database import engine
 from app.core.security import (
     JWT_ALGORITHM,
@@ -104,20 +110,23 @@ class FakeInspector:
 
 class TestSecureCustomerIdentity(unittest.TestCase):
     def setUp(self):
-        self.original_secret = settings.AUTH_JWT_SECRET
-        self.original_issuer = settings.AUTH_JWT_ISSUER
-        self.original_audience = settings.AUTH_JWT_AUDIENCE
-        self.original_expiry = settings.AUTH_JWT_EXPIRE_MINUTES
-        settings.AUTH_JWT_SECRET = "test-secure-customer-secret-0123456789"
-        settings.AUTH_JWT_ISSUER = "aura-test"
-        settings.AUTH_JWT_AUDIENCE = "aura-test-api"
+        self.auth_environment = patch.dict(
+            os.environ,
+            {
+                "APP_ENV": "test",
+                "AUTH_JWT_SECRET": "test-secure-customer-secret-0123456789",
+                "AUTH_JWT_ISSUER": "aura-test",
+                "AUTH_JWT_AUDIENCE": "aura-test-api",
+                "AUTH_JWT_EXPIRE_MINUTES": "60",
+            },
+        )
+        self.auth_environment.start()
+        clear_settings_cache()
         self.customer_id = uuid4()
 
     def tearDown(self):
-        settings.AUTH_JWT_SECRET = self.original_secret
-        settings.AUTH_JWT_ISSUER = self.original_issuer
-        settings.AUTH_JWT_AUDIENCE = self.original_audience
-        settings.AUTH_JWT_EXPIRE_MINUTES = self.original_expiry
+        self.auth_environment.stop()
+        clear_settings_cache()
 
     def _credentials(self, token):
         return HTTPAuthorizationCredentials(scheme="Bearer", credentials=token)
@@ -167,10 +176,18 @@ class TestSecureCustomerIdentity(unittest.TestCase):
         self.assertEqual(http_response.headers["Cache-Control"], "no-store")
 
     def test_guest_customer_is_not_persisted_when_secret_is_missing(self):
-        self.settings_secret(None)
         db = MagicMock()
-
-        with self.assertRaises(HTTPException) as raised:
+        invalid = SimpleNamespace(
+            APP_ENV="test",
+            AUTH_JWT_SECRET=None,
+            AUTH_JWT_ISSUER="aura-test",
+            AUTH_JWT_AUDIENCE="aura-test-api",
+            AUTH_JWT_EXPIRE_MINUTES=60,
+        )
+        with (
+            patch("app.core.security.get_auth_settings", return_value=invalid),
+            self.assertRaises(HTTPException) as raised,
+        ):
             create_guest_customer(Response(), db)
 
         self.assertEqual(raised.exception.status_code, 503)
@@ -180,11 +197,16 @@ class TestSecureCustomerIdentity(unittest.TestCase):
     def test_short_jwt_secret_is_rejected_by_configuration(self):
         with self.assertRaises(ValueError) as raised:
             Settings(
+                _env_file=None,
+                APP_ENV="test",
                 DATABASE_URL="postgresql://user:password@localhost/aura",
                 AUTH_JWT_SECRET="too-short",
+                AI_PROVIDER="ollama",
+                OLLAMA_BASE_URL="http://localhost:11434/v1",
+                OLLAMA_MODEL="test-model",
             )
 
-        self.assertIn("AUTH_JWT_SECRET", str(raised.exception))
+        self.assertEqual(str(raised.exception), "CFG_AUTH_SECRET_INVALID")
 
     def test_zero_or_negative_jwt_expiry_is_rejected_by_configuration(self):
         for expires_minutes in (
@@ -198,27 +220,45 @@ class TestSecureCustomerIdentity(unittest.TestCase):
             with self.subTest(expires_minutes=expires_minutes):
                 with self.assertRaises(ValueError) as raised:
                     Settings(
+                        _env_file=None,
+                        APP_ENV="test",
                         DATABASE_URL="postgresql://user:password@localhost/aura",
                         AUTH_JWT_SECRET="test-secure-customer-secret-0123456789",
                         AUTH_JWT_EXPIRE_MINUTES=expires_minutes,
+                        AI_PROVIDER="ollama",
+                        OLLAMA_BASE_URL="http://localhost:11434/v1",
+                        OLLAMA_MODEL="test-model",
                     )
 
-                self.assertIn("AUTH_JWT_EXPIRE_MINUTES", str(raised.exception))
+                self.assertEqual(str(raised.exception), "CFG_AUTH_EXPIRY_INVALID")
 
     def test_valid_integer_jwt_expiry_is_accepted(self):
         configured = Settings(
+            _env_file=None,
+            APP_ENV="test",
             DATABASE_URL="postgresql://user:password@localhost/aura",
             AUTH_JWT_SECRET="test-secure-customer-secret-0123456789",
             AUTH_JWT_EXPIRE_MINUTES="60",
+            AI_PROVIDER="ollama",
+            OLLAMA_BASE_URL="http://localhost:11434/v1",
+            OLLAMA_MODEL="test-model",
         )
 
         self.assertEqual(configured.AUTH_JWT_EXPIRE_MINUTES, 60)
 
     def test_guest_endpoint_returns_safe_error_for_invalid_runtime_expiry(self):
-        settings.AUTH_JWT_EXPIRE_MINUTES = MAXIMUM_JWT_EXPIRE_MINUTES + 1
         db = MagicMock()
-
-        with self.assertRaises(HTTPException) as raised:
+        invalid = SimpleNamespace(
+            APP_ENV="test",
+            AUTH_JWT_SECRET="test-secure-customer-secret-0123456789",
+            AUTH_JWT_ISSUER="aura-test",
+            AUTH_JWT_AUDIENCE="aura-test-api",
+            AUTH_JWT_EXPIRE_MINUTES=MAXIMUM_JWT_EXPIRE_MINUTES + 1,
+        )
+        with (
+            patch("app.core.security.get_auth_settings", return_value=invalid),
+            self.assertRaises(HTTPException) as raised,
+        ):
             create_guest_customer(Response(), db)
 
         self.assertEqual(raised.exception.status_code, 503)
@@ -353,10 +393,6 @@ class TestSecureCustomerIdentity(unittest.TestCase):
             get_current_customer(self._credentials(token), db)
         self.assertEqual(raised.exception.status_code, 401)
         db.get.assert_not_called()
-
-    def settings_secret(self, secret):
-        settings.AUTH_JWT_SECRET = secret
-
 
 if __name__ == "__main__":
     unittest.main()

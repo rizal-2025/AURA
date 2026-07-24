@@ -1,11 +1,13 @@
+import os
 import unittest
 from types import SimpleNamespace
+from unittest.mock import patch
 from uuid import uuid4
 
 from fastapi.testclient import TestClient
 
 from app.api.chat import agent as chat_agent
-from app.core.config import settings
+from app.core.config import clear_settings_cache
 from app.core.conversation_memory import build_authenticated_memory_key
 from app.core.security import create_customer_access_token
 from app.db.database import get_db
@@ -110,12 +112,18 @@ class InMemorySecureReservationService:
 
 class TestSecureReservationManagement(unittest.TestCase):
     def setUp(self):
-        self.original_secret = settings.AUTH_JWT_SECRET
-        self.original_issuer = settings.AUTH_JWT_ISSUER
-        self.original_audience = settings.AUTH_JWT_AUDIENCE
-        settings.AUTH_JWT_SECRET = "phase-2b-test-secret-01234567890"
-        settings.AUTH_JWT_ISSUER = "aura-phase-2b"
-        settings.AUTH_JWT_AUDIENCE = "aura-phase-2b-api"
+        self.auth_environment = patch.dict(
+            os.environ,
+            {
+                "APP_ENV": "test",
+                "AUTH_JWT_SECRET": "phase-2b-test-secret-01234567890",
+                "AUTH_JWT_ISSUER": "aura-phase-2b",
+                "AUTH_JWT_AUDIENCE": "aura-phase-2b-api",
+                "AUTH_JWT_EXPIRE_MINUTES": "60",
+            },
+        )
+        self.auth_environment.start()
+        clear_settings_cache()
 
         self.customer_a = SimpleNamespace(id=uuid4(), is_active=True, token_version=1)
         self.customer_b = SimpleNamespace(id=uuid4(), is_active=True, token_version=1)
@@ -160,9 +168,8 @@ class TestSecureReservationManagement(unittest.TestCase):
                 chat_agent.memory_manager.clear_session(
                     self._memory_key(customer, session_id),
                 )
-        settings.AUTH_JWT_SECRET = self.original_secret
-        settings.AUTH_JWT_ISSUER = self.original_issuer
-        settings.AUTH_JWT_AUDIENCE = self.original_audience
+        self.auth_environment.stop()
+        clear_settings_cache()
 
     def _headers(self, customer):
         token, _ = create_customer_access_token(customer.id, customer.token_version)

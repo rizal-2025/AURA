@@ -2,6 +2,35 @@
 
 Semua perubahan penting pada AURA dicatat di dokumen ini. Repository belum memiliki tag rilis, sehingga entri berikut mengikuti riwayat commit proyek.
 
+## 2026-07-24 - Production Configuration Hardening (V2.0 Phase G1A)
+
+### Added
+
+- `APP_ENV` wajib dengan nilai exact `development`, `test`, `staging`, atau `production`.
+- Settings terpisah untuk environment, database, JWT, AI, dan runner Telegram, dengan facade kompatibilitas lazy untuk pemanggil aplikasi lama.
+- Validator murni untuk secret, issuer/audience, expiry, provider AI, URL Ollama, token Telegram, feature flag, dan integer runner.
+- Kode kegagalan konfigurasi allowlisted `CFG_ENV_INVALID`, `CFG_AUTH_*`, `CFG_AI_*`, dan `CFG_TELEGRAM_*`.
+- Focused regression tests G1A untuk batas nilai, non-disclosure, proses startup, dan konstruksi provider offline.
+
+### Changed
+
+- FastAPI tidak lagi memuat atau memerlukan konfigurasi Telegram.
+- Database dan migrasi hanya memuat environment serta database settings.
+- `AI_PROVIDER` tidak lagi case-folded atau fallback diam-diam; OpenAI tidak lagi memakai dummy key.
+- Telegram handler menerima identity secret tervalidasi melalui dependency runner tanpa fallback global.
+- Settings tervalidasi bersifat immutable; facade compatibility tidak lagi dapat dipakai untuk assignment raw.
+- Field JWT, OpenAI, Telegram, dan database URL disembunyikan dari representasi object/agregat.
+- Validasi string menolak Unicode control/format, placeholder embedded/case-varied, dan repetisi full-string dengan unit praktis apa pun.
+- Validasi FastAPI selesai sebelum router, provider AI, atau service global dibangun.
+- Test tidak lagi mengubah environment secara global dari `tests/__init__.py`; command test wajib menyuplai `APP_ENV=test` secara eksplisit dan complete discovery mencakup `tests/integration`.
+
+### Security notes
+
+- Staging/production menolak issuer/audience development dan Ollama HTTP remote.
+- Error konfigurasi tidak menyertakan secret, token, URL, owner ID, DSN, atau raw environment value.
+- Runtime JWT memakai kembali validator secret startup, sehingga cached/injected config tidak membuka bypass kebijakan.
+- G1A tidak menambah atau menjalankan migrasi.
+
 ## 2026-07-22 - Telegram Owner Ticket Management (V1.9 Phase F)
 
 ### Added

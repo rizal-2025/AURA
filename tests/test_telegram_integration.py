@@ -108,6 +108,7 @@ def private_update(user_id=1001, chat_id=2001, text="halo"):
 class TelegramConfigurationTests(unittest.TestCase):
     def config(self, **overrides):
         values = dict(
+            APP_ENV="test",
             TELEGRAM_BOT_TOKEN=VALID_TOKEN,
             TELEGRAM_IDENTITY_SECRET=IDENTITY_SECRET,
             TELEGRAM_CLEAR_WEBHOOK_ON_START=False,
@@ -143,21 +144,26 @@ class TelegramConfigurationTests(unittest.TestCase):
     def test_fastapi_settings_ignore_missing_or_malformed_telegram_values(self):
         configured = Settings(
             _env_file=None,
+            APP_ENV="test",
             DATABASE_URL="sqlite://",
-            AUTH_JWT_SECRET="x" * 32,
+            AUTH_JWT_SECRET="test-fastapi-secret-not-for-production-12345",
+            AI_PROVIDER="ollama",
+            OLLAMA_BASE_URL="http://localhost:11434/v1",
+            OLLAMA_MODEL="test-model",
             TELEGRAM_BOT_TOKEN=None,
             TELEGRAM_IDENTITY_SECRET=None,
             TELEGRAM_POLL_TIMEOUT_SECONDS="malformed",
             TELEGRAM_CLEAR_WEBHOOK_ON_START="malformed",
         )
-        self.assertIsNone(configured.TELEGRAM_BOT_TOKEN)
-        self.assertEqual(configured.TELEGRAM_POLL_TIMEOUT_SECONDS, "malformed")
+        self.assertFalse(hasattr(configured, "TELEGRAM_BOT_TOKEN"))
+        self.assertFalse(hasattr(configured, "TELEGRAM_POLL_TIMEOUT_SECONDS"))
 
     def test_fastapi_imports_with_malformed_optional_telegram_environment(self):
         environment = dict(os.environ)
         environment.update({
+            "APP_ENV": "test",
             "DATABASE_URL": "sqlite://",
-            "AUTH_JWT_SECRET": "x" * 32,
+            "AUTH_JWT_SECRET": "test-fastapi-secret-not-for-production-12345",
             "TELEGRAM_BOT_TOKEN": "",
             "TELEGRAM_IDENTITY_SECRET": "",
             "TELEGRAM_POLL_TIMEOUT_SECONDS": "not-an-integer",

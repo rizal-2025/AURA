@@ -6,8 +6,9 @@ AURA adalah API FastAPI untuk reservasi restoran berbasis percakapan. V1.5 memak
 
 Salin `.env.example` menjadi `.env`, lalu isi nilai lokal yang aman. Variabel minimum:
 
+- `APP_ENV` — wajib dan harus persis `development`, `test`, `staging`, atau `production`; nilai tidak di-trim dan tidak diubah case.
 - `DATABASE_URL`
-- `AUTH_JWT_SECRET` — minimal 32 karakter acak.
+- `AUTH_JWT_SECRET` — 32–512 karakter acak, tanpa whitespace luar, control character, placeholder, atau pola pengulangan trivial.
 - `AUTH_JWT_ISSUER`, `AUTH_JWT_AUDIENCE`, dan `AUTH_JWT_EXPIRE_MINUTES` (integer ketat antara 1 dan 1440).
 - `SQL_ECHO=false` untuk menonaktifkan log SQL dan nilai query secara default. Jangan aktifkan pada lingkungan yang memproses data pelanggan tanpa kontrol log yang memadai.
 
@@ -17,7 +18,30 @@ Contoh pembuatan secret lokal (jangan kirim atau commit hasilnya):
 .\.venv\Scripts\python.exe -c "import secrets; print(secrets.token_urlsafe(32))"
 ```
 
-Konfigurasi JWT yang tidak valid membuat aplikasi gagal memulai dengan pesan konfigurasi yang aman; nilai secret tidak dicetak. Nilai expiry boolean, float, string desimal, nol, negatif, atau lebih dari 1440 ditolak.
+Konfigurasi JWT yang tidak valid membuat aplikasi gagal memulai dengan kode aman
+`CFG_AUTH_*`; nilai secret tidak dicetak. Nilai expiry boolean, float, string
+desimal, nol, negatif, atau lebih dari 1440 ditolak. Staging dan production
+menolak issuer/audience development `aura` dan `aura-api`, sehingga keduanya
+harus diisi eksplisit untuk deployment.
+
+Konfigurasi dibatasi per proses:
+
+- FastAPI memuat environment, database, JWT, dan provider AI; variabel Telegram tidak dibutuhkan.
+- Runner Telegram memuat environment, database, provider AI, serta konfigurasi runner Telegram.
+- Migrasi manual memuat environment dan database saja.
+
+`AI_PROVIDER` menerima persis `ollama` atau `openai`. Nilai lain menghentikan
+startup dan tidak fallback ke Ollama. OpenAI membutuhkan API key valid ketika
+dipilih dan tidak lagi menggunakan dummy key. Pada staging/production, URL
+Ollama HTTP hanya diizinkan untuk loopback; endpoint remote harus memakai HTTPS.
+Inisialisasi provider tidak melakukan request jaringan.
+
+Kode kegagalan konfigurasi yang aman meliputi `CFG_ENV_INVALID`,
+`CFG_AUTH_SECRET_INVALID`, `CFG_AUTH_EXPIRY_INVALID`,
+`CFG_AUTH_ISSUER_INVALID`, `CFG_AUTH_AUDIENCE_INVALID`,
+`CFG_AI_PROVIDER_INVALID`, `CFG_AI_OPENAI_INVALID`, dan
+`CFG_AI_OLLAMA_INVALID`. Runner memakai kode `CFG_TELEGRAM_*`. Kode tidak
+menyertakan raw environment value, token, URL, ID, atau secret.
 
 ## Migrasi V1.5
 
@@ -156,14 +180,40 @@ Pembuatan reservasi baru selalu memerlukan `owner_customer_id` dari bearer terau
 
 ## Verifikasi
 
-Unit tests, tanpa membutuhkan PostgreSQL eksternal:
+Semua proses test harus menerima `APP_ENV=test` secara eksplisit dari command
+environment; tidak ada bootstrap environment tersembunyi di `tests/__init__.py`.
+Contoh konfigurasi offline yang aman:
+
+```powershell
+$env:APP_ENV = "test"
+$env:DATABASE_URL = "sqlite://"
+$env:SQL_ECHO = "false"
+$env:AUTH_JWT_SECRET = "aura-unit-test-jwt-secret-safe-material-2026"
+$env:AUTH_JWT_ISSUER = "aura"
+$env:AUTH_JWT_AUDIENCE = "aura-api"
+$env:AUTH_JWT_EXPIRE_MINUTES = "60"
+$env:AI_PROVIDER = "ollama"
+$env:OLLAMA_BASE_URL = "http://localhost:11434/v1"
+$env:OLLAMA_MODEL = "aura-test-model"
+```
+
+Test top-level saja (tidak termasuk `tests/integration`):
 
 ```powershell
 $modules = Get-ChildItem tests -File -Filter 'test_*.py' | ForEach-Object { "tests.$($_.BaseName)" }
 .\.venv\Scripts\python.exe -m unittest $modules -v
 ```
 
-PostgreSQL integration tests bersifat opt-in. Gunakan database disposable khusus yang berbeda dari `DATABASE_URL`; nama databasenya harus mengandung `test`:
+Complete repository discovery, termasuk integration tests:
+
+```powershell
+.\.venv\Scripts\python.exe -m unittest discover -s tests -p "test_*.py" -v
+```
+
+Tanpa `TEST_DATABASE_URL`, seluruh PostgreSQL integration tests ditemukan tetapi
+ditandai skipped. Untuk benar-benar menjalankannya, gunakan database disposable
+khusus yang berbeda dari `DATABASE_URL`; nama databasenya harus mengandung
+`test`:
 
 ```powershell
 $env:TEST_DATABASE_URL = "postgresql+psycopg://TEST_USERNAME:TEST_PASSWORD@localhost:5432/aura_test"
@@ -177,3 +227,10 @@ Test Phase F saja dapat dijalankan dengan:
 ```
 
 Jika `TEST_DATABASE_URL` tidak tersedia, integration tests dilewati dengan alasan yang jelas. Test membuat schema unik dan hanya membersihkan schema tersebut.
+
+## AURA V2.0 Phase G1
+
+Phase G1A environment/configuration hardening sudah selesai dan tidak
+memerlukan migrasi. G1B (batas input/body HTTP), G1C (serialisasi percakapan
+customer-session), dan G1D (transaction ownership serta handoff recovery)
+masih pending.

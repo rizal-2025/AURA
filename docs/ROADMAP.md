@@ -28,6 +28,7 @@ Dokumen ini merangkum status pengembangan berdasarkan baseline kode AURA saat in
 - Telegram Customer Bot (V1.7 Phase D): private long polling, persistent HMAC identity, shared authenticated chat workflow, dan `/start`, `/help`, `/status`.
 - Telegram Owner Notification (V1.8 Phase E): transactional outbox tiket baru, runner-only sequential dispatcher, safe renderer, lease recovery, dan bounded retry.
 - Telegram Owner Ticket Management (V1.9 Phase F): command owner private-chat, read model allowlisted, locked/idempotent take-resolve, serta pelepasan automation lock melalui revalidasi tiket persisten.
+- Production Security Foundation (V2.0 G1A): `APP_ENV` wajib, settings per proses, validasi JWT/Telegram/AI fail-closed, kode error konfigurasi aman, tanpa fallback Ollama atau dummy OpenAI key.
 
 ### Fondasi pendukung
 
@@ -37,6 +38,9 @@ Dokumen ini merangkum status pengembangan berdasarkan baseline kode AURA saat in
 
 ## Next Version
 
+- V2.0 G1B: batas field API, validasi bisnis reservasi bersama, dan batas body HTTP.
+- V2.0 G1C: serialisasi async per authenticated customer-session.
+- V2.0 G1D: transaction ownership reservasi, atomic status policy, dan handoff recovery sementara yang bounded.
 - Menyelesaikan siklus reservasi setelah dibuat: cek status per pengguna dan jadwal ulang lanjutan.
 - Mengganti agent placeholder untuk cek reservasi, greeting, dan pertanyaan umum dengan perilaku yang benar-benar fungsional.
 - Menyatukan daftar intent pada classifier, planner, dan workflow; melengkapi handler khusus untuk menu, promo, FAQ, dan keluhan.

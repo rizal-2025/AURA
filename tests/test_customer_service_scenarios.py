@@ -1,4 +1,5 @@
 import json
+import os
 import unittest
 from contextlib import nullcontext
 from pathlib import Path
@@ -9,7 +10,7 @@ from uuid import uuid4
 from fastapi.testclient import TestClient
 
 from app.api.chat import agent as chat_agent
-from app.core.config import settings
+from app.core.config import clear_settings_cache
 from app.core.conversation_memory import build_authenticated_memory_key
 from app.core.security import create_customer_access_token
 from app.db.database import get_db
@@ -70,12 +71,18 @@ class TestCustomerServiceScenarios(unittest.TestCase):
     HANDOFF_SCENARIOS = _load_scenarios("future_handoff.json")
 
     def setUp(self):
-        self.original_secret = settings.AUTH_JWT_SECRET
-        self.original_issuer = settings.AUTH_JWT_ISSUER
-        self.original_audience = settings.AUTH_JWT_AUDIENCE
-        settings.AUTH_JWT_SECRET = "customer-service-test-secret-0123456789"
-        settings.AUTH_JWT_ISSUER = "aura-customer-service-tests"
-        settings.AUTH_JWT_AUDIENCE = "aura-customer-service-api"
+        self.auth_environment = patch.dict(
+            os.environ,
+            {
+                "APP_ENV": "test",
+                "AUTH_JWT_SECRET": "customer-service-test-secret-0123456789",
+                "AUTH_JWT_ISSUER": "aura-customer-service-tests",
+                "AUTH_JWT_AUDIENCE": "aura-customer-service-api",
+                "AUTH_JWT_EXPIRE_MINUTES": "60",
+            },
+        )
+        self.auth_environment.start()
+        clear_settings_cache()
 
         self.customer_a = SimpleNamespace(id=uuid4(), is_active=True, token_version=1)
         self.customer_b = SimpleNamespace(id=uuid4(), is_active=True, token_version=1)
@@ -129,9 +136,8 @@ class TestCustomerServiceScenarios(unittest.TestCase):
         chat_agent.view_reservation_agent.reservation_service = self.original_view_service
         chat_agent.update_reservation_agent.reservation_service = self.original_update_service
         chat_agent.cancel_reservation_agent.reservation_service = self.original_cancel_service
-        settings.AUTH_JWT_SECRET = self.original_secret
-        settings.AUTH_JWT_ISSUER = self.original_issuer
-        settings.AUTH_JWT_AUDIENCE = self.original_audience
+        self.auth_environment.stop()
+        clear_settings_cache()
 
     def test_current_customer_service_scenarios(self):
         for scenario in self.CURRENT_SCENARIOS:

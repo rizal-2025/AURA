@@ -43,6 +43,7 @@ IDENTITY_SECRET = "telegram-identity-secret-that-is-long-enough"
 
 def runner_config(**overrides):
     values = dict(
+        APP_ENV="test",
         TELEGRAM_BOT_TOKEN=VALID_TOKEN,
         TELEGRAM_IDENTITY_SECRET=IDENTITY_SECRET,
         TELEGRAM_CLEAR_WEBHOOK_ON_START=False,
@@ -63,8 +64,12 @@ class OwnerNotificationConfigurationTests(unittest.TestCase):
     def test_fastapi_settings_tolerate_missing_and_malformed_runner_only_values(self):
         configured = Settings(
             _env_file=None,
+            APP_ENV="test",
             DATABASE_URL="sqlite://",
-            AUTH_JWT_SECRET="x" * 32,
+            AUTH_JWT_SECRET="test-fastapi-secret-not-for-production-12345",
+            AI_PROVIDER="ollama",
+            OLLAMA_BASE_URL="http://localhost:11434/v1",
+            OLLAMA_MODEL="test-model",
             TELEGRAM_OWNER_NOTIFICATIONS_ENABLED="malformed",
             TELEGRAM_OWNER_COMMANDS_ENABLED="malformed",
             TELEGRAM_OWNER_CHAT_ID="secret-invalid-id",

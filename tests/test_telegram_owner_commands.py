@@ -66,6 +66,7 @@ def update(*, user_id=OWNER_ID, chat_id=OWNER_ID, chat_type="private", text="/ti
 
 def runner_config(**overrides):
     values = {
+        "APP_ENV": "test",
         "TELEGRAM_BOT_TOKEN": VALID_TOKEN,
         "TELEGRAM_IDENTITY_SECRET": IDENTITY_SECRET,
         "TELEGRAM_CLEAR_WEBHOOK_ON_START": False,
