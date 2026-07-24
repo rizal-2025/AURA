@@ -2,6 +2,37 @@
 
 Semua perubahan penting pada AURA dicatat di dokumen ini. Repository belum memiliki tag rilis, sehingga entri berikut mengikuti riwayat commit proyek.
 
+## 2026-07-24 - Per-Conversation Serialization (V2.0 Phase G1C)
+
+### Added
+
+- Keyed async lock manager in-process dengan reference count holder/waiter,
+  bounded wait 15 detik, cleanup cancellation-safe, dan penolakan reentrancy.
+- Serialisasi satu authenticated customer-session untuk handoff recovery,
+  Create/View/Update/Cancel, ticket/outbox, status tiket, dan mutasi memory.
+- Respons aman HTTP `409 CONVERSATION_BUSY` serta respons busy Telegram tanpa
+  identifier atau raw input.
+- Deterministic concurrency tests untuk isolasi key, timeout, cancellation,
+  exception, registry cleanup, service ordering, HTTP, dan Telegram.
+
+### Changed
+
+- `AuthenticatedChatService.process()` dan `ticket_status()` memakai satu lock
+  manager yang diinjeksi per proses; `ticket_status()` sekarang async.
+- Runner Telegram memakai bounded `concurrent_updates(8)` sehingga percakapan
+  berbeda dapat berjalan bersama tanpa global serialization.
+- Input invalid tetap gagal sebelum lock, sedangkan AI/provider call tetap di
+  dalam lock agar pesan berikutnya tidak menyalip.
+
+### Limitations
+
+- Lock hanya berlaku dalam satu proses Python. Deployment memerlukan satu
+  FastAPI/Uvicorn worker dan satu proses polling Telegram.
+- Proses FastAPI dan Telegram yang terpisah tidak saling berbagi lock; satu
+  percakapan harus konsisten melalui satu ingress process.
+- Distributed locking dan transaction/memory rollback tetap di luar G1C.
+- Tidak ada perubahan schema atau migration.
+
 ## 2026-07-24 - Input and HTTP Body Bounds (V2.0 Phase G1B)
 
 ### Added

@@ -14,6 +14,24 @@ Dokumen ini menjelaskan kemampuan yang tersedia pada baseline AURA saat ini. Bag
 
 FastAPI juga menyediakan spesifikasi OpenAPI dan antarmuka dokumentasi interaktif bawaan.
 
+## Serialisasi percakapan - V2.0 G1C
+
+- **Keyed async lock:** satu authenticated customer-session hanya menjalankan
+  satu operasi stateful pada satu waktu di dalam proses Python yang sama.
+- **Cakupan penuh:** lock meliputi handoff recovery, memory, classifier/AI,
+  Create/View/Update/Cancel, ticket/outbox, dan status tiket.
+- **Konkurensi terisolasi:** customer atau session berbeda memakai lock berbeda
+  dan tetap dapat diproses bersama.
+- **Bounded wait:** setelah 15 detik HTTP menerima
+  `409 CONVERSATION_BUSY`, sementara Telegram menerima respons busy generik.
+- **Telegram bounded concurrency:** satu runner menerima maksimal delapan update
+  bersamaan; owner command tidak masuk customer conversation lock.
+- **Fail-safe cleanup:** exception, cancellation, atau timeout melepaskan lock
+  dan membersihkan entry registry tanpa manual release API.
+- **Batas proses:** satu Uvicorn worker dan satu polling process wajib digunakan.
+  FastAPI dan Telegram pada proses terpisah tidak berbagi lock; distributed
+  coordination belum tersedia.
+
 ## Orkestrasi chat berbasis AI
 
 - **Provider AI yang dapat dipilih:** AURA dapat memakai Ollama atau OpenAI melalui factory provider yang sama.

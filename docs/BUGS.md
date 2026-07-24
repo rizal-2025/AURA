@@ -48,6 +48,33 @@ belum ditegakkan; validator tanggal saat ini sengaja hanya memeriksa tanggal
 kanonis yang nyata agar tidak bergantung pada timezone host. Parsing tanggal
 relatif memakai UTC+7 sebagai timezone bisnis AURA yang disengaja.
 
+## Audit V2.0 Phase G1C - fixed with documented process boundary
+
+- Pesan untuk authenticated customer-session yang sama kini diserialisasi dari
+  handoff recovery sampai workflow, repository/ticket/outbox, dan mutasi memory.
+- Lock timeout setelah 15 detik tidak fallback ke pemrosesan concurrent; HTTP
+  mengembalikan `409 CONVERSATION_BUSY` dan Telegram memakai respons generik.
+- Holder exception/cancellation, waiter cancellation, dan timeout melepaskan
+  reference serta membersihkan registry. Same-task reentrancy ditolak.
+- Status tiket memakai lock manager yang sama dengan chat state-changing.
+- Runner Telegram tidak lagi melakukan global serialization; maksimal delapan
+  update dapat berjalan bersama dan keyed lock mengisolasi percakapan yang sama.
+
+Keterbatasan yang masih terbuka dan disengaja: lock G1C hanya in-process.
+Deployment wajib satu Uvicorn worker dan satu polling process. FastAPI dan
+Telegram dalam proses berbeda tidak berbagi lock, sehingga satu percakapan
+logis harus konsisten melalui satu ingress process. Distributed coordination
+serta transaction/memory rollback tetap pekerjaan lanjutan, bukan klaim G1C.
+Tidak ada schema atau migration G1C.
+
+Perintah tiket owner juga tidak mengambil customer conversation lock. Row lock
+database tetap melindungi transisi status tiket, tetapi resolve owner yang
+berpacu dengan customer handoff restoration dapat membuat customer menerima
+satu respons stale bahwa bantuan petugas masih ditunggu. Tiket terminal tidak
+dibuka kembali, dan pesan customer berikutnya merekonsiliasi state tersebut.
+Koordinasi lifecycle dan transaction secara penuh tetap pekerjaan G1D; race ini
+tidak dinyatakan selesai oleh G1C dan tidak membutuhkan perubahan schema.
+
 ## Audit V1.5 Phase 3A - fixed
 
 Audit rilis sebelumnya menemukan beberapa risiko yang telah ditangani pada Phase 3A:

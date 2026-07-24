@@ -279,7 +279,7 @@ def build_application(config=None, **handler_dependencies):
     application = (
         ApplicationBuilder()
         .token(runner_config.bot_token)
-        .concurrent_updates(False)
+        .concurrent_updates(8)
         .post_init(prepare_polling)
         .post_shutdown(shutdown_owner_notifications)
         .build()

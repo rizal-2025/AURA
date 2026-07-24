@@ -32,6 +32,9 @@ Dokumen ini merangkum status pengembangan berdasarkan baseline kode AURA saat in
 - Input and HTTP Body Bounds (V2.0 G1B): validator bersama untuk chat,
   Telegram, Create/Update reservasi, schema strict tanpa extra field, respons
   validasi tanpa raw payload, serta batas request body 16 KiB.
+- Per-Conversation Serialization (V2.0 G1C): keyed async lock in-process untuk
+  authenticated customer-session, timeout 15 detik, HTTP/Telegram busy mapping,
+  serialized ticket status, dan bounded Telegram concurrency delapan update.
 
 ### Fondasi pendukung
 
@@ -41,7 +44,6 @@ Dokumen ini merangkum status pengembangan berdasarkan baseline kode AURA saat in
 
 ## Next Version
 
-- V2.0 G1C: serialisasi async per authenticated customer-session.
 - V2.0 G1D: transaction ownership reservasi, atomic status policy, dan handoff recovery sementara yang bounded.
 - Menyelesaikan siklus reservasi setelah dibuat: cek status per pengguna dan jadwal ulang lanjutan.
 - Mengganti agent placeholder untuk cek reservasi, greeting, dan pertanyaan umum dengan perilaku yang benar-benar fungsional.
@@ -61,6 +63,9 @@ Dokumen ini merangkum status pengembangan berdasarkan baseline kode AURA saat in
 - Registrasi, pemulihan akun, dan autentikasi pelanggan permanen dengan kebijakan verifikasi yang sesuai.
 - Observabilitas produksi: metrik, tracing, audit log, rate limiting, dan alerting.
 - Penyimpanan memori yang dapat dibagi antar-instance serta strategi deployment yang siap skala.
+- Distributed conversation serialization untuk multi-worker/multi-instance,
+  misalnya melalui queue, Redis, atau PostgreSQL advisory locking setelah
+  threat model dan recovery semantics ditetapkan.
 - Deployment Telegram multi-instance/webhook dengan koordinasi dispatcher dan observabilitas delivery.
 # V1.7
 

@@ -14,8 +14,12 @@ from uuid import uuid4
 import httpx
 
 from app.core.config import Settings
+from app.core.conversation_lock_manager import ConversationBusyError
 from app.core.logger import RedactingFormatter, configure_safe_logging, logger
-from app.integrations.telegram.handlers import TelegramCustomerHandlers
+from app.integrations.telegram.handlers import (
+    CONVERSATION_BUSY_REPLY,
+    TelegramCustomerHandlers,
+)
 from app.integrations.telegram.identity import (
     derive_telegram_session_reference,
     derive_telegram_user_key,
@@ -92,7 +96,7 @@ class FakeChatService:
         self.calls.append(kwargs)
         return self.response
 
-    def ticket_status(self, **kwargs):
+    async def ticket_status(self, **kwargs):
         self.status_calls.append(kwargs)
         return self.status_response
 
@@ -219,6 +223,13 @@ class TelegramConfigurationTests(unittest.TestCase):
     def test_application_registers_safe_error_handler_without_network(self):
         application = build_application(self.config())
         self.assertIn(safe_ptb_error_handler, application.error_handlers)
+        self.assertEqual(application.update_processor.max_concurrent_updates, 8)
+        command_order = [
+            next(iter(handler.commands))
+            for handler in application.handlers[0]
+            if getattr(handler, "commands", None)
+        ]
+        self.assertEqual(command_order[:3], ["start", "help", "status"])
 
 
 class TelegramHandlerTests(unittest.TestCase):
@@ -261,6 +272,47 @@ class TelegramHandlerTests(unittest.TestCase):
         self.assertEqual(call["message"], "lihat reservasi saya")
         self.assertEqual(call["customer"], self.identity.customers[1001])
         self.assertRegex(call["session_reference"], r"^[0-9a-f]{64}$")
+
+    def test_busy_customer_message_returns_safe_reply(self):
+        class BusyChatService(FakeChatService):
+            async def process(self, **kwargs):
+                self.calls.append(kwargs)
+                raise ConversationBusyError()
+
+        self.db = FakeDb()
+        self.identity = FakeIdentityService()
+        self.chat = BusyChatService()
+        handlers = TelegramCustomerHandlers(
+            identity_secret=IDENTITY_SECRET,
+            session_factory=lambda: self.db,
+            identity_service=self.identity,
+            chat_service=self.chat,
+        )
+        update = private_update(text="halo")
+        asyncio.run(handlers.text_message(update, None))
+        self.assertEqual(update.effective_message.replies, [(CONVERSATION_BUSY_REPLY, {})])
+        self.assertLessEqual(len(update.effective_message.replies[0][0]), 4096)
+        self.assertEqual(self.db.rollbacks, 1)
+
+    def test_busy_ticket_status_returns_safe_reply(self):
+        class BusyChatService(FakeChatService):
+            async def ticket_status(self, **kwargs):
+                self.status_calls.append(kwargs)
+                raise ConversationBusyError()
+
+        self.db = FakeDb()
+        self.identity = FakeIdentityService()
+        self.chat = BusyChatService()
+        handlers = TelegramCustomerHandlers(
+            identity_secret=IDENTITY_SECRET,
+            session_factory=lambda: self.db,
+            identity_service=self.identity,
+            chat_service=self.chat,
+        )
+        update = private_update(text="/status")
+        asyncio.run(handlers.status(update, None))
+        self.assertEqual(update.effective_message.replies, [(CONVERSATION_BUSY_REPLY, {})])
+        self.assertEqual(self.db.rollbacks, 1)
 
     def test_group_and_non_text_messages_do_not_reach_chat_service(self):
         handlers = self.make_handlers()
@@ -439,11 +491,19 @@ class AuthenticatedTicketStatusTests(unittest.TestCase):
         active_db = SimpleNamespace(ticket=SimpleNamespace(ticket_number="CS-2026-000007"))
         self.assertIn(
             "CS-2026-000007",
-            service.ticket_status(db=active_db, customer=SimpleNamespace(id=owner_a), session_reference="session"),
+            asyncio.run(service.ticket_status(
+                db=active_db,
+                customer=SimpleNamespace(id=owner_a),
+                session_reference="session",
+            )),
         )
         self.assertIn(
             "tidak memiliki tiket",
-            service.ticket_status(db=SimpleNamespace(ticket=None), customer=SimpleNamespace(id=owner_b), session_reference="session"),
+            asyncio.run(service.ticket_status(
+                db=SimpleNamespace(ticket=None),
+                customer=SimpleNamespace(id=owner_b),
+                session_reference="session",
+            )),
         )
         self.assertEqual(calls[0][0], owner_a)
         self.assertEqual(calls[1][0], owner_b)

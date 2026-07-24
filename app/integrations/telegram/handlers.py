@@ -1,5 +1,6 @@
 """Private-chat Telegram handlers that delegate to the shared chat boundary."""
 
+from app.core.conversation_lock_manager import ConversationBusyError
 from app.core.input_validation import InputValidationError, normalize_chat_message
 from app.core.logger import logger
 from app.integrations.telegram.identity import derive_telegram_session_reference
@@ -14,6 +15,7 @@ PRIVATE_CHAT_ONLY_REPLY = "Bot ini saat ini hanya mendukung chat pribadi."
 IDENTITY_UNAVAILABLE_REPLY = "Identitas Telegram tidak tersedia. Silakan coba lagi nanti."
 SERVICE_UNAVAILABLE_REPLY = "Maaf, layanan AURA sedang tidak tersedia. Silakan coba lagi."
 INVALID_INPUT_REPLY = "Pesan tidak valid atau terlalu panjang. Silakan periksa kembali."
+CONVERSATION_BUSY_REPLY = "Pesan sebelumnya masih diproses. Silakan coba lagi sebentar."
 WELCOME_REPLY = (
     "Halo, saya AURA. Saya dapat membantu reservasi, melihat, mengubah, atau "
     "membatalkan reservasi Anda."
@@ -141,6 +143,10 @@ class TelegramCustomerHandlers:
             else:
                 db.rollback()
                 await self._safe_reply(telegram_message, SERVICE_UNAVAILABLE_REPLY)
+        except ConversationBusyError:
+            db.rollback()
+            logger.info("TELEGRAM UPDATE: outcome=busy")
+            await self._safe_reply(telegram_message, CONVERSATION_BUSY_REPLY)
         except InputValidationError:
             db.rollback()
             logger.info("TELEGRAM UPDATE: outcome=rejected category=input_invalid")
@@ -195,13 +201,17 @@ class TelegramCustomerHandlers:
             await self._safe_reply(message, SERVICE_UNAVAILABLE_REPLY)
             return
         try:
-            response = self._chat_service().ticket_status(
+            response = await self._chat_service().ticket_status(
                 db=db,
                 customer=customer,
                 session_reference=session_reference,
             )
             if not await self._safe_reply(message, response):
                 db.rollback()
+        except ConversationBusyError:
+            db.rollback()
+            logger.info("TELEGRAM UPDATE: outcome=busy")
+            await self._safe_reply(message, CONVERSATION_BUSY_REPLY)
         except Exception:
             db.rollback()
             logger.info("TELEGRAM UPDATE: outcome=status_error")

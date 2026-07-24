@@ -43,6 +43,42 @@ Kode kegagalan konfigurasi yang aman meliputi `CFG_ENV_INVALID`,
 `CFG_AI_OLLAMA_INVALID`. Runner memakai kode `CFG_TELEGRAM_*`. Kode tidak
 menyertakan raw environment value, token, URL, ID, atau secret.
 
+## Serialisasi percakapan V2.0 G1C
+
+Setiap operasi chat terautentikasi memakai lock async in-process berdasarkan
+scope internal yang sama dengan memory percakapan: authenticated customer dan
+session reference tervalidasi. Dua pesan untuk percakapan yang sama diproses
+bergantian dari handoff recovery sampai workflow, database/ticket/outbox, dan
+mutasi memory selesai. Percakapan dengan customer atau session berbeda tetap
+dapat berjalan bersamaan.
+
+Waktu tunggu lock dibatasi 15 detik. HTTP mengembalikan status `409` dengan kode
+aman `CONVERSATION_BUSY`; Telegram menjawab
+`Pesan sebelumnya masih diproses. Silakan coba lagi sebentar.` Lock key,
+customer UUID, session reference, dan input mentah tidak dimasukkan ke respons
+atau log.
+
+G1C hanya bekerja di dalam satu proses Python. Deployment saat ini wajib memakai
+satu FastAPI/Uvicorn worker dan satu proses Telegram polling. Runner Telegram
+memproses maksimal delapan update secara bersamaan, lalu keyed lock memastikan
+percakapan yang sama tetap serial. FastAPI dan Telegram yang berjalan sebagai
+proses OS terpisah tidak berbagi lock; satu percakapan logis harus diarahkan
+konsisten melalui satu ingress process. Multiple FastAPI instance, distributed
+locking, Redis, advisory lock, dan queue belum didukung.
+
+Lock ini tidak menyediakan rollback memory atau transaction ownership. Database
+transaction hardening tetap menjadi pekerjaan V2.0 G1D. G1C tidak menambah
+schema atau migration.
+
+Perintah tiket owner dan pemrosesan percakapan customer tidak memakai lock
+percakapan in-process yang sama. Transisi tiket oleh owner tetap dilindungi row
+lock database, tetapi resolve yang berjalan bersamaan dengan pemulihan handoff
+customer dapat menghasilkan satu respons lama bahwa percakapan masih menunggu
+petugas. Pesan customer berikutnya merekonsiliasi status terminal dan melepas
+handoff state yang sudah tidak aktif. Koordinasi lifecycle/transaction secara
+penuh tetap scope G1D; keterbatasan ini tidak diperbaiki atau diklaim selesai
+oleh G1C dan tidak memerlukan migration schema.
+
 ## Migrasi V1.5
 
 Jalankan sekali pada database yang sudah memiliki tabel `reservations`:
@@ -89,7 +125,7 @@ Jalankan migrasi identitas dan outbox secara manual setelah meninjau database, k
 .\.venv\Scripts\python.exe -m app.integrations.telegram.runner
 ```
 
-Jangan menjalankan migrasi otomatis saat startup. Bot hanya menerima private chat, dengan `/start`, `/help`, dan `/status`; gambar, file, voice note, kontak, dan lokasi tidak diteruskan ke AURA. Hanya satu polling instance yang didukung untuk demo ini.
+Jangan menjalankan migrasi otomatis saat startup. Bot hanya menerima private chat, dengan `/start`, `/help`, dan `/status`; gambar, file, voice note, kontak, dan lokasi tidak diteruskan ke AURA. Hanya satu polling instance yang didukung untuk demo ini. Di dalam proses tersebut, maksimal delapan update ditangani bersamaan dan pesan customer-session yang sama diserialisasi oleh keyed conversation lock.
 
 Identitas Telegram tidak memakai bearer token: AURA membuat atau memakai `Customer` server-side dari HMAC-SHA256 atas Telegram user ID. User ID/chat ID mentah, username, dan token tidak disimpan. Referensi percakapan juga berupa HMAC internal, sehingga workflow, ownership, handoff, dan ticket tetap terisolasi.
 

@@ -1,7 +1,11 @@
 from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
 from app.core.config import get_application_settings
-from app.api.error_handlers import request_validation_exception_handler
+from app.core.conversation_lock_manager import ConversationBusyError
+from app.api.error_handlers import (
+    conversation_busy_exception_handler,
+    request_validation_exception_handler,
+)
 from app.middleware.request_body_limit import RequestBodyLimitMiddleware
 
 application_settings = get_application_settings()
@@ -14,6 +18,10 @@ app.add_middleware(RequestBodyLimitMiddleware)
 app.add_exception_handler(
     RequestValidationError,
     request_validation_exception_handler,
+)
+app.add_exception_handler(
+    ConversationBusyError,
+    conversation_busy_exception_handler,
 )
 
 from app.api.auth import router as auth_router

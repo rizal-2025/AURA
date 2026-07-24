@@ -4,6 +4,7 @@ from fastapi import Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
+from app.core.conversation_lock_manager import ConversationBusyError
 from app.core.input_validation import (
     CHAT_MESSAGE_EMPTY,
     CHAT_MESSAGE_INVALID,
@@ -25,6 +26,7 @@ from app.core.logger import logger
 REQUEST_BODY_TOO_LARGE = "REQUEST_BODY_TOO_LARGE"
 INVALID_REQUEST_FRAMING = "INVALID_REQUEST_FRAMING"
 REQUEST_VALIDATION_FAILED = "REQUEST_VALIDATION_FAILED"
+CONVERSATION_BUSY = "CONVERSATION_BUSY"
 
 _KNOWN_FIELD_CODES = {
     "session_id": CHAT_SESSION_ID_INVALID,
@@ -54,6 +56,20 @@ def invalid_request_framing_response() -> JSONResponse:
         content={
             "code": INVALID_REQUEST_FRAMING,
             "detail": "Request framing is invalid.",
+        },
+    )
+
+
+async def conversation_busy_exception_handler(
+    _request: Request,
+    _error: ConversationBusyError,
+) -> JSONResponse:
+    logger.info("HTTP REQUEST: status=409 code=%s", CONVERSATION_BUSY)
+    return JSONResponse(
+        status_code=409,
+        content={
+            "code": CONVERSATION_BUSY,
+            "detail": "This conversation is still processing a previous message.",
         },
     )
 
