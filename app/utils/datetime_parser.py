@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 import re
 
 WEEKDAYS = {
@@ -15,10 +15,15 @@ WEEKDAYS = {
 class DatetimeParser:
 
     @staticmethod
-    def parse_date(text: str) -> str | None:
+    def parse_date(
+        text: str,
+        *,
+        reference_date: date | None = None,
+    ) -> str | None:
         text = text.lower()
-
-        today = datetime.today()
+        today = reference_date or datetime.now(
+            timezone(timedelta(hours=7)),
+        ).date()
 
         for day_name, weekday in WEEKDAYS.items():
             if day_name in text:

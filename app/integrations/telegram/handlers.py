@@ -1,5 +1,6 @@
 """Private-chat Telegram handlers that delegate to the shared chat boundary."""
 
+from app.core.input_validation import InputValidationError, normalize_chat_message
 from app.core.logger import logger
 from app.integrations.telegram.identity import derive_telegram_session_reference
 from app.integrations.telegram.identity_service import (
@@ -12,6 +13,7 @@ from app.integrations.telegram.message_utils import split_telegram_reply
 PRIVATE_CHAT_ONLY_REPLY = "Bot ini saat ini hanya mendukung chat pribadi."
 IDENTITY_UNAVAILABLE_REPLY = "Identitas Telegram tidak tersedia. Silakan coba lagi nanti."
 SERVICE_UNAVAILABLE_REPLY = "Maaf, layanan AURA sedang tidak tersedia. Silakan coba lagi."
+INVALID_INPUT_REPLY = "Pesan tidak valid atau terlalu panjang. Silakan periksa kembali."
 WELCOME_REPLY = (
     "Halo, saya AURA. Saya dapat membantu reservasi, melihat, mengubah, atau "
     "membatalkan reservasi Anda."
@@ -139,6 +141,10 @@ class TelegramCustomerHandlers:
             else:
                 db.rollback()
                 await self._safe_reply(telegram_message, SERVICE_UNAVAILABLE_REPLY)
+        except InputValidationError:
+            db.rollback()
+            logger.info("TELEGRAM UPDATE: outcome=rejected category=input_invalid")
+            await self._safe_reply(telegram_message, INVALID_INPUT_REPLY)
         except Exception:
             db.rollback()
             logger.info("TELEGRAM UPDATE: outcome=service_error")
@@ -206,14 +212,22 @@ class TelegramCustomerHandlers:
     async def text_message(self, update, context) -> None:
         message = getattr(update, "effective_message", None)
         text = getattr(message, "text", None)
-        if not isinstance(text, str) or not text.strip():
+        if not isinstance(text, str):
             await self.non_text_message(update, context)
             return
-        if text.lstrip().startswith("/"):
+        try:
+            normalized_text = normalize_chat_message(text)
+        except InputValidationError:
+            private_context = await self._validated_private_context(update)
+            if private_context is not None:
+                logger.info("TELEGRAM UPDATE: outcome=rejected category=input_invalid")
+                await self._safe_reply(private_context[2], INVALID_INPUT_REPLY)
+            return
+        if normalized_text.lstrip().startswith("/"):
             if await self._validated_private_context(update) is not None:
                 await self._safe_reply(message, HELP_REPLY)
             return
-        await self._customer_message(update, text)
+        await self._customer_message(update, normalized_text)
 
     async def non_text_message(self, update, context) -> None:
         private_context = await self._validated_private_context(update)

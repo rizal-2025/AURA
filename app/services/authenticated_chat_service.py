@@ -2,6 +2,10 @@
 
 from app.agents.orchestrator import AgentOrchestrator
 from app.core.conversation_memory import build_authenticated_memory_key
+from app.core.input_validation import (
+    normalize_chat_message,
+    validate_session_reference,
+)
 from app.core.ownership import require_owner_customer_id
 
 
@@ -11,6 +15,8 @@ class AuthenticatedChatService:
 
     async def process(self, *, db, customer, session_reference: str, message: str) -> str:
         owner_customer_id = require_owner_customer_id(getattr(customer, "id", None))
+        session_reference = validate_session_reference(session_reference)
+        message = normalize_chat_message(message)
         memory_key = build_authenticated_memory_key(owner_customer_id, session_reference)
         try:
             self.agent.handoff_service.restore_active_handoff(
@@ -33,6 +39,7 @@ class AuthenticatedChatService:
     def ticket_status(self, *, db, customer, session_reference: str) -> str:
         """Return customer-scoped active ticket status without AI or state mutation."""
         owner_customer_id = require_owner_customer_id(getattr(customer, "id", None))
+        session_reference = validate_session_reference(session_reference)
         memory_key = build_authenticated_memory_key(owner_customer_id, session_reference)
         ticket = self.agent.handoff_service.ticket_service.get_active(
             db,

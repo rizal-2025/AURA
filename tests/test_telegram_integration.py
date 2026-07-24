@@ -273,6 +273,18 @@ class TelegramHandlerTests(unittest.TestCase):
         self.assertIn("chat pribadi", group.effective_message.replies[0][0])
         self.assertIn("pesan teks", image.effective_message.replies[0][0])
 
+    def test_invalid_text_is_rejected_before_identity_or_chat(self):
+        handlers = self.make_handlers()
+        raw_text = "private-telegram-message\u200bmust-not-leak"
+        update = private_update(text=raw_text)
+        with self.assertLogs("AURA", level="INFO") as captured:
+            asyncio.run(handlers.text_message(update, None))
+        self.assertEqual(self.identity.calls, [])
+        self.assertEqual(self.chat.calls, [])
+        self.assertIn("Pesan tidak valid", update.effective_message.replies[0][0])
+        self.assertNotIn(raw_text, update.effective_message.replies[0][0])
+        self.assertNotIn(raw_text, "\n".join(captured.output))
+
     def test_long_reply_is_safe_plain_text_chunks(self):
         handlers = self.make_handlers("x" * 9000)
         update = private_update()

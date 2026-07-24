@@ -3,6 +3,11 @@ import json
 from app.services.ai.factory import get_ai_provider
 from app.utils.datetime_parser import DatetimeParser
 from app.core.logger import logger
+from app.core.input_validation import (
+    InputValidationError,
+    normalize_chat_message,
+    validate_reservation_field,
+)
 
 class ReservationExtractor:
 
@@ -10,6 +15,7 @@ class ReservationExtractor:
             self,
             message: str):
 
+        message = normalize_chat_message(message)
         provider = get_ai_provider()
 
         prompt = f"""
@@ -107,8 +113,20 @@ Pesan pengguna:
             parsed_time = DatetimeParser.parse_time(message)
             if parsed_time:
                 result["time"] = parsed_time
-
-            return result
+            validated = {}
+            for field_name in ("name", "people", "date", "time"):
+                value = result.get(field_name)
+                if value is None:
+                    validated[field_name] = None
+                    continue
+                try:
+                    validated[field_name] = validate_reservation_field(
+                        field_name,
+                        value,
+                    )
+                except InputValidationError:
+                    validated[field_name] = None
+            return validated
 
         except Exception:
             logger.error("Reservation extraction response parsing failed.")

@@ -141,7 +141,7 @@ class TestSecureReservationCreate(unittest.TestCase):
 
     def test_custom_aura_logs_do_not_include_bearer_token_or_secret(self):
         token = self._token_for(self.customer_a)
-        session_id = f"session-payload-{token}"
+        session_id = "session-payload-sensitive"
         reservation_db = MagicMock()
         with (
             patch("app.agents.reservation_agent.SessionLocal", return_value=reservation_db),

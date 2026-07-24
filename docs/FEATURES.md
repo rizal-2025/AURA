@@ -79,6 +79,18 @@ FastAPI juga menyediakan spesifikasi OpenAPI dan antarmuka dokumentasi interakti
 
 - **Persistensi reservasi:** model `Reservation`, repository, dan service memisahkan penyimpanan database dari layer API/agent, termasuk filter ownership berbasis `owner_customer_id` yang tervalidasi server.
 - **Schema data:** Pydantic memvalidasi bentuk request chat dan data reservasi.
+- **Input bounds V2.0 G1B:** `session_id`, pesan chat, nama, jumlah orang,
+  tanggal, dan waktu memakai validator bersama pada HTTP, Telegram, service,
+  Create, dan Update. Field tambahan serta coercion boolean/float/string untuk
+  jumlah orang ditolak.
+- **Unicode aman:** pesan tetap mendukung bahasa Indonesia, emoji, tanda baca,
+  dan line break normal, tetapi NUL, control, bidi control, serta zero-width
+  format character ditolak. Nama dinormalisasi NFC dengan alfabet tanda baca
+  yang dibatasi.
+- **HTTP body bounds:** request body maksimal 16.384 byte dengan early
+  `Content-Length` rejection dan pembacaan bounded untuk body tanpa panjang.
+- **Error validation aman:** respons `400`/`413`/`422` memakai kode stabil dan
+  tidak menggemakan payload, credential, identifier, atau exception text.
 - **Profil preferensi:** komponen long-term memory in-memory dapat menyimpan, mengambil, menggabungkan, memperbarui, dan menghapus preferensi nama, jumlah orang, waktu, serta meja favorit bila `user_id` tersedia pada state sesi.
 
 ## Komponen pendukung

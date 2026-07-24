@@ -202,6 +202,7 @@ class TestUpdateReservation(unittest.TestCase):
             "sembilan",
             "",
             "0",
+            "21",
             "-5",
             "3.5",
             "9 dan 10",

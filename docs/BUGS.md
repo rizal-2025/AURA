@@ -19,7 +19,34 @@ Pencarian pada source juga tidak menemukan penanda `TODO`, `FIXME`, `BUG`, atau 
 - Temuan adversarial lanjutan tentang mutation bypass, secret-bearing `repr`, bootstrap environment test, Unicode format/control, placeholder embedded, repetisi unit panjang, dan urutan konstruksi startup telah diperbaiki.
 - Full test discovery kini dibedakan dari test top-level dan selalu menemukan suite `tests/integration`; PostgreSQL tetap opt-in melalui `TEST_DATABASE_URL`.
 
-G1A tidak mengubah schema/database. Batas input/body, serialisasi percakapan, dan hardening transaksi tetap dicatat sebagai G1B/G1C/G1D, bukan bug yang diklaim selesai.
+G1A tidak mengubah schema/database. Serialisasi percakapan dan hardening
+transaksi tetap dicatat sebagai G1C/G1D, bukan bug yang diklaim selesai.
+
+## Audit V2.0 Phase G1B - fixed after adversarial review
+
+- Input chat dan reservasi memiliki batas panjang/karakter yang sama pada HTTP,
+  Telegram, shared service, Create, dan Update.
+- Coercion `people` dari boolean, float, atau string ditolak; rentang yang
+  diterima hanya integer 1–20.
+- Control, bidi control, zero-width format character, field JSON ekstra, serta
+  tanggal/waktu direct API yang tidak kanonis ditolak.
+- Request body dibatasi 16.384 byte tanpa unbounded buffering. Framing panjang
+  malformed, konflik, atau tidak cocok menghasilkan respons generik.
+- Representasi duplicate `Content-Length` dibandingkan sebelum konversi
+  integer, sehingga `3`/`03` dan `3,003` ditolak sementara token mentah identik
+  tetap diterima.
+- Service Create selalu merevalidasi mapping field baru; model termutasi atau
+  hasil `model_construct()` tidak dapat mengirim nilai nonkanonis ke repository.
+- Koma sebelum clause reservasi dipisahkan oleh extractor tanpa memperluas
+  allowlist nama. Nama punctuation-only/mark-only ditolak.
+- Frame body dibatasi 1.024; disconnect sebelum body lengkap tidak menjalankan
+  endpoint dan tidak memantulkan data.
+- Error `422` tidak lagi memuat raw payload/input pada respons.
+
+G1B tidak mengubah schema/database. Kebijakan tanggal lampau dan availability
+belum ditegakkan; validator tanggal saat ini sengaja hanya memeriksa tanggal
+kanonis yang nyata agar tidak bergantung pada timezone host. Parsing tanggal
+relatif memakai UTC+7 sebagai timezone bisnis AURA yang disengaja.
 
 ## Audit V1.5 Phase 3A - fixed
 

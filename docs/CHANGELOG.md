@@ -2,6 +2,41 @@
 
 Semua perubahan penting pada AURA dicatat di dokumen ini. Repository belum memiliki tag rilis, sehingga entri berikut mengikuti riwayat commit proyek.
 
+## 2026-07-24 - Input and HTTP Body Bounds (V2.0 Phase G1B)
+
+### Added
+
+- Validator input bersama untuk HTTP, authenticated chat service, Telegram, dan workflow reservasi.
+- Batas `session_id` 1–128 karakter dengan alfabet ASCII terbatas serta pesan chat 1–4096 Unicode code point.
+- Normalisasi nama reservasi Unicode NFC, integer party size ketat 1–20, tanggal nyata kanonis `YYYY-MM-DD`, dan waktu kanonis `HH:MM`.
+- Pure ASGI middleware dengan batas request body 16.384 byte, early rejection `Content-Length`, serta bounded buffering untuk body tanpa panjang/chunked.
+- Respons aman `400`, `413`, dan `422` dengan kode stabil tanpa raw payload atau exception text.
+- Regression tests untuk batas persis, Unicode/control/format, extra fields, parity HTTP/Telegram/service, framing HTTP, dan non-disclosure.
+
+### Changed
+
+- Schema chat dan reservasi sekarang melarang field tambahan serta coercion tipe yang tidak aman.
+- Create dan Update memakai validator bisnis yang sama pada hasil ekstraksi natural-language dan sebelum repository mutation.
+- Boundary Create membangun ulang empat field publik dan selalu merevalidasi
+  schema baru; instance Pydantic termutasi/`model_construct()` tidak dipercaya.
+- Duplicate `Content-Length` hanya diterima bila token mentah identik. Single
+  leading-zero tetap diterima, tetapi `3` dan `03` tidak ekuivalen sebagai
+  duplicate.
+- Pembacaan body dibatasi maksimum 1.024 frame untuk mencegah loop frame kosong.
+- Extractor nama mempertahankan nama bertanda baca valid serta memisahkan koma
+  clause reservasi; nama tersimpan wajib memiliki sedikitnya satu huruf/digit.
+- Line ending pesan dinormalisasi ke `LF`; `session_id` tidak pernah di-trim atau dinormalisasi.
+- Parser tanggal relatif memakai referensi eksplisit atau UTC+7 sebagai
+  timezone bisnis AURA, bukan timezone lokal host.
+
+### Security notes
+
+- Body lebih dari 16 KiB tidak diteruskan ke endpoint; middleware tidak pernah mencatat body.
+- Hasil adversarial review untuk representasi `Content-Length`, revalidasi
+  service, dan kompatibilitas nama natural telah ditutup dengan regression test.
+- Respons validasi tidak menggemakan pesan, session ID, nama, token, owner/internal ID, atau raw input.
+- G1B tidak mengubah schema, migration, ownership, autentikasi, atau kontrak API publik yang valid.
+
 ## 2026-07-24 - Production Configuration Hardening (V2.0 Phase G1A)
 
 ### Added

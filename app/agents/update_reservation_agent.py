@@ -4,6 +4,10 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from app.brain.memory_manager import MemoryManager
+from app.core.input_validation import (
+    InputValidationError,
+    validate_reservation_field,
+)
 from app.core.ownership import MissingOwnerCustomerError, require_owner_customer_id
 from app.services.reservation.service import ReservationService
 from app.utils.datetime_parser import DatetimeParser
@@ -230,12 +234,12 @@ class UpdateReservationAgent:
         return None
 
     def _parse_new_value(self, field_name: str, user_message: str) -> Any:
-        text = user_message.strip()
-        if not text:
+        text = user_message
+        if not text or text.isspace():
             return None
 
         if field_name == "name":
-            return text.title()
+            return self._validated_field(field_name, text)
 
         if field_name == "people":
             # Allow one positive whole number in a natural-language reply, while
@@ -251,19 +255,32 @@ class UpdateReservationAgent:
                 return None
 
             people = int(values[0])
-            return people if people > 0 else None
+            return self._validated_field(field_name, people)
 
         if field_name == "date":
-            if re.fullmatch(r"\d{4}-\d{2}-\d{2}", text):
-                return text
-            return DatetimeParser.parse_date(text)
+            candidate = (
+                text
+                if re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", text)
+                else DatetimeParser.parse_date(text)
+            )
+            return self._validated_field(field_name, candidate)
 
         if field_name == "time":
-            if re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", text):
-                return text
-            return DatetimeParser.parse_time(text)
+            candidate = (
+                text
+                if re.fullmatch(r"(?:[01][0-9]|2[0-3]):[0-5][0-9]", text)
+                else DatetimeParser.parse_time(text)
+            )
+            return self._validated_field(field_name, candidate)
 
         return None
+
+    @staticmethod
+    def _validated_field(field_name: str, value: Any) -> Any:
+        try:
+            return validate_reservation_field(field_name, value)
+        except InputValidationError:
+            return None
 
     def _question_for_field(self, field_name: str) -> str:
         questions = {

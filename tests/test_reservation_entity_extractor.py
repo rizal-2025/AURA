@@ -30,6 +30,59 @@ class TestReservationEntityExtractor(unittest.TestCase):
 
         self.assertEqual(result, {})
 
+    def test_comma_delimited_name_before_people_clause(self):
+        extractor = ReservationEntityExtractor()
+        result = asyncio.run(
+            extractor.extract(
+                "Buat reservasi atas nama Rizal, untuk 4 orang besok jam 7 malam"
+            )
+        )
+
+        self.assertEqual(result["name"], "Rizal")
+        self.assertEqual(result["people"], 4)
+
+    def test_multiword_name_before_date_and_time_clause(self):
+        extractor = ReservationEntityExtractor()
+        result = asyncio.run(
+            extractor.extract(
+                "Atas nama Ahmad Rizal, tanggal besok jam 7 malam"
+            )
+        )
+
+        self.assertEqual(result["name"], "Ahmad Rizal")
+
+    def test_valid_name_punctuation_is_preserved(self):
+        extractor = ReservationEntityExtractor()
+        names = (
+            "A.J.",
+            "D'Angelo",
+            "O\u2019Connor",
+            "Smith-Jones",
+            "R&D",
+            "Siti Hari",
+        )
+        for name in names:
+            with self.subTest(name=name):
+                result = asyncio.run(
+                    extractor.extract(f"Atas nama {name}, untuk 4 orang")
+                )
+                self.assertEqual(result["name"], name)
+
+    def test_trailing_sentence_delimiter_policy_preserves_period(self):
+        extractor = ReservationEntityExtractor()
+        period = asyncio.run(extractor.extract("Atas nama A.J."))
+        exclamation = asyncio.run(extractor.extract("Atas nama Rizal!"))
+
+        self.assertEqual(period["name"], "A.J.")
+        self.assertEqual(exclamation["name"], "Rizal")
+
+    def test_invalid_name_punctuation_remains_rejected(self):
+        extractor = ReservationEntityExtractor()
+        for name in ("Bad/Name", "Bad_Name"):
+            with self.subTest(name=name):
+                result = asyncio.run(extractor.extract(f"Atas nama {name}"))
+                self.assertNotIn("name", result)
+
     def test_agent_uses_extractor_and_memory(self):
         agent = ReservationAgent()
         result = asyncio.run(

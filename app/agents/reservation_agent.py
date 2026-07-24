@@ -5,8 +5,15 @@ from typing import Any
 from app.brain.context_resolver import ContextResolver
 from app.brain.conversation_state_manager import ConversationStateManager
 from app.brain.memory_manager import MemoryManager
-from app.brain.reservation_entity_extractor import ReservationEntityExtractor
+from app.brain.reservation_entity_extractor import (
+    ReservationEntityExtractor,
+    normalize_natural_reservation_name,
+)
 from app.db.database import SessionLocal
+from app.core.input_validation import (
+    InputValidationError,
+    validate_reservation_field,
+)
 from app.memory.long_term_memory import LongTermMemoryManager
 from app.schemas.reservation import ReservationCreate
 from app.services.reservation.service import ReservationService
@@ -75,23 +82,27 @@ class ReservationAgent:
 
         extracted = await self.entity_extractor.extract(user_message)
         pending_field = self._infer_pending_field(session_state)
-        updates = dict(extracted or {})
-        if pending_field and not updates.get(pending_field):
+        candidates = dict(extracted or {})
+        pending_value_invalid = False
+        if pending_field and not candidates.get(pending_field):
             inferred_value = self._infer_value_for_field(pending_field, user_message)
             if inferred_value is not None:
-                updates[pending_field] = inferred_value
+                candidates[pending_field] = inferred_value
+            else:
+                pending_value_invalid = True
 
+        updates = {}
+        invalid_fields = set()
+        for key, value in candidates.items():
+            if key not in self.EDITABLE_FIELDS or value is None:
+                continue
+            normalized_value = self._normalize_and_validate_field(key, value)
+            if normalized_value is None:
+                invalid_fields.add(key)
+                continue
+            updates[key] = normalized_value
         if updates:
             session_state = dict(session_state)
-            resolved_state = dict(session_state)
-            for key, value in updates.items():
-                if value is not None:
-                    normalized_value = value
-                    if key == "date":
-                        normalized_value = DatetimeParser.parse_date(str(value)) or value
-                    elif key == "time":
-                        normalized_value = DatetimeParser.parse_time(str(value)) or value
-                    updates[key] = normalized_value
             resolved_state = self.context_resolver.resolve(session_state, user_message, updates)
             self.memory_manager.update_session(current_session_id, resolved_state)
             session_state = resolved_state
@@ -99,11 +110,26 @@ class ReservationAgent:
         if session_state.get("user_id"):
             preferences = self.long_term_memory.suggest_context(session_state["user_id"])
             if preferences.get("favorite_name") and not session_state.get("name"):
-                session_state["name"] = preferences["favorite_name"]
+                preferred_name = self._normalize_and_validate_field(
+                    "name",
+                    preferences["favorite_name"],
+                )
+                if preferred_name is not None:
+                    session_state["name"] = preferred_name
             if preferences.get("preferred_people") and not session_state.get("people"):
-                session_state["people"] = preferences["preferred_people"]
+                preferred_people = self._normalize_and_validate_field(
+                    "people",
+                    preferences["preferred_people"],
+                )
+                if preferred_people is not None:
+                    session_state["people"] = preferred_people
             if preferences.get("favorite_time") and not session_state.get("time"):
-                session_state["time"] = preferences["favorite_time"]
+                favorite_time = self._normalize_and_validate_field(
+                    "time",
+                    preferences["favorite_time"],
+                )
+                if favorite_time is not None:
+                    session_state["time"] = favorite_time
 
             profile_updates = {}
             if session_state.get("name"):
@@ -119,6 +145,16 @@ class ReservationAgent:
 
         action = step.get("action")
         if action == "collect_missing_fields":
+            if pending_field and (
+                pending_value_invalid or pending_field in invalid_fields
+            ):
+                return {
+                    "status": "awaiting_input",
+                    "response": self._question_for_field(pending_field),
+                    "field": pending_field,
+                    "next_action": f"ask_{pending_field}",
+                    "invalid_input": True,
+                }
             reasoning_state = dict(session_state)
             next_action = self.conversation_state_manager.get_next_action(reasoning_state)
             if next_action["next_action"] == "confirm":
@@ -198,12 +234,28 @@ class ReservationAgent:
                     "response": "Identitas pelanggan tidak tersedia. Silakan coba lagi.",
                 }
 
-            reservation_data = ReservationCreate(
-                name=session.get("name"),
-                people=session.get("people"),
-                date=session.get("date"),
-                time=session.get("time"),
-            )
+            canonical_values = {}
+            for field_name in self.EDITABLE_FIELDS:
+                canonical_value = self._normalize_and_validate_field(
+                    field_name,
+                    session.get(field_name),
+                )
+                if canonical_value is None:
+                    self.memory_manager.update_session(
+                        session_id,
+                        {
+                            "awaiting_confirmation": True,
+                            "editing_field": field_name,
+                        },
+                    )
+                    return {
+                        "status": "awaiting_confirmation",
+                        "response": self._question_for_edit_field(field_name),
+                        "invalid_input": True,
+                    }
+                canonical_values[field_name] = canonical_value
+            self.memory_manager.update_session(session_id, canonical_values)
+            reservation_data = ReservationCreate(**canonical_values)
             db = SessionLocal()
             try:
                 reservation = self.reservation_service.create_reservation(
@@ -299,26 +351,31 @@ class ReservationAgent:
             return self._extract_direct_name_value(user_message)
 
         if field_name == "people":
-            match = re.search(r"(?:menjadi|jadi|ke)\s*(\d+)\b", user_message.lower())
-            if match:
-                return int(match.group(1))
-            return None
+            return self._parse_people_candidate(user_message)
 
         if field_name == "date":
+            match = re.search(r"\b[0-9]{4}-[0-9]{2}-[0-9]{2}\b", user_message)
+            if match:
+                return self._normalize_and_validate_field(
+                    field_name,
+                    match.group(0),
+                )
             parsed_date = DatetimeParser.parse_date(user_message)
             if parsed_date:
-                return parsed_date
-
-            match = re.search(r"\b\d{4}-\d{2}-\d{2}\b", user_message)
-            return match.group(0) if match else None
+                return self._normalize_and_validate_field(field_name, parsed_date)
+            return None
 
         if field_name == "time":
+            match = re.search(r"\b(?:[01][0-9]|2[0-3]):[0-5][0-9]\b", user_message)
+            if match:
+                return self._normalize_and_validate_field(
+                    field_name,
+                    match.group(0),
+                )
             parsed_time = DatetimeParser.parse_time(user_message)
             if parsed_time:
-                return parsed_time
-
-            match = re.search(r"\b([01]?\d|2[0-3]):([0-5]\d)\b", user_message)
-            return match.group(0) if match else None
+                return self._normalize_and_validate_field(field_name, parsed_time)
+            return None
 
         return None
 
@@ -331,17 +388,15 @@ class ReservationAgent:
         for pattern in patterns:
             match = re.search(pattern, user_message, re.IGNORECASE)
             if match:
-                value = match.group(1).strip(" .,!?:;")
-                return value.title() if value else None
+                try:
+                    return normalize_natural_reservation_name(match.group(1))
+                except InputValidationError:
+                    return None
 
         return None
 
     def _normalize_edit_value(self, field_name: str, value: Any) -> Any:
-        if field_name == "date":
-            return DatetimeParser.parse_date(str(value)) or value
-        if field_name == "time":
-            return DatetimeParser.parse_time(str(value)) or value
-        return value
+        return self._normalize_and_validate_field(field_name, value)
 
     def _apply_confirmation_edit(self, session_id: str, field_name: str, value: Any) -> dict[str, Any]:
         self.memory_manager.update_session(session_id, {field_name: value})
@@ -364,17 +419,40 @@ class ReservationAgent:
         return None
 
     def _infer_value_for_field(self, field_name: str, user_message: str) -> Any:
-        text = user_message.strip()
+        text = user_message
         if field_name == "name":
-            return text.title() if text else None
+            try:
+                return normalize_natural_reservation_name(text)
+            except InputValidationError:
+                return None
         if field_name == "people":
-            match = re.search(r"(\d+)", text)
-            return int(match.group(1)) if match else None
+            return self._parse_people_candidate(text)
         if field_name == "date":
-            return DatetimeParser.parse_date(text) or text
+            return self._normalize_and_validate_field(field_name, text)
         if field_name == "time":
-            return DatetimeParser.parse_time(text) or text
+            return self._normalize_and_validate_field(field_name, text)
         return None
+
+    def _normalize_and_validate_field(self, field_name: str, value: Any) -> Any:
+        candidate = value
+        if field_name == "date" and isinstance(value, str):
+            candidate = DatetimeParser.parse_date(value) or value
+        elif field_name == "time" and isinstance(value, str):
+            candidate = DatetimeParser.parse_time(value) or value
+        try:
+            return validate_reservation_field(field_name, candidate)
+        except InputValidationError:
+            return None
+
+    def _parse_people_candidate(self, text: str) -> int | None:
+        if re.search(r"(?<![0-9])-[ ]*[0-9]+", text):
+            return None
+        if re.search(r"[0-9]+\.[0-9]+", text):
+            return None
+        values = re.findall(r"(?<![0-9.])[0-9]+(?![0-9.])", text)
+        if len(values) != 1:
+            return None
+        return self._normalize_and_validate_field("people", int(values[0]))
 
     def _confirmation_message(self, session_state: dict[str, Any]) -> str:
         return (

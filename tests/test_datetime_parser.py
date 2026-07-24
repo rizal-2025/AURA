@@ -1,27 +1,33 @@
 import unittest
-from datetime import datetime
-from unittest.mock import patch
+from datetime import date
 
 from app.utils.datetime_parser import DatetimeParser
 
 
 class TestDatetimeParser(unittest.TestCase):
     def setUp(self):
-        self.datetime_patcher = patch("app.utils.datetime_parser.datetime")
-        self.mock_datetime = self.datetime_patcher.start()
-        self.mock_datetime.today.return_value = datetime(2026, 7, 18)
-
-    def tearDown(self):
-        self.datetime_patcher.stop()
+        self.reference_date = date(2026, 7, 18)
 
     def test_besok(self):
-        self.assertEqual(DatetimeParser.parse_date("besok"), "2026-07-19")
+        self.assertEqual(
+            DatetimeParser.parse_date("besok", reference_date=self.reference_date),
+            "2026-07-19",
+        )
 
     def test_lusa(self):
-        self.assertEqual(DatetimeParser.parse_date("lusa"), "2026-07-20")
+        self.assertEqual(
+            DatetimeParser.parse_date("lusa", reference_date=self.reference_date),
+            "2026-07-20",
+        )
 
     def test_jumat(self):
-        self.assertEqual(DatetimeParser.parse_date("hari Jumat"), "2026-07-24")
+        self.assertEqual(
+            DatetimeParser.parse_date(
+                "hari Jumat",
+                reference_date=self.reference_date,
+            ),
+            "2026-07-24",
+        )
 
     def test_time_7_malam(self):
         self.assertEqual(DatetimeParser.parse_time("jam 7 malam"), "19:00")

@@ -1,5 +1,6 @@
 """Internal conversation-memory scoping for authenticated chat requests."""
 
+from app.core.input_validation import validate_session_reference
 from app.core.ownership import require_owner_customer_id
 
 
@@ -11,4 +12,5 @@ def build_authenticated_memory_key(owner_customer_id, session_id: str) -> str:
     choose the same label.
     """
     owner_customer_id = require_owner_customer_id(owner_customer_id)
+    session_id = validate_session_reference(session_id)
     return f"{owner_customer_id}:{session_id}"

@@ -1,11 +1,19 @@
 from fastapi import FastAPI
+from fastapi.exceptions import RequestValidationError
 from app.core.config import get_application_settings
+from app.api.error_handlers import request_validation_exception_handler
+from app.middleware.request_body_limit import RequestBodyLimitMiddleware
 
 application_settings = get_application_settings()
 
 app = FastAPI(
     title=application_settings.APP_NAME,
     version=application_settings.VERSION
+)
+app.add_middleware(RequestBodyLimitMiddleware)
+app.add_exception_handler(
+    RequestValidationError,
+    request_validation_exception_handler,
 )
 
 from app.api.auth import router as auth_router

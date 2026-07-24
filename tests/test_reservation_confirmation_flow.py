@@ -219,6 +219,58 @@ class TestReservationConfirmationFlow(unittest.TestCase):
         self.assertIsNone(session["editing_field"])
         self.assertIn("Nama: Budi", result["response"])
 
+    def test_natural_create_and_confirmation_edit_share_canonical_name(self):
+        memory = MemoryManager()
+        agent = ReservationAgent(memory_manager=memory)
+        self._seed_confirmation_state(memory)
+        extracted = asyncio.run(
+            agent.entity_extractor.extract(
+                "Buat reservasi atas nama O\u2019Connor, untuk 4 orang"
+            )
+        )
+
+        self._send_confirmation_message(
+            agent,
+            memory,
+            "s-edit",
+            "Saya ingin mengubah nama",
+        )
+        result = self._send_confirmation_message(
+            agent,
+            memory,
+            "s-edit",
+            "O\u2019Connor!",
+        )
+
+        self.assertEqual(extracted["name"], "O\u2019Connor")
+        self.assertEqual(memory.get_session("s-edit")["name"], extracted["name"])
+        self.assertIn("Nama: O\u2019Connor", result["response"])
+
+    def test_invalid_confirmation_name_keeps_edit_state(self):
+        memory = MemoryManager()
+        agent = ReservationAgent(memory_manager=memory)
+        self._seed_confirmation_state(memory)
+        original_name = memory.get_session("s-edit")["name"]
+
+        self._send_confirmation_message(
+            agent,
+            memory,
+            "s-edit",
+            "Saya ingin mengubah nama",
+        )
+        result = self._send_confirmation_message(
+            agent,
+            memory,
+            "s-edit",
+            "Bad/Name",
+        )
+
+        session = memory.get_session("s-edit")
+        self.assertEqual(session["name"], original_name)
+        self.assertEqual(session["editing_field"], "name")
+        self.assertTrue(session["awaiting_confirmation"])
+        self.assertEqual(result["response"], "Baik, nama menjadi siapa?")
+
     def test_edit_date(self):
         memory = MemoryManager()
         agent = ReservationAgent(memory_manager=memory)

@@ -230,7 +230,69 @@ Jika `TEST_DATABASE_URL` tidak tersedia, integration tests dilewati dengan alasa
 
 ## AURA V2.0 Phase G1
 
-Phase G1A environment/configuration hardening sudah selesai dan tidak
-memerlukan migrasi. G1B (batas input/body HTTP), G1C (serialisasi percakapan
-customer-session), dan G1D (transaction ownership serta handoff recovery)
+Phase G1A environment/configuration hardening dan G1B input/HTTP body bounds
+sudah selesai. Keduanya tidak memerlukan migrasi. G1C (serialisasi percakapan
+customer-session) dan G1D (transaction ownership serta handoff recovery)
 masih pending.
+
+### Batas input G1B
+
+- `POST /chat` menerima `session_id` sepanjang 1–128 karakter. Karakter pertama
+  harus huruf/digit ASCII; karakter berikutnya hanya huruf/digit ASCII, `.`,
+  `_`, atau `-`. Nilai tidak di-trim atau dinormalisasi.
+- Pesan chat harus berisi 1–4096 Unicode code point setelah line ending
+  `CRLF`/`CR` dinormalisasi menjadi `LF`. Pesan kosong/all-whitespace, NUL,
+  control character selain `LF`, bidi control, dan zero-width format character
+  ditolak. Teks Indonesia, emoji, tanda baca, dan line break normal tetap
+  diterima.
+- Nama reservasi dinormalisasi ke Unicode NFC, spasi ASCII di tepi dihapus,
+  dan rangkaian spasi ASCII diringkas. Panjangnya 1–100 karakter dan hanya
+  menerima huruf, mark, digit, spasi, apostrof, tanda hubung, titik, serta `&`.
+  Nama harus mengandung setidaknya satu huruf atau digit. Extractor percakapan
+  memisahkan koma/penanda kalimat dari clause reservasi sebelum validator,
+  sehingga contoh `atas nama Rizal, untuk 4 orang` tetap menghasilkan `Rizal`
+  tanpa mengizinkan koma sebagai bagian nama tersimpan.
+- `people` adalah integer ketat 1–20; boolean, float, string angka, nol, dan
+  nilai di luar batas ditolak.
+- Endpoint reservasi langsung mensyaratkan tanggal nyata kanonis `YYYY-MM-DD`
+  dan waktu `HH:MM` 24 jam. G1B tidak menolak tanggal lampau: validasi ini
+  sengaja bersifat sintaksis dan tidak bergantung timezone host. Kebijakan
+  availability/tanggal lampau tetap pekerjaan bisnis berikutnya. Tanggal
+  relatif percakapan memakai UTC+7 sebagai timezone bisnis AURA yang eksplisit,
+  bukan timezone lokal host.
+- Field JSON tambahan ditolak. Ownership dan status lifecycle tetap tidak
+  dapat ditentukan pemanggil.
+- Validator yang sama dipakai pada boundary HTTP, shared authenticated chat,
+  Telegram, Create, dan Update sehingga jalur non-HTTP tidak dapat melewati
+  aturan input.
+
+Semua HTTP request body dibatasi maksimum 16.384 byte. `Content-Length` yang
+terlalu besar ditolak sebelum body dibaca; body tanpa panjang/chunked tetap
+dibaca secara terbatas hingga satu byte di atas batas. Framing panjang yang
+malformed, konflik, atau tidak cocok ditolak dengan respons generik.
+Setiap representasi duplicate/comma-combined `Content-Length` harus identik
+secara tekstual (`3,3` diterima; `3,03` ditolak). Satu nilai dengan leading
+zero, misalnya `03`, tetap diterima sebagai panjang 3, tetapi tidak dianggap
+ekuivalen dengan `3` pada duplicate header. Maksimum 1.024 frame body mencegah
+loop tanpa batas dari frame kosong.
+
+Sebelum repository Create dipanggil, service membangun mapping baru yang hanya
+berisi `name`, `people`, `date`, dan `time`, lalu memvalidasinya melalui schema
+baru. Instance Pydantic yang dimutasi atau dibuat dengan `model_construct()`
+tidak dapat melewati batas ini; ownership tetap berasal dari parameter
+terautentikasi yang terpisah.
+
+Respons body terlalu besar:
+
+```json
+{"code":"REQUEST_BODY_TOO_LARGE","detail":"Request body is too large."}
+```
+
+Respons validasi `422` hanya memuat kode stabil dan lokasi field, tanpa nilai
+input mentah. Kode field meliputi `CHAT_SESSION_ID_INVALID`,
+`CHAT_MESSAGE_EMPTY`, `CHAT_MESSAGE_TOO_LONG`, `CHAT_MESSAGE_UNSAFE`,
+`RESERVATION_NAME_INVALID`, `RESERVATION_PEOPLE_INVALID`,
+`RESERVATION_DATE_INVALID`, `RESERVATION_TIME_INVALID`, dan
+`EXTRA_FIELD_FORBIDDEN`. Respons autentikasi `401` tetap generik seperti
+sebelumnya. Reverse proxy tetap harus menerapkan batas body yang sama saat
+deployment; hardening proxy berada di luar scope G1B.
