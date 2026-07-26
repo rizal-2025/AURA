@@ -217,6 +217,19 @@ Tiket tidak menyimpan raw `session_id`, composite memory key, bearer token, secr
 
 Telegram memakai long polling lokal sebagai proses terpisah; FastAPI tidak memulai poller dan tetap dapat berjalan tanpa konfigurasi Telegram. Isi `TELEGRAM_BOT_TOKEN` dan `TELEGRAM_IDENTITY_SECRET` hanya di `.env` lokal. Secret identity harus acak, stabil, minimal 32 karakter non-whitespace, dan bebas newline, tab, null, atau karakter kontrol. Seluruh konfigurasi Telegram divalidasi ketika runner dimulai.
 
+### Preflight UAT Telegram manual
+
+UAT Telegram manual hanya boleh memakai database PostgreSQL
+`aura_telegram_uat`. Jalankan `run_telegram_uat.bat` dari Windows sebagai
+launcher yang disetujui; jangan menjalankan runner secara langsung. Database
+`aura` dan `aura_test` tidak boleh dipakai untuk pengujian Telegram manual.
+
+Launcher menjalankan preflight read-only sebelum bot. Preflight tidak menjalankan
+migrasi dan tidak membuat, mengubah, atau menghapus row maupun schema. `PASS`
+berarti satu pemeriksaan wajib lulus, `FAIL` menghentikan launcher sehingga bot
+tidak dimulai, dan `WARNING` memberi batasan atau informasi non-fatal yang perlu
+dibaca.
+
 Gunakan secret berbeda dari JWT secret. Contoh pembuatan secret lokal:
 
 ```powershell
@@ -225,12 +238,13 @@ Gunakan secret berbeda dari JWT secret. Contoh pembuatan secret lokal:
 
 Mengubah secret atau versi derivasi HMAC memutus mapping Telegram yang sudah ada. Identity memakai domain `aura:telegram:identity:v1`, sedangkan percakapan private memakai domain `aura:telegram:private-session:v1`.
 
-Jalankan migrasi identitas dan outbox secara manual setelah meninjau database, kemudian mulai proses terpisah:
+Jalankan migrasi identitas dan outbox secara manual setelah meninjau database.
+Setelah database UAT siap, mulai proses terpisah hanya melalui launcher:
 
 ```powershell
 .\.venv\Scripts\python.exe migrations\add_telegram_identities.py
 .\.venv\Scripts\python.exe migrations\add_support_ticket_notifications.py
-.\.venv\Scripts\python.exe -m app.integrations.telegram.runner
+.\run_telegram_uat.bat
 ```
 
 Jangan menjalankan migrasi otomatis saat startup. Bot hanya menerima private chat, dengan `/start`, `/help`, dan `/status`; gambar, file, voice note, kontak, dan lokasi tidak diteruskan ke AURA. Hanya satu polling instance yang didukung untuk demo ini. Di dalam proses tersebut, maksimal delapan update ditangani bersamaan dan pesan customer-session yang sama diserialisasi oleh keyed conversation lock.
@@ -284,7 +298,7 @@ Aktifkan dengan `TELEGRAM_OWNER_COMMANDS_ENABLED=true` dan isi `TELEGRAM_OWNER_C
 
 Command berulang bersifat deterministik dan tidak membuka kembali tiket terminal. Command owner tidak membuat job outbox "tiket baru" dan tidak mengklaim pelanggan telah diberi notifikasi. Customer status notification belum tersedia. Setelah `/resolve`, pesan pelanggan berikutnya merekonsiliasi lock dengan status PostgreSQL; hanya state handoff customer-session terkait yang dilepas.
 
-Phase F tidak menambahkan migrasi. Runner tetap mendukung satu polling instance saja. UAT aman dilakukan dengan bot/database pengembangan setelah unit test dan PostgreSQL test disposable lulus: aktifkan flag command, verifikasi akun non-owner selalu mendapat `Perintah tidak tersedia.`, lalu uji `/tickets`, `/ticket`, `/take`, dan `/resolve` tanpa memasukkan ID/token ke log atau dokumentasi. Bila bot token pernah bocor, rotasi melalui BotFather sebelum UAT.
+Phase F tidak menambahkan migrasi. Runner tetap mendukung satu polling instance saja. UAT aman dilakukan dengan bot pengembangan dan database `aura_telegram_uat` melalui launcher yang disetujui setelah unit test dan PostgreSQL test disposable lulus: aktifkan flag command, verifikasi akun non-owner selalu mendapat `Perintah tidak tersedia.`, lalu uji `/tickets`, `/ticket`, `/take`, dan `/resolve` tanpa memasukkan ID/token ke log atau dokumentasi. Bila bot token pernah bocor, rotasi melalui BotFather sebelum UAT.
 
 Untuk uji PostgreSQL integrasi, gunakan `TEST_DATABASE_URL` terpisah yang nama databasenya mengandung `test`; jangan pernah menggunakan `DATABASE_URL` utama. Tidak ada request ke Telegram nyata di test otomatis.
 
