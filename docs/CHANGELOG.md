@@ -2,6 +2,38 @@
 
 Semua perubahan penting pada AURA dicatat di dokumen ini. Repository belum memiliki tag rilis, sehingga entri berikut mengikuti riwayat commit proyek.
 
+## 2026-07-26 - G1D-A2.3 Safe Indonesian NLU
+
+### Added
+
+- Normalisasi Indonesia informal berbasis token; parser deterministik untuk
+  people, tanggal, waktu, ID reservasi, editable field, dan konfirmasi.
+- Intent natural untuk greeting, Create, Update, Cancel, status/listing, dan
+  explicit human handoff, termasuk one-shot reservation extraction.
+- Clock injectable dengan zona `Asia/Jakarta` serta klarifikasi fail-closed
+  untuk tanggal atau jam ambigu.
+- Structured classifier fallback berbentuk JSON datar dengan key/enum
+  allowlisted, confidence finite, batas string, dan validasi kanonis field.
+- Regression test NLU, workflow context, fallback AI, greeting bersih, mutation
+  publication, restart recovery, handoff, dan Telegram.
+
+### Changed
+
+- Workflow aktif sekarang menang atas klasifikasi umum; nilai fallback AI hanya
+  mengisi field Create yang kosong dan tidak dapat mengganti state valid.
+- Jawaban konfirmasi menerima variasi seperti `oke lanjut` dan `gas`; `batal`
+  tetap berarti menolak tindakan pada confirmation context.
+- UAT polish menambahkan frasa bounded seperti `ya lanjut`, `oke gas`,
+  `sip lanjut`, dan `betul lanjutkan`; token negatif selalu menang pada frasa
+  campuran seperti `jangan lanjut` atau `nggak jadi lanjut`.
+- Greeting dan stub customer-facing tidak lagi menampilkan teks placeholder.
+
+### Limitations
+
+- Frasa yang tidak allowlisted atau waktu/tanggal tanpa konteks aman tetap
+  memerlukan klarifikasi atau fallback; tidak ada operasi bisnis atau migration
+  baru.
+
 ## 2026-07-26 - G1D-A2.2 Persistent Workflow Restart Recovery
 
 ### Added

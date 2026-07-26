@@ -129,6 +129,30 @@ FastAPI juga menyediakan spesifikasi OpenAPI dan antarmuka dokumentasi interakti
 - **Planner dan workflow:** intent serta state percakapan diubah menjadi langkah kerja sebelum dijalankan oleh agent yang sesuai.
 - **Fallback jawaban umum:** intent di luar jalur workflow reservasi diteruskan ke provider AI untuk menghasilkan respons.
 
+## Indonesian NLU - V2.0 G1D-A2.3
+
+- **Context-first:** jawaban untuk people/date/time, konfirmasi, selection ID,
+  dan edit field ditafsirkan menurut stage workflow aktif sebelum routing intent.
+- **Normalisasi aman:** varian informal umum dinormalisasi per token secara
+  Unicode-safe dan punctuation-tolerant tanpa memodifikasi substring nama.
+- **Intent natural:** greeting, Create, Update, Cancel, status/listing, dan
+  explicit human handoff menerima frasa Indonesia yang lebih beragam.
+- **Field natural:** angka/kata bilangan dan bentuk kelompok untuk people;
+  tanggal kanonis/numerik/nama bulan/relatif/hari; waktu titik/titik dua,
+  kata bilangan, periode hari, dan bentuk `setengah`.
+- **One-shot:** semua field yang valid dan jelas diambil sekaligus; workflow
+  hanya menanyakan field yang masih hilang.
+- **Fail-closed ambiguity:** tanggal tanpa bulan/tahun dan jam tanpa periode
+  meminta klarifikasi terarah.
+- **Konfirmasi phrase-aware:** respons multi-kata seperti `ya lanjut`,
+  `oke gas`, atau `sip lanjut` diterima hanya pada confirmation context;
+  `tidak`, `jangan`, dan `batal` selalu mengambil precedence.
+- **Structured AI fallback:** hanya objek JSON datar allowlisted yang diterima;
+  enum, confidence, ukuran, dan setiap nilai field divalidasi deterministik.
+  Output mentah/prose/provider error tidak menjadi workflow state.
+- **Batas:** tidak ada operasi bisnis, migration, perubahan ownership,
+  confirmation, recovery, persistence, atau transaction boundary baru.
+
 ## Reservation V1
 
 - **Reservasi multi-turn:** sistem meminta data yang belum lengkap secara berurutan: nama, jumlah orang, tanggal, lalu waktu.

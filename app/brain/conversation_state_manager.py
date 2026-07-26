@@ -35,8 +35,12 @@ class ConversationStateManager:
     def record_question(self, conversation_state: dict[str, Any], field: str) -> dict[str, Any]:
         next_state = dict(conversation_state)
         asked_fields = list(next_state.get("asked_fields", []))
-        if field not in asked_fields:
-            asked_fields.append(field)
+        # Persisted workflow snapshots require a stable prefix.  One-shot NLU
+        # can prefill earlier fields, so record every field through the one
+        # currently being asked rather than producing a sparse sequence.
+        if field in self.REQUIRED_FIELDS:
+            field_index = self.REQUIRED_FIELDS.index(field)
+            asked_fields = list(self.REQUIRED_FIELDS[: field_index + 1])
         next_state["asked_fields"] = asked_fields
         return next_state
 

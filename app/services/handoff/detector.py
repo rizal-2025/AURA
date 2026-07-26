@@ -1,17 +1,26 @@
 import re
 
 from app.brain.classifier import IntentClassifier
+from app.brain.indonesian_nlu import (
+    contains_bounded_phrase,
+    normalize_indonesian_text,
+)
 
 
 class HandoffDetector:
     """Detect safe, explicit reasons to pause automated assistance."""
 
     EXPLICIT_HUMAN_PATTERNS = (
-        r"\bhubungkan\b.*\b(admin|manusia|petugas|owner|customer service|rizal)\b",
-        r"\bbicara\b.*\b(admin|manusia|petugas|owner|customer service|rizal)\b",
-        r"\bpanggil\b.*\bpetugas\b",
+        r"\bhubungkan\b.*\b(admin|manusia|orang|petugas|staf|operator|owner|customer service|rizal)\b",
+        r"\bbicara\b.*\b(admin|manusia|orang|petugas|staf|operator|owner|customer service|rizal)\b",
+        r"\bngomong\b.*\b(admin|manusia|orang|petugas|staf|operator|owner|customer service)\b",
+        r"\bpanggil\b.*\b(admin|petugas|staf|operator)\b",
+        r"\b(?:butuh|perlu) bantuan (?:dari )?(admin|manusia|orang|petugas|staf|operator)\b",
+        r"\bdilayani langsung\b",
+        r"\bchat\b.*\bcustomer service\b",
     )
-    FRUSTRATION_PHRASES = (
+    FRUSTRATION_PHRASES = frozenset(
+        {
         "ini tidak membantu",
         "kok gagal terus",
         "saya sudah coba berkali kali",
@@ -20,6 +29,7 @@ class HandoffDetector:
         "botnya tidak mengerti",
         "ribet banget",
         "dari tadi tidak bisa",
+        }
     )
     INFORMATIONAL_PREFIXES = (
         "bagaimana",
@@ -35,11 +45,15 @@ class HandoffDetector:
         "selamat pagi",
         "selamat siang",
         "selamat malam",
+        "tolong dong",
+        "saya bingung",
+        "bagaimana ya",
+        "bisa bantu",
     )
 
     @classmethod
     def normalize(cls, message: str) -> str:
-        return " ".join(re.findall(r"[a-z0-9]+", message.lower()))
+        return normalize_indonesian_text(message)
 
     @classmethod
     def is_explicit_human_request(cls, message: str) -> bool:
@@ -49,7 +63,7 @@ class HandoffDetector:
     @classmethod
     def is_frustrated(cls, message: str) -> bool:
         normalized = cls.normalize(message)
-        return any(phrase in normalized for phrase in cls.FRUSTRATION_PHRASES)
+        return contains_bounded_phrase(normalized, cls.FRUSTRATION_PHRASES)
 
     @classmethod
     def is_ambiguous_reservation_action(cls, message: str) -> bool:
@@ -70,7 +84,11 @@ class HandoffDetector:
     @classmethod
     def is_safe_non_action_message(cls, message: str) -> bool:
         """Negated and informational requests are valid, non-destructive input."""
-        return IntentClassifier.detect_reservation_intent(message) == "general"
+        normalized = cls.normalize(message)
+        return (
+            normalized in cls.KNOWN_NON_ACTION_PHRASES
+            or IntentClassifier.detect_reservation_intent(message) == "general"
+        )
 
     @classmethod
     def is_deterministically_misunderstood(cls, message: str) -> bool:

@@ -8,6 +8,19 @@ Audit Phase F menemukan lock handoff memory dapat tetap aktif setelah tiket dise
 
 Pencarian pada source juga tidak menemukan penanda `TODO`, `FIXME`, `BUG`, atau `HACK` yang menunjuk ke issue terbuka.
 
+## G1D-A2.3 - placeholder greeting dan tebakan waktu diperbaiki
+
+- Greeting customer tidak lagi memuat label `placeholder`, pesan mentah,
+  classifier detail, atau structured provider output.
+- Jam tanpa periode seperti `jam 7` tidak lagi otomatis dianggap malam; workflow
+  meminta klarifikasi.
+- Normalisasi informal memakai batas token sehingga nama atau kata lain yang
+  hanya mengandung substring seperti `ga` tidak berubah.
+- AI fallback menolak prose, JSON malformed, unknown key/intent/editable field,
+  confidence non-finite, serta nilai reservasi non-kanonis.
+- Batas tersisa: ekspresi di luar grammar deterministik dapat memerlukan
+  klarifikasi; durable Create idempotency tetap scope G1D-B.
+
 ## Audit V2.0 Phase G1D-A1 - transaction foundation
 
 - Kepemilikan transaksi kini eksplisit: ingress membuat/menutup session,

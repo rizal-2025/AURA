@@ -160,6 +160,198 @@ class TestMultiIntentRouter(unittest.TestCase):
             "reservation",
         )
 
+    def test_confirmation_phrase_outside_context_does_not_mutate_reservation(self):
+        provider = type(
+            "GeneralProvider",
+            (),
+            {
+                "chat": AsyncMock(
+                    return_value='{"intent":"general","confidence":0.9}'
+                )
+            },
+        )()
+        orchestrator = AgentOrchestrator()
+        orchestrator.intent_classifier = IntentClassifier(provider=provider)
+        session_id = "confirmation-outside-context"
+        orchestrator.memory_manager.update_session(
+            session_id,
+            {
+                "name": "Rizal",
+                "people": 2,
+                "date": "2026-07-30",
+                "time": "19:00",
+                "completed": False,
+                "awaiting_confirmation": False,
+            },
+        )
+        reservation_agent = orchestrator.workflow._agents["reservation"]
+        reservation_agent.reservation_service.create_reservation = AsyncMock()
+
+        response = asyncio.run(
+            orchestrator.handle(
+                session_id,
+                "Ya lanjut",
+                object(),
+                "test-owner",
+            )
+        )
+
+        self.assertIn("belum memahami", response)
+        reservation_agent.reservation_service.create_reservation.assert_not_called()
+        self.assertFalse(
+            orchestrator.memory_manager.get_session(session_id).get(
+                "awaiting_confirmation"
+            )
+        )
+
+    def test_time_context_treats_malam_as_an_incomplete_time_not_greeting(self):
+        orchestrator = AgentOrchestrator()
+        session_id = "pending-time-not-greeting"
+        orchestrator.memory_manager.update_session(
+            session_id,
+            {
+                "intent": "reservation",
+                "name": "Rizal",
+                "people": 2,
+                "date": "2026-07-30",
+                "time": None,
+                "completed": False,
+                "awaiting_confirmation": False,
+                "asked_fields": ["name", "people", "date", "time"],
+            },
+        )
+
+        response = asyncio.run(
+            orchestrator.handle(
+                session_id,
+                "malam",
+                object(),
+                "test-owner",
+            )
+        )
+
+        session = orchestrator.memory_manager.get_session(session_id)
+        self.assertEqual(response, "Jam berapa?")
+        self.assertIsNone(session["time"])
+        self.assertEqual(session["intent"], "reservation")
+
+    def test_cancel_phrase_during_create_confirmation_rejects_create_only(self):
+        orchestrator = AgentOrchestrator()
+        session_id = "cancel-phrase-pending-create"
+        orchestrator.memory_manager.update_session(
+            session_id,
+            {
+                "intent": "reservation",
+                "name": "Rizal",
+                "people": 2,
+                "date": "2026-07-30",
+                "time": "19:00",
+                "completed": False,
+                "awaiting_confirmation": True,
+                "asked_fields": ["name", "people", "date", "time"],
+            },
+        )
+        reservation_agent = orchestrator.workflow._agents["reservation"]
+        reservation_agent.reservation_service.create_reservation = AsyncMock()
+        orchestrator.cancel_reservation_agent.run = AsyncMock()
+
+        response = asyncio.run(
+            orchestrator.handle(
+                session_id,
+                "tolong cancel booking saya",
+                object(),
+                "test-owner",
+            )
+        )
+
+        session = orchestrator.memory_manager.get_session(session_id)
+        self.assertEqual(response, "Baik, reservasi tidak dilanjutkan.")
+        self.assertFalse(session.get("awaiting_confirmation", False))
+        self.assertIsNone(session["intent"])
+        reservation_agent.reservation_service.create_reservation.assert_not_called()
+        orchestrator.cancel_reservation_agent.run.assert_not_awaited()
+
+    def test_negative_phrase_outside_confirmation_preserves_unrelated_state(self):
+        provider = type(
+            "GeneralProvider",
+            (),
+            {
+                "chat": AsyncMock(
+                    return_value='{"intent":"general","confidence":0.9}'
+                )
+            },
+        )()
+        orchestrator = AgentOrchestrator()
+        orchestrator.intent_classifier = IntentClassifier(provider=provider)
+        orchestrator.ai = type(
+            "GeneralAI",
+            (),
+            {"chat": AsyncMock(return_value="Silakan jelaskan kebutuhan Anda.")},
+        )()
+        session_id = "negative-outside-confirmation"
+        orchestrator.memory_manager.update_session(
+            session_id,
+            {
+                "awaiting_confirmation": False,
+                "handoff_attempts": {"misunderstanding": 7},
+            },
+        )
+
+        response = asyncio.run(
+            orchestrator.handle(
+                session_id,
+                "nggak jadi",
+                object(),
+                "test-owner",
+            )
+        )
+
+        session = orchestrator.memory_manager.get_session(session_id)
+        self.assertIn("belum memahami", response)
+        self.assertEqual(session["handoff_attempts"], {"misunderstanding": 7})
+        self.assertFalse(session.get("awaiting_confirmation", False))
+        self.assertFalse(orchestrator.handoff_service.is_required(session_id))
+
+    def test_vague_help_repetition_does_not_create_handoff(self):
+        for index, message in enumerate(
+            ("tolong dong", "saya bingung", "bagaimana ya?", "bisa bantu?")
+        ):
+            with self.subTest(message=message):
+                provider = type(
+                    "GeneralProvider",
+                    (),
+                    {
+                        "chat": AsyncMock(
+                            return_value='{"intent":"general","confidence":0.0}'
+                        )
+                    },
+                )()
+                orchestrator = AgentOrchestrator()
+                orchestrator.intent_classifier = IntentClassifier(
+                    provider=provider
+                )
+                orchestrator.ai = type(
+                    "GeneralAI",
+                    (),
+                    {"chat": AsyncMock(return_value="Silakan jelaskan.")},
+                )()
+                session_id = f"vague-help-{index}"
+
+                for _ in range(2):
+                    response = asyncio.run(
+                        orchestrator.handle(
+                            session_id,
+                            message,
+                            object(),
+                            "test-owner",
+                        )
+                    )
+                    self.assertEqual(response, "Silakan jelaskan.")
+
+                self.assertFalse(
+                    orchestrator.handoff_service.is_required(session_id)
+                )
+
 
 if __name__ == "__main__":
     unittest.main()

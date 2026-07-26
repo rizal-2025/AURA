@@ -250,6 +250,19 @@ class AgentOrchestrator:
             intent = intent_result.get("intent", "general")
             confidence = intent_result.get("confidence", 0.0)
 
+            if intent == "reservation" and confidence >= 0.8:
+                ai_fields = {
+                    field: intent_result[field]
+                    for field in ("name", "people", "date", "time")
+                    if field in intent_result and session_payload.get(field) is None
+                }
+                if ai_fields:
+                    # The classifier has already deterministically validated
+                    # these canonical values.  Only fill missing fields; an AI
+                    # fallback can never replace established workflow state.
+                    self.memory_manager.update_session(session_id, ai_fields)
+                    session_payload.update(ai_fields)
+
             safe_blocked_general = (
                 reservation_mutations_blocked
                 and intent == "general"

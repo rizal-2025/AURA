@@ -117,11 +117,11 @@ class TestBrainIntentClassifier(unittest.TestCase):
                 result, _ = self._classify_ai_response(response)
                 self.assertEqual(result, self.FALLBACK)
 
-    def test_ignores_extra_fields_when_required_fields_are_valid(self):
+    def test_rejects_unknown_structured_fields(self):
         result, _ = self._classify_ai_response(
             '{"intent": "menu", "confidence": 0.91, "reason": "ignored"}',
         )
-        self.assertEqual(result, {"intent": "menu", "confidence": 0.91})
+        self.assertEqual(result, self.FALLBACK)
 
     def test_provider_exception_is_logged_safely_and_reraised(self):
         provider_error = ConnectionError("private provider detail")
@@ -166,11 +166,11 @@ class TestBrainIntentClassifier(unittest.TestCase):
             IntentClassifier.normalize_reservation_text(
                 "  Saya Mau Mengubah Reservasi  ",
             ),
-            "saya mau ubah reservasi",
+            "saya ingin ubah reservasi",
         )
         self.assertEqual(
             IntentClassifier.normalize_reservation_text("Membatalkan booking"),
-            "batal booking",
+            "batal reservasi",
         )
         self.assertEqual(
             IntentClassifier.normalize_reservation_text("Melihat pemesanan"),
@@ -214,6 +214,33 @@ class TestBrainIntentClassifier(unittest.TestCase):
 
         ai.chat.assert_not_awaited()
 
+    def test_expanded_bounded_vocabulary_classifies_without_ai(self):
+        ai = type("DummyAI", (), {"chat": AsyncMock(return_value="{}")})()
+        classifier = IntentClassifier(provider=ai)
+        cases = {
+            "tolong booking meja": "reservation",
+            "ada meja untuk besok?": "reservation",
+            "tolong siapkan meja": "reservation",
+            "booking saya perlu direvisi": "update_reservation",
+            "reservasinya mau diedit": "update_reservation",
+            "ada perubahan untuk booking saya": "update_reservation",
+            "jadwalnya digeser": "update_reservation",
+            "reservasinya tidak jadi": "cancel_reservation",
+            "saya mau membatalkan pesanan": "cancel_reservation",
+            "nggak jadi pakai bookingnya": "cancel_reservation",
+            "pesanan saya masuk belum?": "view_reservation",
+            "cek jadwal saya": "view_reservation",
+            "nomor reservasi saya berapa?": "view_reservation",
+        }
+
+        for message, expected in cases.items():
+            with self.subTest(message=message):
+                result = asyncio.run(classifier.classify(message))
+                self.assertEqual(result["intent"], expected)
+                self.assertEqual(result["confidence"], 0.99)
+
+        ai.chat.assert_not_awaited()
+
     def test_classifies_complete_safe_greetings_without_ai(self):
         ai = type("FailingAI", (), {"chat": AsyncMock(side_effect=AssertionError("AI must not run"))})()
         classifier = IntentClassifier(provider=ai)
@@ -226,11 +253,28 @@ class TestBrainIntentClassifier(unittest.TestCase):
             "SELAMAT SIANG!",
             "Selamat sore",
             "Selamat malam.",
+            "Pagi",
+            "Permisi",
+            "Halo Aura",
         ):
             with self.subTest(message=message):
                 result = asyncio.run(classifier.classify(message))
                 self.assertEqual(result, {"intent": "greeting", "confidence": 0.99})
         ai.chat.assert_not_awaited()
+
+    def test_bare_verbs_and_vague_availability_do_not_start_workflows(self):
+        for message in (
+            "ubah",
+            "ganti",
+            "ada meja?",
+            "meja tersedia?",
+            "jadwal restoran",
+            "nomor meja berapa?",
+        ):
+            with self.subTest(message=message):
+                self.assertIsNone(
+                    IntentClassifier.detect_reservation_intent(message)
+                )
 
     def test_mixed_greeting_messages_are_not_reduced_to_greeting(self):
         ai = type("DummyAI", (), {"chat": AsyncMock(return_value='{"intent":"general","confidence":0.9}')})()

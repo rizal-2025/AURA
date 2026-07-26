@@ -202,7 +202,6 @@ class TestUpdateReservation(unittest.TestCase):
 
         for invalid_value in (
             "abc",
-            "sembilan",
             "",
             "0",
             "21",
@@ -288,6 +287,64 @@ class TestUpdateReservation(unittest.TestCase):
             UpdateReservationAgent.INPUT_VALUE,
         )
         self.assertEqual(session["editing_field"], "people")
+
+    def test_natural_selection_phrases_choose_existing_reservation(self):
+        for index, message in enumerate(
+            (
+                "yang nomor dua",
+                "reservasi nomor 2",
+                "booking yang kedua",
+                "pesanan saya yang nomor dua",
+            )
+        ):
+            with self.subTest(message=message):
+                memory = MemoryManager()
+                service = FakeReservationService()
+                agent = UpdateReservationAgent(
+                    memory_manager=memory,
+                    reservation_service=service,
+                )
+                session_id = f"natural-update-selection-{index}"
+                asyncio.run(
+                    agent.run(
+                        self.db,
+                        session_id,
+                        "ubah reservasi saya",
+                        service.OWNER_ID,
+                    )
+                )
+                result = asyncio.run(
+                    agent.run(
+                        self.db,
+                        session_id,
+                        message,
+                        service.OWNER_ID,
+                    )
+                )
+
+                session = memory.get_session(session_id)
+                self.assertEqual(session["reservation_id"], 2)
+                self.assertEqual(
+                    session["update_reservation_stage"],
+                    UpdateReservationAgent.SELECT_FIELD,
+                )
+                self.assertIn("Reservasi dipilih", result["response"])
+
+    def test_natural_field_corrections_resolve_only_allowlisted_fields(self):
+        cases = {
+            "jamnya ganti": "time",
+            "tanggalnya pindah": "date",
+            "orangnya ditambah": "people",
+            "orangnya dikurangi": "people",
+            "namanya mau diganti": "name",
+            "ganti hari": "date",
+            "jadinya tiga orang": "people",
+            "jamnya jadi delapan malam": "time",
+        }
+        for message, expected in cases.items():
+            with self.subTest(message=message):
+                self.assertEqual(self.agent._resolve_field(message), expected)
+        self.assertIsNone(self.agent._resolve_field("ganti status"))
 
     def test_orchestrator_logs_state_after_reservation_selection(self):
         orchestrator = AgentOrchestrator()

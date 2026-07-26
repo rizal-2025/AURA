@@ -1,9 +1,20 @@
 import re
+from collections.abc import Callable
+from datetime import datetime
 from typing import Any
 
 from sqlalchemy.orm import Session
 
+from app.brain.indonesian_nlu import (
+    normalize_indonesian_text,
+    parse_people_count,
+    parse_target_field,
+)
 from app.brain.memory_manager import MemoryManager
+from app.brain.reservation_entity_extractor import (
+    normalize_natural_reservation_name,
+    parse_reservation_id,
+)
 from app.brain.reservation_memory import (
     COMMITTED_OPERATION_FORMAT_FALLBACK_RESPONSE,
     OUTCOME_UNKNOWN,
@@ -48,10 +59,12 @@ class UpdateReservationAgent:
         memory_manager: MemoryManager | None = None,
         reservation_service: ReservationService | None = None,
         workflow_state_service=None,
+        clock: Callable[[], datetime] | None = None,
     ):
         self.memory_manager = memory_manager or MemoryManager()
         self.reservation_service = reservation_service or ReservationService()
         self.workflow_state_service = workflow_state_service
+        self.clock = clock
 
     async def run(
         self,
@@ -91,7 +104,28 @@ class UpdateReservationAgent:
             return self._select_reservation(db, session, user_message, owner_customer_id)
 
         if stage == self.SELECT_FIELD:
-            return self._select_field(session, user_message)
+            selection = self._select_field(session, user_message)
+            selected_field = session.get("editing_field")
+            normalized_message = normalize_indonesian_text(user_message)
+            if (
+                selected_field in self.EDITABLE_FIELDS
+                and (
+                    selected_field != "name"
+                    or any(
+                        cue in normalized_message.split()
+                        for cue in ("ganti", "ubah", "jadi", "menjadi")
+                    )
+                )
+                and self._parse_new_value(selected_field, user_message) is not None
+            ):
+                return self._update_field(
+                    db,
+                    session_id,
+                    session,
+                    user_message,
+                    owner_customer_id,
+                )
+            return selection
 
         if stage == self.INPUT_VALUE:
             return self._update_field(
@@ -320,15 +354,10 @@ class UpdateReservationAgent:
         session["editing_field"] = None
 
     def _parse_reservation_id(self, user_message: str) -> int | None:
-        text = user_message.strip()
-        return int(text) if text.isdigit() else None
+        return parse_reservation_id(user_message)
 
     def _resolve_field(self, user_message: str) -> str | None:
-        normalized = " ".join(user_message.lower().strip().split())
-        for field_name, aliases in self.FIELD_ALIASES.items():
-            if normalized in aliases:
-                return field_name
-        return None
+        return parse_target_field(user_message)
 
     def _parse_new_value(self, field_name: str, user_message: str) -> Any:
         text = user_message
@@ -336,29 +365,26 @@ class UpdateReservationAgent:
             return None
 
         if field_name == "name":
+            for pattern in (
+                r"(?:nama|namanya|atas nama)\s+(?:ganti|ubah|jadi|menjadi|ke)\s+(.+)$",
+                r"(?:ganti|ubah)\s+(?:nama|namanya|atas nama)(?:\s+(?:jadi|menjadi|ke))?\s+(.+)$",
+            ):
+                match = re.search(pattern, text, re.IGNORECASE)
+                if match:
+                    try:
+                        return normalize_natural_reservation_name(match.group(1))
+                    except InputValidationError:
+                        return None
             return self._validated_field(field_name, text)
 
         if field_name == "people":
-            # Allow one positive whole number in a natural-language reply, while
-            # rejecting signed, decimal, and ambiguous multi-number values.
-            if re.search(r"(?<![0-9])-[ ]*[0-9]+", text):
-                return None
-
-            if re.search(r"[0-9]+\.[0-9]+", text):
-                return None
-
-            values = re.findall(r"(?<![0-9.])[0-9]+(?![0-9.])", text)
-            if len(values) != 1:
-                return None
-
-            people = int(values[0])
-            return self._validated_field(field_name, people)
+            return parse_people_count(text)
 
         if field_name == "date":
             candidate = (
                 text
                 if re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", text)
-                else DatetimeParser.parse_date(text)
+                else DatetimeParser.parse_date(text, clock=self.clock)
             )
             return self._validated_field(field_name, candidate)
 
@@ -395,6 +421,13 @@ class UpdateReservationAgent:
                 "Silakan masukkan jumlah orang yang valid."
             )
 
+        return self._clarification_for_field(field_name)
+
+    def _clarification_for_field(self, field_name: str) -> str:
+        if field_name == "date":
+            return "Tanggal belum jelas. Sebutkan tanggal lengkap, misalnya 30 Juli 2026."
+        if field_name == "time":
+            return "Jam belum jelas. Sebutkan pagi atau malam, misalnya 07.00 atau 19.00."
         return self._question_for_field(field_name)
 
     def _format_reservation(self, reservation: Any) -> str:
