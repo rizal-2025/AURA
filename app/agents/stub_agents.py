@@ -2,7 +2,7 @@ from typing import Any
 
 
 class BaseStubAgent:
-    """Simple placeholder agent for intents without a full implementation yet."""
+    """Simple fixed-response agent for intents without a full workflow."""
 
     def __init__(self, response_template: str):
         self.response_template = response_template
@@ -16,19 +16,19 @@ class BaseStubAgent:
 
 class CheckReservationAgent(BaseStubAgent):
     def __init__(self):
-        super().__init__("Saya akan membantu mengecek reservasi Anda. (placeholder: {user_message})")
+        super().__init__("Saya akan membantu mengecek reservasi Anda.")
 
 
 class CancelReservationAgent(BaseStubAgent):
     def __init__(self):
-        super().__init__("Saya akan membantu membatalkan reservasi Anda. (placeholder: {user_message})")
+        super().__init__("Saya akan membantu membatalkan reservasi Anda.")
 
 
 class GreetingAgent(BaseStubAgent):
     def __init__(self):
-        super().__init__("Halo! Saya AURA. (placeholder: {user_message})")
+        super().__init__("Halo! Saya AURA. Ada yang bisa saya bantu?")
 
 
 class GeneralQuestionAgent(BaseStubAgent):
     def __init__(self):
-        super().__init__("Saya akan membantu menjawab pertanyaan Anda. (placeholder: {user_message})")
+        super().__init__("Saya akan membantu menjawab pertanyaan Anda.")

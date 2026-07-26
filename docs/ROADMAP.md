@@ -56,6 +56,10 @@ Dokumen ini merangkum status pengembangan berdasarkan baseline kode AURA saat in
   revisioned tombstone, pre-mutation marker, restore fail-closed di dalam lock
   G1C, serta transaksi read/write singkat. Existing handoff ticket recovery
   tetap menjadi sumber kebenaran handoff.
+- Safe Indonesian NLU (V2.0 G1D-A2.3): context-first routing, normalisasi
+  informal per token, parser deterministic people/date/time/ID/edit field,
+  one-shot extraction, confirmation synonyms, ambiguity clarification, serta
+  structured AI fallback allowlisted tanpa perubahan mutation/persistence.
 
 ### Fondasi pendukung
 
@@ -65,8 +69,6 @@ Dokumen ini merangkum status pengembangan berdasarkan baseline kode AURA saat in
 
 ## Next Version
 
-- V2.0 G1D-A2.3: owner/customer row-lock race dan verifikasi recovery
-  PostgreSQL disposable.
 - V2.0 G1D-B: idempotensi Reservation Create untuk retry setelah commit berhasil
   tetapi respons tidak diterima.
 - Menyelesaikan siklus reservasi setelah dibuat: cek status per pengguna dan jadwal ulang lanjutan.

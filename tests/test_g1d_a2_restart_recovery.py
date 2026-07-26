@@ -4,6 +4,7 @@ from types import SimpleNamespace
 import unittest
 from uuid import uuid4
 
+from app.agents.reservation_agent import ReservationAgent
 from app.brain.memory_manager import MemoryManager
 from app.brain.reservation_memory import (
     COMMITTED_MEMORY_UNAVAILABLE,
@@ -465,6 +466,63 @@ class WorkflowStateServiceTests(unittest.TestCase):
         self.assertFalse(row.is_active)
         self.assertEqual(row.payload, {})
         self.assertEqual(row.revision, 2)
+
+    def test_rejected_create_publishes_inactive_and_cannot_restore_after_restart(self):
+        memory = MemoryManager()
+        memory.replace_reservation_workflow_state(
+            self.memory_key,
+            create_payload(
+                name="Ayu",
+                people=4,
+                date="2026-08-20",
+                time="19:00",
+                awaiting_confirmation=True,
+                asked_fields=["name", "people", "date", "time"],
+            ),
+        )
+        service = self.service(memory)
+        service.publish(
+            self.db,
+            owner_customer_id=self.owner,
+            memory_key=self.memory_key,
+        )
+
+        agent = ReservationAgent(memory_manager=memory)
+        result = asyncio.run(
+            agent.handle_confirmation("nggak jadi", self.memory_key)
+        )
+        service.publish(
+            self.db,
+            owner_customer_id=self.owner,
+            memory_key=self.memory_key,
+        )
+
+        restarted_memory = MemoryManager()
+        restarted = self.service(restarted_memory)
+        restarted.restore(
+            self.db,
+            owner_customer_id=self.owner,
+            memory_key=self.memory_key,
+        )
+        restored = restarted_memory.get_session(self.memory_key)
+        session_hash = service.hash_session_reference(self.memory_key)
+        row = self.repository.rows[(self.owner, session_hash)]
+
+        self.assertEqual(result["status"], "rejected")
+        self.assertFalse(row.is_active)
+        self.assertEqual(row.payload, {})
+        self.assertIsNone(
+            capture_reservation_workflow_snapshot(
+                restarted_memory,
+                self.memory_key,
+            )
+        )
+        self.assertIsNone(restored["intent"])
+        self.assertFalse(restored.get("awaiting_confirmation", False))
+        self.assertIsNone(restored["name"])
+        self.assertIsNone(restored["people"])
+        self.assertIsNone(restored["date"])
+        self.assertIsNone(restored["time"])
 
     def test_stale_writer_cannot_resurrect_terminal_workflow(self):
         initial_memory = MemoryManager()

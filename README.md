@@ -187,6 +187,29 @@ Marker yang memerlukan reconciliation tetap membutuhkan verifikasi status
 reservasi sebelum automation dibuka. Durable Create request-key idempotency dan
 koordinasi conversation lintas worker/instance tetap di luar scope A2.2.
 
+## Indonesian natural-language understanding V2.0 G1D-A2.3
+
+AURA memproses bahasa reservasi Indonesia dengan urutan context-first,
+normalisasi deterministik, parsing field deterministik, pencocokan intent atau
+konfirmasi, lalu structured AI fallback hanya bila aturan aman belum cukup.
+Normalisasi informal (`ga/nggak`, `mau/mo/pengen`, `booking/pesen meja`,
+`malem`, `rubah`) hanya berlaku pada token lengkap dan tidak mengubah substring
+nama pelanggan.
+
+Create, Update, Cancel, status, greeting, dan human handoff menerima variasi
+natural yang tetap masuk ke workflow lama. Jumlah orang mendukung angka, kata
+bilangan, serta bentuk `berdua/bertiga/kami berempat`. Tanggal mendukung ISO,
+`DD/MM/YYYY`, `DD-MM-YYYY`, nama bulan Indonesia, `besok`, `lusa`, dan hari
+berikutnya. Waktu mendukung `HH:MM`, `HH.MM`, periode pagi/siang/sore/malam,
+kata bilangan, dan `setengah delapan malam`.
+
+Input seperti `tanggal 5` atau `jam 7` tidak ditebak; AURA meminta bulan/tahun
+atau periode waktu. Structured fallback hanya menerima objek JSON datar dengan
+key dan enum allowlisted, confidence finite, serta nilai yang lolos validator
+kanonis. Output mentah provider tidak masuk memory dan tidak dapat melewati
+ownership, selection, confirmation, blocker persistence, atau transaction
+boundary. Fitur ini tidak menambah operasi bisnis dan tidak memerlukan migrasi.
+
 ## Migrasi V1.5
 
 Jalankan sekali pada database yang sudah memiliki tabel `reservations`:

@@ -179,6 +179,49 @@ class TestCancelReservation(unittest.TestCase):
         self.assertIsNone(session["cancel_reservation_id"])
         self.assertEqual(self.service.cancel_calls, [])
 
+    def test_natural_selection_phrases_require_confirmation_before_cancel(self):
+        for index, message in enumerate(
+            (
+                "yang nomor dua",
+                "reservasi nomor 2",
+                "booking yang kedua",
+                "pesanan saya yang nomor dua",
+            )
+        ):
+            with self.subTest(message=message):
+                memory = MemoryManager()
+                service = FakeCancellationService()
+                agent = CancelReservationAgent(
+                    memory_manager=memory,
+                    reservation_service=service,
+                )
+                session_id = f"natural-cancel-selection-{index}"
+                asyncio.run(
+                    agent.run(
+                        self.db,
+                        session_id,
+                        "batalkan reservasi saya",
+                        service.OWNER_ID,
+                    )
+                )
+                result = asyncio.run(
+                    agent.run(
+                        self.db,
+                        session_id,
+                        message,
+                        service.OWNER_ID,
+                    )
+                )
+
+                session = memory.get_session(session_id)
+                self.assertEqual(session["cancel_reservation_id"], 2)
+                self.assertEqual(
+                    session["cancel_reservation_stage"],
+                    CancelReservationAgent.CONFIRM_CANCELLATION,
+                )
+                self.assertEqual(service.cancel_calls, [])
+                self.assertIn("Yakin ingin membatalkan", result["response"])
+
     def test_user_rejects_cancellation(self):
         self._start_and_select_reservation()
 
@@ -187,6 +230,18 @@ class TestCancelReservation(unittest.TestCase):
 
         self.assertEqual(result["status"], "cancellation_rejected")
         self.assertIn("Tidak ada perubahan", result["response"])
+        self.assertEqual(self.service.reservations[2].status, "pending")
+        self.assertEqual(self.service.cancel_calls, [])
+        self.assertIsNone(session["cancel_reservation_stage"])
+        self.assertIsNone(session["cancel_reservation_id"])
+
+    def test_batal_rejects_instead_of_confirming_cancellation(self):
+        self._start_and_select_reservation()
+
+        result = self._send("Batal")
+        session = self.memory.get_session(self.session_id)
+
+        self.assertEqual(result["status"], "cancellation_rejected")
         self.assertEqual(self.service.reservations[2].status, "pending")
         self.assertEqual(self.service.cancel_calls, [])
         self.assertIsNone(session["cancel_reservation_stage"])
@@ -306,6 +361,11 @@ class TestCancelReservation(unittest.TestCase):
             "cancel reservasi",
             "saya ingin membatalkan reservasi",
             "cancel my reservation",
+            "bookingnya batal aja",
+            "reservasinya tidak jadi",
+            "saya mau membatalkan pesanan",
+            "nggak jadi pakai bookingnya",
+            "tolong cancel booking saya",
         )
 
         for index, phrase in enumerate(phrases):

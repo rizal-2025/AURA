@@ -1,8 +1,16 @@
 import re
+from collections.abc import Callable
+from datetime import datetime
 from typing import Any
 
 from app.brain.context_resolver import ContextResolver
 from app.brain.conversation_state_manager import ConversationStateManager
+from app.brain.indonesian_nlu import (
+    normalize_indonesian_text,
+    parse_confirmation,
+    parse_people_count,
+    parse_target_field,
+)
 from app.brain.memory_manager import MemoryManager
 from app.brain.reservation_memory import (
     COMMITTED_OPERATION_FORMAT_FALLBACK_RESPONSE,
@@ -42,34 +50,16 @@ class ReservationAgent:
     """Handle reservation-related workflow steps."""
 
     EDITABLE_FIELDS = ("name", "people", "date", "time")
-    POSITIVE_CONFIRMATION_ANSWERS = {
-        "ya",
-        "iya",
-        "yes",
-        "benar",
-        "betul",
-        "oke",
-        "ok",
-        "okay",
-    }
-    NEGATIVE_CONFIRMATION_ANSWERS = {
-        "tidak",
-        "bukan",
-        "salah",
-        "no",
-        "nope",
-        "nggak",
-        "gak",
-    }
-
     def __init__(
         self,
         memory_manager: MemoryManager | None = None,
         workflow_state_service=None,
+        clock: Callable[[], datetime] | None = None,
     ):
         self.memory_manager = memory_manager or MemoryManager()
         self.workflow_state_service = workflow_state_service
-        self.entity_extractor = ReservationEntityExtractor()
+        self.clock = clock
+        self.entity_extractor = ReservationEntityExtractor(clock=clock)
         self.reservation_service = ReservationService()
         self.conversation_state_manager = ConversationStateManager()
         self.context_resolver = ContextResolver()
@@ -184,7 +174,10 @@ class ReservationAgent:
             ):
                 return {
                     "status": "awaiting_input",
-                    "response": self._question_for_field(pending_field),
+                    "response": self._clarification_for_field(
+                        pending_field,
+                        user_message,
+                    ),
                     "field": pending_field,
                     "next_action": f"ask_{pending_field}",
                     "invalid_input": True,
@@ -372,13 +365,13 @@ class ReservationAgent:
             }
 
         if intent == REJECT:
-            self.memory_manager.update_session(session_id, {
-                "awaiting_confirmation": True,
-            })
-            self.memory_manager.get_session(session_id)["editing_field"] = None
+            self.memory_manager.replace_reservation_workflow_state(
+                session_id,
+                {},
+            )
             return {
                 "status": "rejected",
-                "response": "Silakan kirim data yang ingin diperbaiki. Field mana yang ingin diperbaiki?",
+                "response": "Baik, reservasi tidak dilanjutkan.",
             }
 
         if intent == EDIT_FIELD and field:
@@ -403,32 +396,40 @@ class ReservationAgent:
         }
 
     def _detect_confirmation_intent(self, user_message: str) -> tuple[str | None, str | None]:
-        normalized = user_message.strip().lower()
-
-        if normalized in self.POSITIVE_CONFIRMATION_ANSWERS:
+        normalized = normalize_indonesian_text(user_message)
+        confirmation = parse_confirmation(user_message)
+        if confirmation == "reject":
+            return REJECT, None
+        if confirmation == "confirm":
             return CONFIRM, None
 
-        if normalized in self.NEGATIVE_CONFIRMATION_ANSWERS:
-            return REJECT, None
+        change_words = {
+            "ubah",
+            "ganti",
+            "edit",
+            "perbaiki",
+            "koreksi",
+            "jadi",
+            "menjadi",
+            "pindah",
+            "tambah",
+            "kurang",
+            "geser",
+        }
+        if re.search(r"\batas nama\b", normalized):
+            return EDIT_FIELD, "name"
+        if change_words.intersection(normalized.split()):
+            field = self._detect_edit_field(normalized)
+            if field is not None:
+                return EDIT_FIELD, field
 
-        if not any(keyword in normalized for keyword in ("ubah", "ganti", "edit", "perbaiki", "koreksi")):
+        if not change_words.intersection(normalized.split()):
             return None, None
 
         return EDIT_FIELD, self._detect_edit_field(normalized)
 
     def _detect_edit_field(self, user_message: str) -> str | None:
-        aliases = {
-            "name": ("atas nama", "nama", "name"),
-            "people": ("jumlah orang", "jumlah", "orang", "people"),
-            "date": ("tanggal", "hari", "date"),
-            "time": ("jam", "pukul", "waktu", "time"),
-        }
-
-        for field in self.EDITABLE_FIELDS:
-            if any(alias in user_message for alias in aliases[field]):
-                return field
-
-        return None
+        return parse_target_field(user_message)
 
     async def _extract_direct_edit_value(self, field_name: str, user_message: str) -> Any:
         extracted = await self.entity_extractor.extract(user_message)
@@ -440,7 +441,7 @@ class ReservationAgent:
             return self._extract_direct_name_value(user_message)
 
         if field_name == "people":
-            return self._parse_people_candidate(user_message)
+            return parse_people_count(user_message)
 
         if field_name == "date":
             match = re.search(r"\b[0-9]{4}-[0-9]{2}-[0-9]{2}\b", user_message)
@@ -449,7 +450,7 @@ class ReservationAgent:
                     field_name,
                     match.group(0),
                 )
-            parsed_date = DatetimeParser.parse_date(user_message)
+            parsed_date = DatetimeParser.parse_date(user_message, clock=self.clock)
             if parsed_date:
                 return self._normalize_and_validate_field(field_name, parsed_date)
             return None
@@ -472,6 +473,7 @@ class ReservationAgent:
         patterns = (
             r"(?:ubah|ganti|edit|perbaiki|koreksi)\s+(?:nama|atas nama)(?:\s+(?:menjadi|jadi|ke))?\s+(.+)$",
             r"(?:nama|atas nama)\s+(?:menjadi|jadi|ke)\s+(.+)$",
+            r"(?:nama|namanya|atas nama)\s+(?:ubah|ganti)\s+(.+)$",
         )
 
         for pattern in patterns:
@@ -525,7 +527,7 @@ class ReservationAgent:
     def _normalize_and_validate_field(self, field_name: str, value: Any) -> Any:
         candidate = value
         if field_name == "date" and isinstance(value, str):
-            candidate = DatetimeParser.parse_date(value) or value
+            candidate = DatetimeParser.parse_date(value, clock=self.clock) or value
         elif field_name == "time" and isinstance(value, str):
             candidate = DatetimeParser.parse_time(value) or value
         try:
@@ -534,14 +536,7 @@ class ReservationAgent:
             return None
 
     def _parse_people_candidate(self, text: str) -> int | None:
-        if re.search(r"(?<![0-9])-[ ]*[0-9]+", text):
-            return None
-        if re.search(r"[0-9]+\.[0-9]+", text):
-            return None
-        values = re.findall(r"(?<![0-9.])[0-9]+(?![0-9.])", text)
-        if len(values) != 1:
-            return None
-        return self._normalize_and_validate_field("people", int(values[0]))
+        return parse_people_count(text)
 
     def _confirmation_message(self, session_state: dict[str, Any]) -> str:
         return (
@@ -571,6 +566,21 @@ class ReservationAgent:
             "time": "Jam berapa?",
         }
         return questions.get(field_name, "Mohon lengkapi data reservasi.")
+
+    def _clarification_for_field(self, field_name: str, user_message: str) -> str:
+        if (
+            field_name == "date"
+            and DatetimeParser.date_ambiguity(user_message) == "missing_month_year"
+        ):
+            match = re.search(r"\btanggal\s+([0-9]{1,2})\b", user_message, re.IGNORECASE)
+            day = match.group(1) if match else "tersebut"
+            return f"Tanggal {day} bulan dan tahun berapa?"
+        if (
+            field_name == "time"
+            and DatetimeParser.time_ambiguity(user_message) == "missing_day_period"
+        ):
+            return "Pukul tersebut pagi atau malam? Contoh: 07.00 atau 19.00."
+        return self._question_for_field(field_name)
 
     @staticmethod
     def _create_success_response(reservation_id: int) -> str:

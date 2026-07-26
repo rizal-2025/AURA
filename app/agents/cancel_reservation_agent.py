@@ -2,7 +2,9 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from app.brain.indonesian_nlu import parse_confirmation
 from app.brain.memory_manager import MemoryManager
+from app.brain.reservation_entity_extractor import parse_reservation_id
 from app.brain.reservation_memory import (
     COMMITTED_OPERATION_FORMAT_FALLBACK_RESPONSE,
     OUTCOME_UNKNOWN,
@@ -27,26 +29,6 @@ class CancelReservationAgent:
 
     SELECT_RESERVATION_ID = "select_reservation_id"
     CONFIRM_CANCELLATION = "confirm_cancellation"
-
-    POSITIVE_CONFIRMATION_ANSWERS = {
-        "ya",
-        "iya",
-        "yes",
-        "benar",
-        "betul",
-        "oke",
-        "ok",
-        "okay",
-    }
-    NEGATIVE_CONFIRMATION_ANSWERS = {
-        "tidak",
-        "bukan",
-        "salah",
-        "no",
-        "nope",
-        "nggak",
-        "gak",
-    }
 
     def __init__(
         self,
@@ -204,15 +186,15 @@ class CancelReservationAgent:
                 "response": "Sesi pembatalan tidak valid. Mulai lagi dengan 'batalkan reservasi saya'.",
             }
 
-        normalized_message = " ".join(user_message.lower().strip().split())
-        if normalized_message in self.NEGATIVE_CONFIRMATION_ANSWERS:
+        confirmation = parse_confirmation(user_message)
+        if confirmation == "reject":
             self._clear_cancellation_state(session)
             return {
                 "status": "cancellation_rejected",
                 "response": "Pembatalan reservasi dibatalkan. Tidak ada perubahan pada reservasi.",
             }
 
-        if normalized_message not in self.POSITIVE_CONFIRMATION_ANSWERS:
+        if confirmation != "confirm":
             return {
                 "status": "awaiting_cancellation",
                 "response": "Yakin ingin membatalkan reservasi ini? Ya / Tidak",
@@ -309,8 +291,7 @@ class CancelReservationAgent:
         session["cancel_reservation_id"] = None
 
     def _parse_reservation_id(self, user_message: str) -> int | None:
-        text = user_message.strip()
-        return int(text) if text.isdigit() else None
+        return parse_reservation_id(user_message)
 
     def _is_cancelled(self, reservation: Any) -> bool:
         return str(getattr(reservation, "status", "")).lower() == "cancelled"
