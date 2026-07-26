@@ -2,6 +2,51 @@
 
 Semua perubahan penting pada AURA dicatat di dokumen ini. Repository belum memiliki tag rilis, sehingga entri berikut mengikuti riwayat commit proyek.
 
+## 2026-07-25 - G1D-A2.1 Deep Conversation Snapshots
+
+### Added
+
+- Snapshot immutable per-conversation untuk state JSON-like, termasuk isolasi
+  deep dictionary/list, materialisasi copy baru, dan atomic full replacement.
+- Batas snapshot deterministik: maksimum 16 tingkat, 256 item per container,
+  dan 2.048 total node; cycle ditolak dengan error validation yang aman.
+- Error memory validation dan confirmed-commit publication dipisahkan tanpa
+  memuat key, snapshot, object, atau nilai privat.
+- Blocker process-local `reservation_persistence_state` untuk outcome commit
+  reservasi yang tidak pasti, Session yang tidak dapat digunakan, atau commit
+  terkonfirmasi dengan memory success yang tidak tersedia.
+- Emergency mutation guard per conversation yang tidak bergantung pada
+  materialisasi snapshot lama.
+- Regression suite khusus snapshot, DB-first publication, restore pre-commit,
+  blocker, response failure pasca-commit, dan cakupan lock G1C.
+
+### Changed
+
+- Create, Update, dan Cancel menangkap snapshot pada final mutation boundary
+  serta baru memublikasikan success/clear workflow setelah service commit
+  berhasil kembali.
+- Kegagalan pre-commit yang terkonfirmasi mengganti seluruh conversation state
+  dengan deep snapshot, bukan shallow merge.
+- Outcome commit tidak pasti tidak mengaktifkan retry mutation atau
+  internal-error handoff.
+- Commit terkonfirmasi yang gagal memublikasikan memory memakai
+  `committed_memory_unavailable`, memblokir retry, dan tidak diklaim sebagai
+  kegagalan database.
+- View, greeting, pertanyaan informasional, dan explicit human escalation tetap
+  tersedia ketika mutasi reservasi diblokir.
+- Failure formatting setelah commit memakai respons verifikasi generik tanpa
+  membuat handoff/tiket internal-error.
+
+### Limitations
+
+- Handoff recovery, terminal reconciliation, restart restoration, notification
+  repair, dan owner/customer recovery race tetap scope G1D-A2.2/A2.3.
+- Reservation Create durable idempotency/reconciliation tetap scope G1D-B.
+- Blocker masih process-local dan hilang setelah restart; operator harus
+  memverifikasi state reservasi sebelum retry sampai G1D-B tersedia.
+- Tidak ada perubahan schema atau migration dan belum ada klaim paid-pilot
+  readiness.
+
 ## 2026-07-25 - G1D-A1 Adversarial Corrections
 
 ### Fixed

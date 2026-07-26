@@ -64,6 +64,40 @@ FastAPI juga menyediakan spesifikasi OpenAPI dan antarmuka dokumentasi interakti
 - **Batas tahap:** belum ada snapshot/recovery memory G1D-A2 dan belum ada
   idempotensi retry Create G1D-B. Tidak ada migration G1D-A1.
 
+## Deep conversation snapshots - V2.0 G1D-A2.1
+
+- **Snapshot per conversation:** satu state authenticated customer-session dapat
+  dicapture sebagai struktur immutable tanpa menyalin global memory.
+- **Deep isolation:** list/dictionary bertingkat tidak berbagi alias dengan
+  live state, materialisasi caller, atau replacement state.
+- **Atomic replacement:** rollback memory mengganti seluruh conversation state
+  di dalam lock G1C dan tidak melakukan shallow merge.
+- **Safe value boundary:** hanya nilai JSON-like yang aman diterima; Session,
+  ORM object, UUID object, coroutine, lock, exception, dan arbitrary object
+  ditolak dengan error stabil.
+- **Bounded snapshot:** cycle, kedalaman di atas 16, lebih dari 256 item per
+  container, atau lebih dari 2.048 node ditolak secara deterministik.
+- **DB-first publication:** Create memublikasikan ID/completed, sedangkan Update
+  dan Cancel membersihkan stage hanya setelah service commit berhasil kembali.
+- **Exact pre-commit restore:** kegagalan persistence yang terkonfirmasi
+  mengembalikan draft, selected field/ID, confirmation stage, serta nested state
+  secara utuh.
+- **Fail-closed uncertainty:** commit outcome unknown atau Session unusable
+  membuat blocker reservasi process-local tanpa identifier/nilai privat dan
+  mencegah mutation ulang otomatis.
+- **Confirmed-commit memory guard:** kegagalan publication setelah commit yang
+  telah dikonfirmasi memakai status `committed_memory_unavailable` dan emergency
+  guard terpisah; hal ini tidak dinyatakan sebagai kegagalan database.
+- **Non-mutating access while blocked:** View, greeting, pertanyaan
+  informasional, dan explicit human escalation tetap tersedia; Create, Update,
+  Cancel, serta continuation mutasinya tetap ditolak.
+- **Post-commit durability:** failure format/send respons tidak mengembalikan
+  memory sukses, mencoba rollback data committed, atau membuat tiket
+  `internal_error`.
+- **Batas tahap:** handoff recovery tetap G1D-A2.2/A2.3 dan Create idempotency
+  tetap G1D-B. Blocker hilang saat process restart sehingga verifikasi manual
+  diperlukan sebelum retry. Tidak ada migration A2.1.
+
 ## Orkestrasi chat berbasis AI
 
 - **Provider AI yang dapat dipilih:** AURA dapat memakai Ollama atau OpenAI melalui factory provider yang sama.

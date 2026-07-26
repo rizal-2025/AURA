@@ -119,6 +119,47 @@ tetap scope G1D-A2. Retry Reservation Create setelah commit berhasil tetapi
 respons terputus juga belum idempoten dan tetap scope G1D-B. Karena dua batas
 tersebut, implementasi ini belum dinyatakan siap paid pilot.
 
+## Deep conversation snapshots V2.0 G1D-A2.1
+
+Memory percakapan kini menyediakan snapshot per-conversation yang benar-benar
+terisolasi untuk dictionary/list bertingkat dan replacement penuh yang
+mematerialisasi deep copy baru. API legacy `get_session()` tetap live untuk
+kompatibilitas; boundary snapshot/replace dipakai secara eksplisit oleh mutasi
+reservasi di bawah keyed lock G1C yang sudah ada. Snapshot hanya menerima nilai
+JSON-like yang aman dan menolak Session, ORM object, UUID object, coroutine,
+lock, exception, atau arbitrary instance. Validasi snapshot menolak siklus,
+kedalaman di atas 16 tingkat, container di atas 256 item, dan total tree di
+atas 2.048 node. Snapshot key yang belum tersimpan adalah pure read atas state
+default; replacement kosong dinormalisasi kembali ke state default.
+
+Pada konfirmasi final Create, Update, dan Cancel, memory workflow diambil sebagai
+snapshot sebelum persistence. Kegagalan pre-commit yang terkonfirmasi
+mengembalikan seluruh state percakapan secara atomik, termasuk list/dictionary
+bertingkat. Success/completed, ID reservasi nyata, atau pembersihan stage baru
+dipublikasikan setelah `ReservationService` menyelesaikan commit dan
+mengembalikan DTO. Kegagalan format respons atau pengiriman Telegram setelah
+commit tidak mengembalikan snapshot lama, tidak mengulang mutasi, dan tidak
+membuat tiket `internal_error`; pelanggan menerima konfirmasi generik dan dapat
+memakai View untuk verifikasi.
+
+Outcome commit yang tidak dapat dipastikan atau Session yang tidak dapat
+digunakan menerbitkan blocker process-local tanpa ID, nilai reservasi, raw input,
+atau exception text. Commit database yang sudah terkonfirmasi tetapi gagal
+memublikasikan memory memakai status berbeda
+`committed_memory_unavailable`; status ini tidak berarti database gagal.
+Emergency guard yang tidak bergantung pada copy state lama mencegah retry
+Create/Update/Cancel dalam proses yang sama. View, greeting, pertanyaan
+informasional, status handoff yang sudah aktif, dan permintaan eksplisit kepada
+petugas tetap tersedia.
+
+Blocker bersifat process-local dan hilang saat restart. Restart dapat membuka
+retry yang tidak aman ketika durable outcome belum direkonsiliasi; operator
+harus memeriksa daftar reservasi sebelum retry. Durable idempotency dan
+rekonsiliasi Reservation Create tetap G1D-B. Rekonsiliasi handoff/restart dan
+owner/customer race tetap G1D-A2.2/A2.3. G1D-A2.1 tidak mengubah schema, tidak
+membutuhkan migration, tetap dibatasi satu worker FastAPI dan satu proses
+polling, serta belum menyatakan paid-pilot readiness.
+
 ## Migrasi V1.5
 
 Jalankan sekali pada database yang sudah memiliki tabel `reservations`:

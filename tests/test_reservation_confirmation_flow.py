@@ -7,6 +7,18 @@ from uuid import uuid4
 from app.agents.orchestrator import AgentOrchestrator
 from app.agents.reservation_agent import ReservationAgent
 from app.brain.memory_manager import MemoryManager
+from app.services.reservation.dto import PersistedReservationDTO
+
+
+def persisted(identifier, *, people=4):
+    return PersistedReservationDTO(
+        id=identifier,
+        name="Rizal",
+        people=people,
+        date="2026-07-19",
+        time="19:00",
+        status="pending",
+    )
 
 
 class TestReservationConfirmationFlow(unittest.TestCase):
@@ -52,7 +64,7 @@ class TestReservationConfirmationFlow(unittest.TestCase):
         with patch.object(
             agent.reservation_service,
             "create_reservation",
-            return_value=SimpleNamespace(id=41),
+            return_value=persisted(41),
         ) as create_reservation:
             result = asyncio.run(
                 agent.handle_confirmation(
@@ -104,7 +116,7 @@ class TestReservationConfirmationFlow(unittest.TestCase):
         with patch.object(
             agent.reservation_service,
             "create_reservation",
-            return_value=SimpleNamespace(id=42),
+            return_value=persisted(42),
         ):
             asyncio.run(
                 agent.handle_confirmation(
@@ -144,7 +156,7 @@ class TestReservationConfirmationFlow(unittest.TestCase):
         db = MagicMock()
         with patch(
             "app.agents.reservation_agent.ReservationService.create_reservation",
-            return_value=SimpleNamespace(id=43),
+            return_value=persisted(43),
         ):
             result = asyncio.run(
                 orchestrator.handle(
@@ -343,7 +355,7 @@ class TestReservationConfirmationFlow(unittest.TestCase):
         with patch.object(
             agent.reservation_service,
             "create_reservation",
-            return_value=SimpleNamespace(id=44),
+            return_value=persisted(44, people=7),
         ) as create_reservation:
             result = self._send_confirmation_message(
                 agent,
@@ -400,7 +412,7 @@ class TestReservationConfirmationFlow(unittest.TestCase):
         with patch.object(
             agent.reservation_service,
             "create_reservation",
-            return_value=SimpleNamespace(id=45),
+            return_value=persisted(45, people=7),
         ) as create_reservation:
             confirmed = self._send_confirmation_message(
                 agent,

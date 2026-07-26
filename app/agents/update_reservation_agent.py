@@ -4,11 +4,26 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from app.brain.memory_manager import MemoryManager
+from app.brain.reservation_memory import (
+    COMMITTED_OPERATION_FORMAT_FALLBACK_RESPONSE,
+    OUTCOME_UNKNOWN,
+    SESSION_UNUSABLE,
+    has_reservation_persistence_blocker,
+    publish_post_commit_memory_guard,
+    publish_reservation_persistence_blocker,
+    publish_update_success,
+    reservation_persistence_blocker_response,
+)
 from app.core.input_validation import (
     InputValidationError,
     validate_reservation_field,
 )
 from app.core.ownership import MissingOwnerCustomerError, require_owner_customer_id
+from app.core.transaction_errors import (
+    PersistenceOperationError,
+    PersistenceOutcomeUnknownError,
+    TransactionSessionUnusableError,
+)
 from app.services.reservation.service import ReservationService
 from app.utils.datetime_parser import DatetimeParser
 
@@ -52,6 +67,19 @@ class UpdateReservationAgent:
             }
 
         session = self.memory_manager.get_session(session_id)
+        if has_reservation_persistence_blocker(
+            self.memory_manager,
+            session_id,
+            session,
+        ):
+            return {
+                "status": "persistence_uncertain",
+                "response": reservation_persistence_blocker_response(
+                    self.memory_manager,
+                    session_id,
+                    session,
+                ),
+            }
         stage = session.get("update_reservation_stage")
 
         if stage is None:
@@ -64,7 +92,13 @@ class UpdateReservationAgent:
             return self._select_field(session, user_message)
 
         if stage == self.INPUT_VALUE:
-            return self._update_field(db, session, user_message, owner_customer_id)
+            return self._update_field(
+                db,
+                session_id,
+                session,
+                user_message,
+                owner_customer_id,
+            )
 
         self._clear_update_state(session)
         return self._start_update(db, session, owner_customer_id)
@@ -167,6 +201,7 @@ class UpdateReservationAgent:
     def _update_field(
         self,
         db: Session,
+        session_id: str,
         session: dict[str, Any],
         user_message: str,
         owner_customer_id,
@@ -181,6 +216,7 @@ class UpdateReservationAgent:
                 "response": "Sesi update tidak valid. Mulai lagi dengan 'ubah reservasi saya'.",
             }
 
+        snapshot = self.memory_manager.snapshot_conversation(session_id)
         new_value = self._parse_new_value(field_name, user_message)
         if new_value is None:
             return {
@@ -189,32 +225,84 @@ class UpdateReservationAgent:
                 "invalid_input": True,
             }
 
-        updated_reservation = self.reservation_service.update_reservation_field(
-            db,
-            reservation_id,
-            field_name,
-            new_value,
-            owner_customer_id=owner_customer_id,
-        )
+        try:
+            updated_reservation = self.reservation_service.update_reservation_field(
+                db,
+                reservation_id,
+                field_name,
+                new_value,
+                owner_customer_id=owner_customer_id,
+            )
+        except PersistenceOutcomeUnknownError:
+            publish_reservation_persistence_blocker(
+                self.memory_manager,
+                session_id,
+                snapshot,
+                status=OUTCOME_UNKNOWN,
+                operation="update",
+            )
+            raise
+        except TransactionSessionUnusableError:
+            publish_reservation_persistence_blocker(
+                self.memory_manager,
+                session_id,
+                snapshot,
+                status=SESSION_UNUSABLE,
+                operation="update",
+            )
+            raise
+        except PersistenceOperationError:
+            self.memory_manager.replace_conversation(session_id, snapshot)
+            raise
+
         if updated_reservation is None:
-            self._clear_update_state(session)
+            publication_failed = False
+            try:
+                publish_update_success(
+                    self.memory_manager,
+                    session_id,
+                    snapshot,
+                )
+            except Exception:
+                publication_failed = True
+            if publication_failed:
+                publish_post_commit_memory_guard(
+                    self.memory_manager,
+                    session_id,
+                    snapshot,
+                    operation="update",
+                )
             return {
                 "status": "awaiting_update",
                 "response": "ID reservasi tidak ditemukan. Mulai lagi dengan 'ubah reservasi saya'.",
             }
 
-        session.update(
-            {
-                "update_reservation_stage": None,
-                "editing_field": None,
-            }
-        )
-        return {
-            "status": "updated",
-            "response": (
+        publication_failed = False
+        try:
+            publish_update_success(
+                self.memory_manager,
+                session_id,
+                snapshot,
+            )
+        except Exception:
+            publication_failed = True
+        if publication_failed:
+            publish_post_commit_memory_guard(
+                self.memory_manager,
+                session_id,
+                snapshot,
+                operation="update",
+            )
+        try:
+            response = (
                 "Reservasi berhasil diperbarui:\n\n"
                 f"{self._format_reservation(updated_reservation)}"
-            ),
+            )
+        except Exception:
+            response = COMMITTED_OPERATION_FORMAT_FALLBACK_RESPONSE
+        return {
+            "status": "updated",
+            "response": response,
         }
 
     def _clear_update_state(self, session: dict[str, Any]) -> None:

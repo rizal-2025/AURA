@@ -2,6 +2,12 @@ from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
 from app.core.config import get_application_settings
 from app.core.conversation_lock_manager import ConversationBusyError
+from app.core.memory_errors import (
+    ConversationMemoryError,
+    ConversationMemoryValidationError,
+    PostCommitMemoryPublicationError,
+    ReservationMutationGuardError,
+)
 from app.core.transaction_errors import (
     PersistenceOperationError,
     PersistenceOutcomeUnknownError,
@@ -30,6 +36,10 @@ app.add_exception_handler(
     conversation_busy_exception_handler,
 )
 for transaction_error in (
+    PostCommitMemoryPublicationError,
+    ReservationMutationGuardError,
+    ConversationMemoryValidationError,
+    ConversationMemoryError,
     PersistenceOperationError,
     PersistenceOutcomeUnknownError,
     TransactionSessionUnusableError,

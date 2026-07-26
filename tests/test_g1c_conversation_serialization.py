@@ -455,6 +455,7 @@ class ConversationSerializationServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Reservasi dipilih", selected_response)
         self.assertIn("berhasil dibatalkan", confirm_response)
         self.assertEqual(reservation_service.reservations[7].status, "cancelled")
+        session = memory.get_session(memory_key)
         self.assertIsNone(session["cancel_reservation_stage"])
         self.assertIsNone(session["cancel_reservation_id"])
 

@@ -41,6 +41,38 @@ Keterbatasan yang masih terbuka: A1 belum menyediakan snapshot/recovery memory
 G1D-A2. Retry Reservation Create setelah commit-before-response belum idempoten
 dan tetap scope G1D-B. Karena itu paid-pilot readiness belum diklaim.
 
+## Audit V2.0 Phase G1D-A2.1 - memory publication fixed
+
+- Conversation snapshot sekarang mengisolasi nested dictionary/list dan restore
+  mengganti seluruh state secara atomik, bukan shallow merge.
+- Create/Update/Cancel hanya memublikasikan durable-success memory setelah
+  service commit berhasil kembali.
+- Confirmed pre-commit failure mengembalikan exact workflow snapshot.
+- Commit outcome unknown dan Session unusable tidak memulihkan mutation state
+  yang langsung dapat di-retry; blocker process-local mempertahankan perilaku
+  fail-closed tanpa membuat internal-error handoff.
+- Confirmed commit yang gagal memublikasikan memory memasang emergency guard
+  `committed_memory_unavailable`; retry mutasi diblokir tanpa menyatakan bahwa
+  database gagal.
+- Failure formatting atau Telegram send setelah commit tidak membatalkan memory
+  sukses, mengulang mutation, atau membuat internal-error handoff.
+- Blocker hanya menolak Create/Update/Cancel dan continuation mutasinya. View,
+  greeting, pertanyaan informasional, dan explicit human escalation tetap
+  tersedia.
+- Snapshot cycle serta input yang melewati batas 16 tingkat, 256 item per
+  container, atau 2.048 total node ditolak dengan error aman.
+
+Temuan yang masih terbuka dan sengaja tidak ditutup oleh A2.1: deterministic
+handoff/restart recovery dan row-lock race tetap A2.2/A2.3. Reservation Create
+belum memiliki durable request key untuk merekonsiliasi commit outcome unknown
+atau commit-before-response setelah process restart; itu tetap G1D-B. Tidak ada
+schema atau migration A2.1, dan paid-pilot readiness belum diklaim.
+
+Blocker A2.1 masih process-local. Restart menghapus guard dan dapat membuka
+retry yang tidak aman sebelum G1D-B tersedia; operator harus memverifikasi
+daftar reservasi terlebih dahulu. Handoff recovery A2.2 dan owner/customer race
+A2.3 juga tetap terbuka.
+
 ## Audit V2.0 Phase G1A - fixed
 
 - `APP_ENV` kini wajib dan exact; production tidak dapat diinferensikan dari default.

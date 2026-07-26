@@ -7,6 +7,7 @@ from app.core.input_validation import (
     normalize_chat_message,
     validate_session_reference,
 )
+from app.core.memory_errors import ConversationMemoryError
 from app.core.ownership import require_owner_customer_id
 from app.core.transaction_errors import (
     PersistenceOperationError,
@@ -37,6 +38,7 @@ class AuthenticatedChatService:
                     owner_customer_id,
                 )
             except (
+                ConversationMemoryError,
                 PersistenceOperationError,
                 PersistenceOutcomeUnknownError,
                 TransactionSessionUnusableError,

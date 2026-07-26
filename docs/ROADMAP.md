@@ -42,6 +42,14 @@ Dokumen ini merangkum status pengembangan berdasarkan baseline kode AURA saat in
   aman, dan network send dipisahkan dari finalisasi database. Cancel
   reconciliation dapat memakai read transaction baru setelah mutation
   berakhir. Tidak ada perubahan schema atau migration.
+- Deep Conversation Snapshots (V2.0 G1D-A2.1): snapshot immutable/deep
+  per-conversation, atomic full replacement, DB-first publication untuk
+  Create/Update/Cancel, exact restore pada confirmed pre-commit failure, serta
+  blocker fail-closed untuk commit outcome unknown, Session unusable, dan
+  confirmed commit dengan memory publication failure. Snapshot memiliki batas
+  cycle/depth/container; View dan explicit human escalation tetap tersedia.
+  Blocker masih process-local dan hilang saat restart. Tidak ada schema atau
+  migration dan belum ada klaim paid-pilot readiness.
 
 ### Fondasi pendukung
 
@@ -51,8 +59,10 @@ Dokumen ini merangkum status pengembangan berdasarkan baseline kode AURA saat in
 
 ## Next Version
 
-- V2.0 G1D-A2: snapshot dan recovery memory-database serta koordinasi handoff
-  yang bounded. G1D-A1 tidak mengklaim atomicity memory/database.
+- V2.0 G1D-A2.2: deterministic handoff recovery, terminal reconciliation,
+  restart restoration, dan missing-notification repair.
+- V2.0 G1D-A2.3: owner/customer row-lock race dan verifikasi recovery
+  PostgreSQL disposable.
 - V2.0 G1D-B: idempotensi Reservation Create untuk retry setelah commit berhasil
   tetapi respons tidak diterima.
 - Menyelesaikan siklus reservasi setelah dibuat: cek status per pengguna dan jadwal ulang lanjutan.

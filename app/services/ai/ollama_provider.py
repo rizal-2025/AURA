@@ -14,10 +14,14 @@ class OllamaProvider(AIProvider):
         )
 
     async def chat(self, message: str) -> str:
-
-        response = await self.client.responses.create(
+        response = await self.client.chat.completions.create(
             model=self.config.OLLAMA_MODEL,
-            input=message,
+            messages=[
+                {
+                    "role": "user",
+                    "content": message,
+                }
+            ],
         )
 
-        return response.output_text
+        return response.choices[0].message.content or ""

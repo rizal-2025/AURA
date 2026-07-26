@@ -21,6 +21,12 @@ from app.core.input_validation import (
     SAFE_INPUT_CODES,
 )
 from app.core.logger import logger
+from app.core.memory_errors import (
+    ConversationMemoryError,
+    ConversationMemoryValidationError,
+    PostCommitMemoryPublicationError,
+    ReservationMutationGuardError,
+)
 from app.core.transaction_errors import (
     PersistenceOperationError,
     PersistenceOutcomeUnknownError,
@@ -34,6 +40,26 @@ REQUEST_VALIDATION_FAILED = "REQUEST_VALIDATION_FAILED"
 CONVERSATION_BUSY = "CONVERSATION_BUSY"
 
 _PERSISTENCE_DETAILS = (
+    (
+        PostCommitMemoryPublicationError,
+        "COMMITTED_OPERATION_STATE_UNAVAILABLE",
+        "The operation may already be completed. Check reservation status before retrying.",
+    ),
+    (
+        ReservationMutationGuardError,
+        "COMMITTED_OPERATION_STATE_UNAVAILABLE",
+        "The operation may already be completed. Check reservation status before retrying.",
+    ),
+    (
+        ConversationMemoryValidationError,
+        "CONVERSATION_MEMORY_UNAVAILABLE",
+        "Conversation state is temporarily unavailable.",
+    ),
+    (
+        ConversationMemoryError,
+        "CONVERSATION_MEMORY_UNAVAILABLE",
+        "Conversation state is temporarily unavailable.",
+    ),
     (
         PersistenceOutcomeUnknownError,
         "PERSISTENCE_OUTCOME_UNKNOWN",
@@ -100,7 +126,8 @@ async def conversation_busy_exception_handler(
 async def transaction_exception_handler(
     _request: Request,
     error: (
-        PersistenceOperationError
+        ConversationMemoryError
+        | PersistenceOperationError
         | PersistenceOutcomeUnknownError
         | TransactionSessionUnusableError
     ),

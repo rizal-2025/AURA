@@ -96,6 +96,17 @@ def reservation_value(identifier=17, *, people=4, status="pending"):
     )
 
 
+def reservation_dto(identifier=17, *, people=4, status="pending"):
+    return PersistedReservationDTO(
+        id=identifier,
+        name="Rizal",
+        people=people,
+        date="2026-08-01",
+        time="19:00",
+        status=status,
+    )
+
+
 class UnitOfWorkTests(unittest.TestCase):
     def test_commit_once_tracks_phases_and_never_closes(self):
         db = SpySession()
@@ -309,7 +320,7 @@ class ChatReservationTransactionTests(unittest.TestCase):
             },
         )
         agent.reservation_service.create_reservation = MagicMock(
-            return_value=reservation_value(identifier=321)
+            return_value=reservation_dto(identifier=321)
         )
         result = asyncio.run(
             agent.handle_confirmation(

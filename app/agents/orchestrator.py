@@ -7,8 +7,13 @@ from app.agents.view_reservation_agent import ViewReservationAgent
 from app.brain.classifier import IntentClassifier
 from app.brain.memory_manager import MemoryManager
 from app.brain.planner import Planner
+from app.brain.reservation_memory import (
+    has_reservation_persistence_blocker,
+    reservation_persistence_blocker_response,
+)
 from app.core.ownership import MissingOwnerCustomerError, require_owner_customer_id
 from app.core.logger import logger
+from app.core.memory_errors import ConversationMemoryError
 from app.core.transaction_errors import (
     PersistenceOperationError,
     PersistenceOutcomeUnknownError,
@@ -46,12 +51,20 @@ class AgentOrchestrator:
         if not self._has_authenticated_owner(owner_customer_id):
             return self._authorization_error_response()
 
+        explicit_handoff = HandoffDetector.is_explicit_human_request(message)
         if self.handoff_service.is_required(session_id):
             if self._is_handoff_status_request(message):
                 return self.handoff_service.status_response(session_id)
             return self.handoff_service.waiting_response(session_id)
 
-        if HandoffDetector.is_explicit_human_request(message):
+        blocked_state = self.memory_manager.get_session(session_id)
+        reservation_mutations_blocked = has_reservation_persistence_blocker(
+            self.memory_manager,
+            session_id,
+            blocked_state,
+        )
+
+        if explicit_handoff:
             self._create_handoff(session_id, "explicit_human_request", 1, db, owner_customer_id)
             return self.handoff_service.explicit_response(session_id)
 
@@ -65,6 +78,41 @@ class AgentOrchestrator:
             or self._is_update_reservation_active(current_session)
             or self._is_cancel_reservation_active(current_session)
         )
+        if reservation_mutations_blocked:
+            if self._is_view_reservation_request(message, {}):
+                return await self._view_reservations(
+                    db,
+                    session_id,
+                    owner_customer_id,
+                )
+            detected_reservation_intent = (
+                IntentClassifier.detect_reservation_intent(message)
+            )
+            if detected_reservation_intent in {
+                "reservation",
+                "update_reservation",
+                "cancel_reservation",
+            }:
+                return reservation_persistence_blocker_response(
+                    self.memory_manager,
+                    session_id,
+                    blocked_state,
+                )
+            if (
+                active_workflow
+                and not self._is_safe_blocked_non_mutating_message(message)
+            ):
+                return reservation_persistence_blocker_response(
+                    self.memory_manager,
+                    session_id,
+                    blocked_state,
+                )
+            if HandoffDetector.is_ambiguous_reservation_action(message):
+                return reservation_persistence_blocker_response(
+                    self.memory_manager,
+                    session_id,
+                    blocked_state,
+                )
         if not active_workflow and HandoffDetector.is_ambiguous_reservation_action(message):
             attempt_count = self.handoff_service.record_ambiguity(session_id)
             if attempt_count >= 2:
@@ -78,8 +126,10 @@ class AgentOrchestrator:
                 message,
                 db,
                 owner_customer_id,
+                reservation_mutations_blocked=reservation_mutations_blocked,
             )
         except (
+            ConversationMemoryError,
             PersistenceOperationError,
             PersistenceOutcomeUnknownError,
             TransactionSessionUnusableError,
@@ -98,6 +148,7 @@ class AgentOrchestrator:
         message: str,
         db,
         owner_customer_id=None,
+        reservation_mutations_blocked: bool = False,
     ):
         # Authenticated chat must never create or read unscoped conversation
         # memory. The API supplies an owner-scoped internal key only after the
@@ -118,7 +169,10 @@ class AgentOrchestrator:
             session.get("cancel_reservation_stage"),
         )
 
-        if self._is_update_reservation_active(session_payload):
+        if (
+            self._is_update_reservation_active(session_payload)
+            and not reservation_mutations_blocked
+        ):
             self._reset_intent_attempts(session_id)
             return await self._update_reservation(
                 db,
@@ -127,7 +181,10 @@ class AgentOrchestrator:
                 owner_customer_id,
             )
 
-        if self._is_cancel_reservation_active(session_payload):
+        if (
+            self._is_cancel_reservation_active(session_payload)
+            and not reservation_mutations_blocked
+        ):
             self._reset_intent_attempts(session_id)
             return await self._cancel_reservation(
                 db,
@@ -137,6 +194,12 @@ class AgentOrchestrator:
             )
 
         if self._is_update_reservation_request(message, session_payload):
+            if reservation_mutations_blocked:
+                return reservation_persistence_blocker_response(
+                    self.memory_manager,
+                    session_id,
+                    session,
+                )
             self._reset_intent_attempts(session_id)
             return await self._update_reservation(
                 db,
@@ -146,6 +209,12 @@ class AgentOrchestrator:
             )
 
         if self._is_cancel_reservation_request(message, session_payload):
+            if reservation_mutations_blocked:
+                return reservation_persistence_blocker_response(
+                    self.memory_manager,
+                    session_id,
+                    session,
+                )
             self._reset_intent_attempts(session_id)
             return await self._cancel_reservation(
                 db,
@@ -158,7 +227,11 @@ class AgentOrchestrator:
             self._reset_intent_attempts(session_id)
             return await self._view_reservations(db, session_id, owner_customer_id)
 
-        if session_payload.get("intent") and session_payload.get("intent") != "general":
+        if (
+            not reservation_mutations_blocked
+            and session_payload.get("intent") == "reservation"
+            and not session_payload.get("completed")
+        ):
             intent = session_payload["intent"]
             confidence = session_payload.get("intent_confidence", 0.0)
         else:
@@ -166,14 +239,21 @@ class AgentOrchestrator:
             intent = intent_result.get("intent", "general")
             confidence = intent_result.get("confidence", 0.0)
 
-            if intent == "general" and HandoffDetector.is_deterministically_misunderstood(message):
+            safe_blocked_general = (
+                reservation_mutations_blocked
+                and intent == "general"
+                and self._is_safe_blocked_non_mutating_message(message)
+            )
+            if safe_blocked_general:
+                self._reset_intent_attempts(session_id)
+            elif intent == "general" and HandoffDetector.is_deterministically_misunderstood(message):
                 attempt_count = self.handoff_service.record_misunderstanding(session_id)
                 if attempt_count >= 2:
                     self._create_handoff(session_id, "repeated_misunderstanding", attempt_count, db, owner_customer_id)
                     return self.handoff_service.required_response(session_id)
                 return "Maaf, saya belum memahami permintaan Anda. Bisa dijelaskan kembali?"
 
-            if HandoffDetector.is_low_confidence(intent, confidence):
+            if not safe_blocked_general and HandoffDetector.is_low_confidence(intent, confidence):
                 if intent == "general" and HandoffDetector.is_safe_non_action_message(message):
                     self._reset_intent_attempts(session_id)
                 elif intent in {"ambiguous", "update_reservation", "cancel_reservation"}:
@@ -195,6 +275,12 @@ class AgentOrchestrator:
                 return await self._view_reservations(db, session_id, owner_customer_id)
 
             if intent == "update_reservation":
+                if reservation_mutations_blocked:
+                    return reservation_persistence_blocker_response(
+                        self.memory_manager,
+                        session_id,
+                        session,
+                    )
                 return await self._update_reservation(
                     db,
                     session_id,
@@ -203,6 +289,12 @@ class AgentOrchestrator:
                 )
 
             if intent == "cancel_reservation":
+                if reservation_mutations_blocked:
+                    return reservation_persistence_blocker_response(
+                        self.memory_manager,
+                        session_id,
+                        session,
+                    )
                 return await self._cancel_reservation(
                     db,
                     session_id,
@@ -230,6 +322,13 @@ class AgentOrchestrator:
             intent,
             confidence is not None,
         )
+
+        if intent == "reservation" and reservation_mutations_blocked:
+            return reservation_persistence_blocker_response(
+                self.memory_manager,
+                session_id,
+                session,
+            )
 
         if intent in {"reservation", "check_reservation", "cancel_reservation", "greeting", "general_question"}:
             self._reset_intent_attempts(session_id)
@@ -455,3 +554,29 @@ class AgentOrchestrator:
     def _is_handoff_status_request(message: str) -> bool:
         normalized = " ".join(message.lower().strip().split())
         return normalized in {"status handoff", "status bantuan", "status petugas"}
+
+    @staticmethod
+    def _is_safe_blocked_non_mutating_message(message: str) -> bool:
+        if IntentClassifier.detect_greeting_intent(message) == "greeting":
+            return True
+        if IntentClassifier.detect_reservation_intent(message) not in {None, "general"}:
+            return False
+        normalized = " ".join(message.lower().strip().split())
+        informational_terms = (
+            "apa",
+            "apakah",
+            "bagaimana",
+            "berapa",
+            "bisakah",
+            "bolehkah",
+            "di mana",
+            "dimana",
+            "jam buka",
+            "kapan",
+            "mengapa",
+            "kenapa",
+        )
+        return normalized.endswith("?") or any(
+            term in normalized.split() or term in normalized
+            for term in informational_terms
+        )

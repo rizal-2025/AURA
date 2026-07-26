@@ -13,6 +13,18 @@ from app.core.conversation_memory import build_authenticated_memory_key
 from app.core.security import JWT_ALGORITHM, create_customer_access_token
 from app.db.database import get_db
 from app.main import app
+from app.services.reservation.dto import PersistedReservationDTO
+
+
+def persisted(identifier):
+    return PersistedReservationDTO(
+        id=identifier,
+        name="Rizal",
+        people=4,
+        date="2026-08-01",
+        time="19:00",
+        status="pending",
+    )
 
 
 class FakeCustomerDB:
@@ -156,7 +168,7 @@ class TestSecureReservationCreate(unittest.TestCase):
         with (
             patch(
                 "app.agents.reservation_agent.ReservationService.create_reservation",
-                return_value=SimpleNamespace(id=91),
+                return_value=persisted(91),
             ),
             self.assertLogs("AURA", level="INFO") as captured,
         ):
@@ -186,7 +198,7 @@ class TestSecureReservationCreate(unittest.TestCase):
     def test_valid_token_allows_chat_create_and_uses_authenticated_owner(self):
         with patch(
             "app.agents.reservation_agent.ReservationService.create_reservation",
-            return_value=SimpleNamespace(id=92),
+            return_value=persisted(92),
         ) as create_reservation:
             self._confirm_chat_reservation("chat-customer-a", self.customer_a, create_reservation)
 
@@ -196,7 +208,7 @@ class TestSecureReservationCreate(unittest.TestCase):
     def test_same_token_with_different_session_ids_keeps_same_owner(self):
         with patch(
             "app.agents.reservation_agent.ReservationService.create_reservation",
-            return_value=SimpleNamespace(id=93),
+            return_value=persisted(93),
         ) as create_reservation:
             self._confirm_chat_reservation("chat-session-one", self.customer_a, create_reservation)
             self._confirm_chat_reservation("chat-session-two", self.customer_a, create_reservation)
@@ -210,7 +222,7 @@ class TestSecureReservationCreate(unittest.TestCase):
     def test_different_customer_tokens_create_distinct_owners(self):
         with patch(
             "app.agents.reservation_agent.ReservationService.create_reservation",
-            return_value=SimpleNamespace(id=94),
+            return_value=persisted(94),
         ) as create_reservation:
             self._confirm_chat_reservation("chat-customer-a", self.customer_a, create_reservation)
             self._confirm_chat_reservation("chat-customer-b", self.customer_b, create_reservation)

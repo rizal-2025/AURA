@@ -3,7 +3,22 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from app.brain.memory_manager import MemoryManager
+from app.brain.reservation_memory import (
+    COMMITTED_OPERATION_FORMAT_FALLBACK_RESPONSE,
+    OUTCOME_UNKNOWN,
+    SESSION_UNUSABLE,
+    has_reservation_persistence_blocker,
+    publish_cancel_success,
+    publish_post_commit_memory_guard,
+    publish_reservation_persistence_blocker,
+    reservation_persistence_blocker_response,
+)
 from app.core.ownership import MissingOwnerCustomerError, require_owner_customer_id
+from app.core.transaction_errors import (
+    PersistenceOperationError,
+    PersistenceOutcomeUnknownError,
+    TransactionSessionUnusableError,
+)
 from app.services.reservation.service import ReservationService
 
 
@@ -57,6 +72,19 @@ class CancelReservationAgent:
             }
 
         session = self.memory_manager.get_session(session_id)
+        if has_reservation_persistence_blocker(
+            self.memory_manager,
+            session_id,
+            session,
+        ):
+            return {
+                "status": "persistence_uncertain",
+                "response": reservation_persistence_blocker_response(
+                    self.memory_manager,
+                    session_id,
+                    session,
+                ),
+            }
         stage = session.get("cancel_reservation_stage")
 
         if stage is None:
@@ -66,7 +94,13 @@ class CancelReservationAgent:
             return self._select_reservation(db, session, user_message, owner_customer_id)
 
         if stage == self.CONFIRM_CANCELLATION:
-            return self._confirm_cancellation(db, session, user_message, owner_customer_id)
+            return self._confirm_cancellation(
+                db,
+                session_id,
+                session,
+                user_message,
+                owner_customer_id,
+            )
 
         self._clear_cancellation_state(session)
         return self._start_cancellation(db, session, owner_customer_id)
@@ -155,6 +189,7 @@ class CancelReservationAgent:
     def _confirm_cancellation(
         self,
         db: Session,
+        session_id: str,
         session: dict[str, Any],
         user_message: str,
         owner_customer_id,
@@ -181,22 +216,64 @@ class CancelReservationAgent:
                 "response": "Yakin ingin membatalkan reservasi ini? Ya / Tidak",
             }
 
-        cancelled_reservation = self.reservation_service.cancel_reservation(
-            db,
-            reservation_id,
-            owner_customer_id=owner_customer_id,
-        )
-        if cancelled_reservation is None:
-            # cancel_reservation owns and fully ends the atomic mutation
-            # transaction. This ownership-filtered reconciliation is a new,
-            # separate read transaction used only to preserve the safe
-            # already-cancelled versus unavailable response distinction.
-            current_reservation = self.reservation_service.get_reservation_by_id(
+        snapshot = self.memory_manager.snapshot_conversation(session_id)
+        try:
+            cancelled_reservation = self.reservation_service.cancel_reservation(
                 db,
                 reservation_id,
                 owner_customer_id=owner_customer_id,
             )
-            self._clear_cancellation_state(session)
+            if cancelled_reservation is None:
+                # cancel_reservation owns and fully ends the atomic mutation
+                # transaction. This ownership-filtered reconciliation is a new,
+                # separate read transaction used only to preserve the safe
+                # already-cancelled versus unavailable response distinction.
+                current_reservation = self.reservation_service.get_reservation_by_id(
+                    db,
+                    reservation_id,
+                    owner_customer_id=owner_customer_id,
+                )
+            else:
+                current_reservation = None
+        except PersistenceOutcomeUnknownError:
+            publish_reservation_persistence_blocker(
+                self.memory_manager,
+                session_id,
+                snapshot,
+                status=OUTCOME_UNKNOWN,
+                operation="cancel",
+            )
+            raise
+        except TransactionSessionUnusableError:
+            publish_reservation_persistence_blocker(
+                self.memory_manager,
+                session_id,
+                snapshot,
+                status=SESSION_UNUSABLE,
+                operation="cancel",
+            )
+            raise
+        except PersistenceOperationError:
+            self.memory_manager.replace_conversation(session_id, snapshot)
+            raise
+
+        publication_failed = False
+        try:
+            publish_cancel_success(
+                self.memory_manager,
+                session_id,
+                snapshot,
+            )
+        except Exception:
+            publication_failed = True
+        if publication_failed:
+            publish_post_commit_memory_guard(
+                self.memory_manager,
+                session_id,
+                snapshot,
+                operation="cancel",
+            )
+        if cancelled_reservation is None:
             if current_reservation is not None and self._is_cancelled(current_reservation):
                 response = "Reservasi ini sudah dibatalkan. Tidak ada perubahan tambahan."
             else:
@@ -206,13 +283,16 @@ class CancelReservationAgent:
                 "response": response,
             }
 
-        self._clear_cancellation_state(session)
-        return {
-            "status": "cancelled",
-            "response": (
+        try:
+            response = (
                 "Reservasi berhasil dibatalkan:\n\n"
                 f"{self._format_reservation(cancelled_reservation)}"
-            ),
+            )
+        except Exception:
+            response = COMMITTED_OPERATION_FORMAT_FALLBACK_RESPONSE
+        return {
+            "status": "cancelled",
+            "response": response,
         }
 
     def _clear_cancellation_state(self, session: dict[str, Any]) -> None:

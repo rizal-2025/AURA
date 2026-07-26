@@ -3,6 +3,11 @@
 from app.core.conversation_lock_manager import ConversationBusyError
 from app.core.input_validation import InputValidationError, normalize_chat_message
 from app.core.logger import logger
+from app.core.memory_errors import (
+    ConversationMemoryError,
+    PostCommitMemoryPublicationError,
+    ReservationMutationGuardError,
+)
 from app.core.transaction_errors import (
     PersistenceOperationError,
     PersistenceOutcomeUnknownError,
@@ -23,6 +28,10 @@ INVALID_INPUT_REPLY = "Pesan tidak valid atau terlalu panjang. Silakan periksa k
 CONVERSATION_BUSY_REPLY = "Pesan sebelumnya masih diproses. Silakan coba lagi sebentar."
 PERSISTENCE_UNAVAILABLE_REPLY = (
     "Maaf, perubahan belum dapat dipastikan. Silakan periksa status lalu coba lagi."
+)
+MEMORY_PUBLICATION_UNAVAILABLE_REPLY = (
+    "Proses telah selesai, tetapi status percakapan tidak dapat diperbarui. "
+    "Silakan cek daftar reservasi sebelum mencoba lagi."
 )
 WELCOME_REPLY = (
     "Halo, saya AURA. Saya dapat membantu reservasi, melihat, mengubah, atau "
@@ -155,6 +164,20 @@ class TelegramCustomerHandlers:
         except InputValidationError:
             logger.info("TELEGRAM UPDATE: outcome=rejected category=input_invalid")
             await self._safe_reply(telegram_message, INVALID_INPUT_REPLY)
+        except (PostCommitMemoryPublicationError, ReservationMutationGuardError):
+            logger.info(
+                "TELEGRAM UPDATE: outcome=service_error "
+                "category=memory_publication_error"
+            )
+            await self._safe_reply(
+                telegram_message,
+                MEMORY_PUBLICATION_UNAVAILABLE_REPLY,
+            )
+        except ConversationMemoryError:
+            logger.info(
+                "TELEGRAM UPDATE: outcome=service_error category=memory_error"
+            )
+            await self._safe_reply(telegram_message, SERVICE_UNAVAILABLE_REPLY)
         except (
             PersistenceOperationError,
             PersistenceOutcomeUnknownError,
@@ -223,6 +246,20 @@ class TelegramCustomerHandlers:
         except ConversationBusyError:
             logger.info("TELEGRAM UPDATE: outcome=busy")
             await self._safe_reply(message, CONVERSATION_BUSY_REPLY)
+        except (PostCommitMemoryPublicationError, ReservationMutationGuardError):
+            logger.info(
+                "TELEGRAM UPDATE: outcome=service_error "
+                "category=memory_publication_error"
+            )
+            await self._safe_reply(
+                message,
+                MEMORY_PUBLICATION_UNAVAILABLE_REPLY,
+            )
+        except ConversationMemoryError:
+            logger.info(
+                "TELEGRAM UPDATE: outcome=service_error category=memory_error"
+            )
+            await self._safe_reply(message, SERVICE_UNAVAILABLE_REPLY)
         except (
             PersistenceOperationError,
             PersistenceOutcomeUnknownError,

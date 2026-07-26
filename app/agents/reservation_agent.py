@@ -4,6 +4,16 @@ from typing import Any
 from app.brain.context_resolver import ContextResolver
 from app.brain.conversation_state_manager import ConversationStateManager
 from app.brain.memory_manager import MemoryManager
+from app.brain.reservation_memory import (
+    COMMITTED_OPERATION_FORMAT_FALLBACK_RESPONSE,
+    OUTCOME_UNKNOWN,
+    SESSION_UNUSABLE,
+    has_reservation_persistence_blocker,
+    publish_create_success,
+    publish_post_commit_memory_guard,
+    publish_reservation_persistence_blocker,
+    reservation_persistence_blocker_response,
+)
 from app.brain.reservation_entity_extractor import (
     ReservationEntityExtractor,
     normalize_natural_reservation_name,
@@ -11,6 +21,11 @@ from app.brain.reservation_entity_extractor import (
 from app.core.input_validation import (
     InputValidationError,
     validate_reservation_field,
+)
+from app.core.transaction_errors import (
+    PersistenceOperationError,
+    PersistenceOutcomeUnknownError,
+    TransactionSessionUnusableError,
 )
 from app.memory.long_term_memory import LongTermMemoryManager
 from app.schemas.reservation import ReservationCreate
@@ -65,6 +80,20 @@ class ReservationAgent:
         db=None,
     ) -> dict[str, Any]:
         current_session_id = session_id or str(session_state.get("session_id") or "default")
+        current_state = self.memory_manager.get_session(current_session_id)
+        if has_reservation_persistence_blocker(
+            self.memory_manager,
+            current_session_id,
+            current_state,
+        ):
+            return {
+                "status": "persistence_uncertain",
+                "response": reservation_persistence_blocker_response(
+                    self.memory_manager,
+                    current_session_id,
+                    current_state,
+                ),
+            }
         if session_state.get("awaiting_confirmation"):
             return await self.handle_confirmation(
                 user_message,
@@ -209,6 +238,19 @@ class ReservationAgent:
         db=None,
     ) -> dict[str, Any]:
         session = self.memory_manager.get_session(session_id)
+        if has_reservation_persistence_blocker(
+            self.memory_manager,
+            session_id,
+            session,
+        ):
+            return {
+                "status": "persistence_uncertain",
+                "response": reservation_persistence_blocker_response(
+                    self.memory_manager,
+                    session_id,
+                    session,
+                ),
+            }
         editing_field = session.get("editing_field")
 
         if editing_field in self.EDITABLE_FIELDS:
@@ -240,6 +282,7 @@ class ReservationAgent:
                     "response": "Layanan reservasi belum tersedia. Silakan coba lagi.",
                 }
 
+            snapshot = self.memory_manager.snapshot_conversation(session_id)
             canonical_values = {}
             for field_name in self.EDITABLE_FIELDS:
                 canonical_value = self._normalize_and_validate_field(
@@ -260,27 +303,60 @@ class ReservationAgent:
                         "invalid_input": True,
                     }
                 canonical_values[field_name] = canonical_value
-            self.memory_manager.update_session(session_id, canonical_values)
             reservation_data = ReservationCreate(**canonical_values)
-            reservation = self.reservation_service.create_reservation(
-                db,
-                reservation_data,
-                owner_customer_id=owner_customer_id,
-            )
+            try:
+                reservation = self.reservation_service.create_reservation(
+                    db,
+                    reservation_data,
+                    owner_customer_id=owner_customer_id,
+                )
+            except PersistenceOutcomeUnknownError:
+                publish_reservation_persistence_blocker(
+                    self.memory_manager,
+                    session_id,
+                    snapshot,
+                    status=OUTCOME_UNKNOWN,
+                    operation="create",
+                )
+                raise
+            except TransactionSessionUnusableError:
+                publish_reservation_persistence_blocker(
+                    self.memory_manager,
+                    session_id,
+                    snapshot,
+                    status=SESSION_UNUSABLE,
+                    operation="create",
+                )
+                raise
+            except PersistenceOperationError:
+                self.memory_manager.replace_conversation(session_id, snapshot)
+                raise
+
             reservation_id = reservation.id
-            self.memory_manager.update_session(session_id, {
-                "completed": True,
-                "awaiting_confirmation": False,
-                "reservation_id": reservation_id,
-            })
-            self.memory_manager.get_session(session_id)["editing_field"] = None
+            publication_failed = False
+            try:
+                publish_create_success(
+                    self.memory_manager,
+                    session_id,
+                    snapshot,
+                    reservation,
+                )
+            except Exception:
+                publication_failed = True
+            if publication_failed:
+                publish_post_commit_memory_guard(
+                    self.memory_manager,
+                    session_id,
+                    snapshot,
+                    operation="create",
+                )
+            try:
+                response = self._create_success_response(reservation_id)
+            except Exception:
+                response = COMMITTED_OPERATION_FORMAT_FALLBACK_RESPONSE
             return {
                 "status": "completed",
-                "response": (
-                    "Reservasi berhasil dibuat.\n\n"
-                    f"Nomor reservasi: {reservation_id}\n\n"
-                    "Sampai jumpa."
-                ),
+                "response": response,
             }
 
         if intent == REJECT:
@@ -483,3 +559,11 @@ class ReservationAgent:
             "time": "Jam berapa?",
         }
         return questions.get(field_name, "Mohon lengkapi data reservasi.")
+
+    @staticmethod
+    def _create_success_response(reservation_id: int) -> str:
+        return (
+            "Reservasi berhasil dibuat.\n\n"
+            f"Nomor reservasi: {reservation_id}\n\n"
+            "Sampai jumpa."
+        )

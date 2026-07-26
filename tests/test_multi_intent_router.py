@@ -1,4 +1,4 @@
-import asyncio
+﻿import asyncio
 import io
 import logging
 import unittest
@@ -129,6 +129,36 @@ class TestMultiIntentRouter(unittest.TestCase):
         self.assertEqual(len(recorder.created), 1)
         self.assertEqual(provider.chat.await_count, 1)
         self.assertNotIn("private provider failure", stream.getvalue())
+
+    def test_greeting_intent_does_not_leak_into_next_reservation_message(self):
+        orchestrator = AgentOrchestrator()
+        session_id = "greeting-then-reservation"
+        owner_customer_id = "test-owner"
+
+        greeting_response = asyncio.run(
+            orchestrator.handle(
+                session_id,
+                "Halo",
+                object(),
+                owner_customer_id,
+            )
+        )
+
+        reservation_response = asyncio.run(
+            orchestrator.handle(
+                session_id,
+                "Saya mau membuat reservasi",
+                object(),
+                owner_customer_id,
+            )
+        )
+
+        self.assertIn("Halo", greeting_response)
+        self.assertIn("Atas nama siapa", reservation_response)
+        self.assertEqual(
+            orchestrator.memory_manager.get_session(session_id).get("intent"),
+            "reservation",
+        )
 
 
 if __name__ == "__main__":
