@@ -50,6 +50,12 @@ Dokumen ini merangkum status pengembangan berdasarkan baseline kode AURA saat in
   cycle/depth/container; View dan explicit human escalation tetap tersedia.
   Blocker masih process-local dan hilang saat restart. Tidak ada schema atau
   migration dan belum ada klaim paid-pilot readiness.
+- Persistent Reservation Workflow Recovery (V2.0 G1D-A2.2): unfinished
+  Create/Update/Cancel dan blocker mutation dipersistenkan dalam
+  `conversation_workflow_states` dengan payload allowlisted, hash sesi,
+  revisioned tombstone, pre-mutation marker, restore fail-closed di dalam lock
+  G1C, serta transaksi read/write singkat. Existing handoff ticket recovery
+  tetap menjadi sumber kebenaran handoff.
 
 ### Fondasi pendukung
 
@@ -59,8 +65,6 @@ Dokumen ini merangkum status pengembangan berdasarkan baseline kode AURA saat in
 
 ## Next Version
 
-- V2.0 G1D-A2.2: deterministic handoff recovery, terminal reconciliation,
-  restart restoration, dan missing-notification repair.
 - V2.0 G1D-A2.3: owner/customer row-lock race dan verifikasi recovery
   PostgreSQL disposable.
 - V2.0 G1D-B: idempotensi Reservation Create untuk retry setelah commit berhasil

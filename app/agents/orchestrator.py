@@ -21,6 +21,9 @@ from app.core.transaction_errors import (
 )
 from app.memory.session import memory
 from app.services.ai.factory import get_ai_provider
+from app.services.conversation_workflow_state_service import (
+    ConversationWorkflowStateService,
+)
 from app.services.handoff import HandoffDetector, HandoffService
 
 
@@ -31,13 +34,21 @@ class AgentOrchestrator:
         self.intent_classifier = IntentClassifier()
         self.planner = Planner()
         self.memory_manager = MemoryManager()
-        self.workflow = AgentWorkflow(memory_manager=self.memory_manager)
+        self.workflow_state_service = ConversationWorkflowStateService(
+            self.memory_manager,
+        )
+        self.workflow = AgentWorkflow(
+            memory_manager=self.memory_manager,
+            workflow_state_service=self.workflow_state_service,
+        )
         self.view_reservation_agent = ViewReservationAgent()
         self.update_reservation_agent = UpdateReservationAgent(
             memory_manager=self.memory_manager,
+            workflow_state_service=self.workflow_state_service,
         )
         self.cancel_reservation_agent = CancelReservationAgent(
             memory_manager=self.memory_manager,
+            workflow_state_service=self.workflow_state_service,
         )
         self.handoff_service = HandoffService(self.memory_manager)
 

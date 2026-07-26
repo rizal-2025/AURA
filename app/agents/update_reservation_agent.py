@@ -47,9 +47,11 @@ class UpdateReservationAgent:
         self,
         memory_manager: MemoryManager | None = None,
         reservation_service: ReservationService | None = None,
+        workflow_state_service=None,
     ):
         self.memory_manager = memory_manager or MemoryManager()
         self.reservation_service = reservation_service or ReservationService()
+        self.workflow_state_service = workflow_state_service
 
     async def run(
         self,
@@ -225,6 +227,13 @@ class UpdateReservationAgent:
                 "invalid_input": True,
             }
 
+        if self.workflow_state_service is not None:
+            self.workflow_state_service.begin_mutation(
+                db,
+                owner_customer_id=owner_customer_id,
+                memory_key=session_id,
+                operation="update",
+            )
         try:
             updated_reservation = self.reservation_service.update_reservation_field(
                 db,

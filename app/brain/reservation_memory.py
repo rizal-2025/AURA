@@ -16,9 +16,15 @@ RESERVATION_PERSISTENCE_STATE = "reservation_persistence_state"
 OUTCOME_UNKNOWN = "outcome_unknown"
 SESSION_UNUSABLE = "session_unusable"
 COMMITTED_MEMORY_UNAVAILABLE = "committed_memory_unavailable"
+MUTATION_RECONCILIATION_REQUIRED = "mutation_reconciliation_required"
 RESERVATION_OPERATIONS = frozenset({"create", "update", "cancel"})
 RESERVATION_PERSISTENCE_STATUSES = frozenset(
-    {OUTCOME_UNKNOWN, SESSION_UNUSABLE, COMMITTED_MEMORY_UNAVAILABLE}
+    {
+        OUTCOME_UNKNOWN,
+        SESSION_UNUSABLE,
+        COMMITTED_MEMORY_UNAVAILABLE,
+        MUTATION_RECONCILIATION_REQUIRED,
+    }
 )
 RESERVATION_PERSISTENCE_UNCERTAIN_RESPONSE = (
     "Maaf, perubahan belum dapat dipastikan. "

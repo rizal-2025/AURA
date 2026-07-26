@@ -62,8 +62,13 @@ class ReservationAgent:
         "gak",
     }
 
-    def __init__(self, memory_manager: MemoryManager | None = None):
+    def __init__(
+        self,
+        memory_manager: MemoryManager | None = None,
+        workflow_state_service=None,
+    ):
         self.memory_manager = memory_manager or MemoryManager()
+        self.workflow_state_service = workflow_state_service
         self.entity_extractor = ReservationEntityExtractor()
         self.reservation_service = ReservationService()
         self.conversation_state_manager = ConversationStateManager()
@@ -304,6 +309,13 @@ class ReservationAgent:
                     }
                 canonical_values[field_name] = canonical_value
             reservation_data = ReservationCreate(**canonical_values)
+            if self.workflow_state_service is not None:
+                self.workflow_state_service.begin_mutation(
+                    db,
+                    owner_customer_id=owner_customer_id,
+                    memory_key=session_id,
+                    operation="create",
+                )
             try:
                 reservation = self.reservation_service.create_reservation(
                     db,

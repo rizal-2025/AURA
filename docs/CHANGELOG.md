@@ -2,6 +2,38 @@
 
 Semua perubahan penting pada AURA dicatat di dokumen ini. Repository belum memiliki tag rilis, sehingga entri berikut mengikuti riwayat commit proyek.
 
+## 2026-07-26 - G1D-A2.2 Persistent Workflow Restart Recovery
+
+### Added
+
+- Tabel JSONB `conversation_workflow_states` dan migrasi konvergen
+  `add_conversation_workflow_states.py` untuk state workflow reservasi yang
+  di-scope berdasarkan customer dan hash referensi sesi.
+- Serializer schema-version 1 dengan allowlist serta validasi ketat untuk
+  unfinished Create, Update, Cancel, dan blocker mutasi.
+- Revisioned inactive tombstone dan pre-mutation reconciliation marker untuk
+  mencegah snapshot lama hidup kembali atau konfirmasi committed dijalankan
+  ulang setelah restart.
+- Unit test serta PostgreSQL disposable-schema test untuk migration, validasi,
+  restart recovery, isolasi, stale writer, dan batas transaksi.
+
+### Changed
+
+- Authenticated chat memulihkan workflow di dalam lock G1C sebelum rekonsiliasi
+  handoff, mengakhiri read transaction sebelum agent await, lalu memublikasikan
+  state dalam write transaction singkat setelah turn.
+- State persisten yang malformed, oversized, unsupported, atau kontradiktif
+  gagal tertutup tanpa menjalankan workflow, AI, atau membuat handoff baru.
+- Workflow terminal ditandai inactive dengan payload kosong; handoff ticket
+  tetap menjadi satu-satunya sumber kebenaran handoff.
+
+### Limitations
+
+- Reconciliation marker sengaja konservatif dan memerlukan verifikasi status
+  reservasi sebelum automation mutation dibuka kembali.
+- Durable request-key idempotency Create dan koordinasi conversation lintas
+  worker/instance tetap di luar scope G1D-A2.2.
+
 ## 2026-07-25 - G1D-A2.1 Deep Conversation Snapshots
 
 ### Added

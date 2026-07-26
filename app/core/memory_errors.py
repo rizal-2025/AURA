@@ -32,3 +32,15 @@ class ReservationMutationGuardError(ConversationMemoryError):
     """The process-local fail-closed reservation guard could not be installed."""
 
     code = "RESERVATION_MUTATION_GUARD_UNAVAILABLE"
+
+
+class ConversationWorkflowRecoveryError(ConversationMemoryError):
+    """Persisted workflow state could not be trusted or restored."""
+
+    code = "CONVERSATION_WORKFLOW_RECOVERY_UNAVAILABLE"
+
+
+class ConversationWorkflowPublicationError(ConversationMemoryError):
+    """Validated workflow state could not be published safely."""
+
+    code = "CONVERSATION_WORKFLOW_PUBLICATION_UNAVAILABLE"

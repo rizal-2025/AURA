@@ -73,6 +73,23 @@ retry yang tidak aman sebelum G1D-B tersedia; operator harus memverifikasi
 daftar reservasi terlebih dahulu. Handoff recovery A2.2 dan owner/customer race
 A2.3 juga tetap terbuka.
 
+## Audit V2.0 Phase G1D-A2.2 - persistent workflow recovery fixed
+
+- Unfinished Create/Update/Cancel kini dipulihkan dari payload versioned yang
+  hanya berisi field reservasi allowlisted.
+- Blocker A2.1 dan pre-mutation reconciliation marker bertahan setelah restart;
+  crash setelah commit tidak memulihkan confirmation/action stage lama.
+- Revision check dan inactive tombstone menolak stale writer yang mencoba
+  menghidupkan kembali workflow terminal.
+- Recovery state rusak atau tidak kompatibel gagal tertutup sebelum handoff,
+  workflow, classifier, atau AI dan tidak otomatis dihapus.
+- Handoff state tidak diduplikasi; active ticket tetap authoritatif dan
+  rekonsiliasi handoff existing tidak diubah.
+
+Keterbatasan tersisa: marker outcome yang belum direkonsiliasi memerlukan
+verifikasi reservasi sebelum dibuka, durable request-key idempotency Create tetap
+G1D-B, dan serialisasi lintas worker/instance belum tersedia.
+
 ## Audit V2.0 Phase G1A - fixed
 
 - `APP_ENV` kini wajib dan exact; production tidak dapat diinferensikan dari default.
