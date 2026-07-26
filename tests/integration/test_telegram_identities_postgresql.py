@@ -28,6 +28,9 @@ from migrations.add_support_tickets import migrate as migrate_support_tickets
 from migrations.add_support_ticket_notifications import (
     migrate as migrate_support_ticket_notifications,
 )
+from migrations.add_conversation_workflow_states import (
+    migrate as migrate_workflow_states,
+)
 from migrations.add_telegram_identities import (
     CUSTOMER_FOREIGN_KEY,
     CUSTOMER_INDEX,
@@ -444,6 +447,7 @@ class TestTelegramIdentitiesPostgreSQL(unittest.TestCase):
             connection.execute(text(f'DROP TABLE "{self.schema}".support_tickets'))
         migrate_support_tickets(self.engine, schema=self.schema)
         migrate_support_ticket_notifications(self.engine, schema=self.schema)
+        migrate_workflow_states(self.engine, schema=self.schema)
         migrate(self.engine, schema=self.schema)
 
         class Message:

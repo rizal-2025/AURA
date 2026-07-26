@@ -44,9 +44,28 @@ _RESERVATION_GUARD_STATUSES = frozenset(
         "outcome_unknown",
         "session_unusable",
         "committed_memory_unavailable",
+        "mutation_reconciliation_required",
     }
 )
 _RESERVATION_GUARD_OPERATIONS = frozenset({"create", "update", "cancel"})
+RESERVATION_WORKFLOW_MEMORY_KEYS = frozenset(
+    {
+        "intent",
+        "name",
+        "people",
+        "date",
+        "time",
+        "completed",
+        "awaiting_confirmation",
+        "editing_field",
+        "asked_fields",
+        "update_reservation_stage",
+        "reservation_id",
+        "cancel_reservation_stage",
+        "cancel_reservation_id",
+        "reservation_persistence_state",
+    }
+)
 
 
 def _normalized_key(key: str) -> str:
@@ -188,6 +207,8 @@ class MemoryManager:
     def __init__(self):
         self._sessions: dict[str, dict[str, Any]] = {}
         self._reservation_mutation_guards: dict[str, dict[str, str]] = {}
+        self._workflow_persistence_revisions: dict[str, int] = {}
+        self._workflow_persistence_initialized: set[str] = set()
 
     @staticmethod
     def _default_conversation_state() -> dict[str, Any]:
@@ -271,6 +292,53 @@ class MemoryManager:
     def clear_reservation_mutation_guard(self, memory_key: str) -> None:
         self._reservation_mutation_guards.pop(memory_key, None)
 
+    def set_workflow_persistence_revision(
+        self,
+        memory_key: str,
+        revision: int,
+    ) -> None:
+        if type(revision) is not int or revision < 0:
+            raise ConversationMemoryValidationError()
+        self._workflow_persistence_revisions[memory_key] = revision
+        self._workflow_persistence_initialized.add(memory_key)
+
+    def get_workflow_persistence_revision(self, memory_key: str) -> int:
+        return self._workflow_persistence_revisions.get(memory_key, 0)
+
+    def is_workflow_persistence_initialized(self, memory_key: str) -> bool:
+        return memory_key in self._workflow_persistence_initialized
+
+    def replace_reservation_workflow_state(
+        self,
+        memory_key: str,
+        state: Mapping[str, object],
+    ) -> None:
+        """Replace only reservation-owned state while preserving handoff data."""
+
+        validated = ConversationSnapshot(state).materialize()
+        if set(validated) - RESERVATION_WORKFLOW_MEMORY_KEYS:
+            raise ConversationMemoryValidationError()
+
+        current = self._sessions.get(memory_key, {})
+        preserved = {
+            key: value
+            for key, value in current.items()
+            if key not in RESERVATION_WORKFLOW_MEMORY_KEYS
+        }
+        preserved.update(self._default_conversation_state())
+        preserved.update(validated)
+        self._sessions[memory_key] = preserved
+
+        blocker = validated.get("reservation_persistence_state")
+        if isinstance(blocker, dict):
+            self.install_reservation_mutation_guard(
+                memory_key,
+                status=blocker.get("status"),
+                operation=blocker.get("operation"),
+            )
+        else:
+            self.clear_reservation_mutation_guard(memory_key)
+
     def update_session(self, memory_key: str, data: dict[str, Any]) -> dict[str, Any]:
         session = self.create_session(memory_key)
         for key, value in data.items():
@@ -281,6 +349,8 @@ class MemoryManager:
     def clear_session(self, memory_key: str) -> None:
         self._sessions.pop(memory_key, None)
         self._reservation_mutation_guards.pop(memory_key, None)
+        self._workflow_persistence_revisions.pop(memory_key, None)
+        self._workflow_persistence_initialized.discard(memory_key)
 
     def remove_session_keys(self, memory_key: str, keys) -> dict[str, Any]:
         """Remove only explicitly selected internal state from one conversation."""

@@ -160,6 +160,33 @@ owner/customer race tetap G1D-A2.2/A2.3. G1D-A2.1 tidak mengubah schema, tidak
 membutuhkan migration, tetap dibatasi satu worker FastAPI dan satu proses
 polling, serta belum menyatakan paid-pilot readiness.
 
+## Persistent workflow recovery V2.0 G1D-A2.2
+
+Unfinished reservation Create, Update, Cancel, dan blocker mutasi kini
+dipersistenkan per authenticated customer-session di tabel
+`conversation_workflow_states`. Referensi sesi disimpan hanya sebagai SHA-256
+hash; payload JSONB schema-version 1 memakai allowlist canonical dan tidak
+memuat handoff, raw message, respons AI, credential, exception, atau arbitrary
+session dictionary.
+
+Authenticated chat memulihkan payload di dalam lock conversation sebelum
+handoff reconciliation. Read transaction selesai sebelum agent/provider await,
+sedangkan publication memakai transaksi singkat terpisah setelah turn.
+Pre-mutation reconciliation marker serta revisioned inactive tombstone mencegah
+stale confirmation atau stale writer mengulang mutasi setelah restart. Payload
+rusak/oversized/kontradiktif gagal tertutup dan tidak otomatis dihapus.
+
+Jalankan migrasi additive dan idempoten berikut setelah tabel `customers`
+tersedia:
+
+```powershell
+.\.venv\Scripts\python.exe migrations\add_conversation_workflow_states.py
+```
+
+Marker yang memerlukan reconciliation tetap membutuhkan verifikasi status
+reservasi sebelum automation dibuka. Durable Create request-key idempotency dan
+koordinasi conversation lintas worker/instance tetap di luar scope A2.2.
+
 ## Migrasi V1.5
 
 Jalankan sekali pada database yang sudah memiliki tabel `reservations`:
@@ -349,8 +376,9 @@ Jika `TEST_DATABASE_URL` tidak tersedia, integration tests dilewati dengan alasa
 
 Phase G1A environment/configuration hardening dan G1B input/HTTP body bounds
 sudah selesai. G1C serialisasi percakapan dan G1D-A1 transaction foundation
-juga sudah tersedia. Seluruh tahap tersebut tidak memerlukan migrasi.
-Memory/database recovery G1D-A2 serta idempotensi Create G1D-B masih pending.
+juga sudah tersedia. G1D-A2.1 menyediakan deep memory publication dan
+G1D-A2.2 menambahkan persistent reservation workflow recovery melalui migration
+additive. Durable idempotensi Create G1D-B masih pending.
 
 ### Batas input G1B
 

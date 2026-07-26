@@ -13,10 +13,17 @@ from app.brain.memory_manager import MemoryManager
 class AgentWorkflow:
     """Execute a plan using the appropriate agent strategy."""
 
-    def __init__(self, memory_manager: MemoryManager | None = None):
+    def __init__(
+        self,
+        memory_manager: MemoryManager | None = None,
+        workflow_state_service=None,
+    ):
         shared_memory = memory_manager or MemoryManager()
         self._agents = {
-            "reservation": ReservationAgent(memory_manager=shared_memory),
+            "reservation": ReservationAgent(
+                memory_manager=shared_memory,
+                workflow_state_service=workflow_state_service,
+            ),
             "check_reservation": CheckReservationAgent(),
             "cancel_reservation": CancelReservationAgent(),
             "greeting": GreetingAgent(),

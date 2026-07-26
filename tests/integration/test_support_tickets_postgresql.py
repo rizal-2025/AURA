@@ -22,12 +22,16 @@ from app.main import app
 from app.services.handoff.ticket_service import TicketService
 from migrations.add_support_tickets import migrate as migrate_support_tickets
 from migrations.add_support_ticket_notifications import migrate as migrate_notifications
+from migrations.add_conversation_workflow_states import (
+    migrate as migrate_workflow_states,
+)
 from tests.integration.disposable_schema import DisposableSchemaResources
 
 
 def migrate(target_engine, *, schema=None):
     ticket_changed = migrate_support_tickets(target_engine, schema=schema)
     migrate_notifications(target_engine, schema=schema)
+    migrate_workflow_states(target_engine, schema=schema)
     return ticket_changed
 
 

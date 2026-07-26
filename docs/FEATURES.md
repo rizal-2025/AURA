@@ -98,6 +98,30 @@ FastAPI juga menyediakan spesifikasi OpenAPI dan antarmuka dokumentasi interakti
   tetap G1D-B. Blocker hilang saat process restart sehingga verifikasi manual
   diperlukan sebelum retry. Tidak ada migration A2.1.
 
+## Persistent reservation workflow recovery - V2.0 G1D-A2.2
+
+- **State minimal dan terisolasi:** unfinished Create, Update, Cancel, serta
+  blocker mutation disimpan per authenticated customer dan hash sesi; raw
+  referensi sesi dan state handoff tidak masuk payload.
+- **Validasi fail-closed:** payload JSONB memakai schema version 1, empat bentuk
+  canonical, enum stage/field, validator nilai reservasi yang sama, integer
+  non-boolean, batas 4 KiB, dan penolakan kombinasi workflow yang konflik.
+- **Recovery order:** restore dilakukan di dalam lock G1C sebelum handoff
+  reconciliation dan sebelum classifier, AI, atau workflow berjalan.
+- **Transaksi singkat:** restore read selesai sebelum agent await; publication
+  memakai transaksi baru setelah turn.
+- **Mutation safety:** pre-mutation marker, revision check, dan inactive
+  tombstone mencegah konfirmasi stale serta stale writer menghidupkan workflow
+  terminal setelah restart.
+- **Corruption behavior:** row tidak otomatis dihapus; error aman menghentikan
+  turn sehingga payload tetap tersedia untuk investigasi database terkontrol.
+- **Migrasi:** `migrations/add_conversation_workflow_states.py` bersifat
+  additive, idempoten, memvalidasi tabel existing, dan tidak menyentuh row
+  `reservations`.
+- **Batas tahap:** marker reconciliation bersifat konservatif; durable
+  request-key idempotency dan lock lintas worker/instance tetap pekerjaan
+  terpisah.
+
 ## Orkestrasi chat berbasis AI
 
 - **Provider AI yang dapat dipilih:** AURA dapat memakai Ollama atau OpenAI melalui factory provider yang sama.
@@ -190,7 +214,9 @@ FastAPI juga menyediakan spesifikasi OpenAPI dan antarmuka dokumentasi interakti
 - Agent untuk cek reservasi, greeting, dan pertanyaan umum masih berupa placeholder; routing-nya ada, tetapi belum menjalankan logika bisnis penuh.
 - Strategi planner untuk menu, promo, FAQ, dan keluhan sudah didefinisikan, tetapi belum memiliki handler chat khusus end-to-end.
 - `DatabaseTool` belum menjalankan query ke database; saat ini hanya tool contoh.
-- Sesi dan long-term memory masih berada di memori proses, sehingga belum persisten setelah aplikasi restart atau dibagikan antar-instance.
+- Hanya unfinished reservation workflow yang persisten. State percakapan umum,
+  counter, dan long-term memory tetap berada di memori proses serta tidak
+  dibagikan antar-instance.
 
 Rencana untuk melengkapi fondasi tersebut dicatat di [ROADMAP.md](ROADMAP.md).
 
