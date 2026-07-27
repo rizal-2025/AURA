@@ -17,12 +17,16 @@ from app.core.config_validation import (
     CFG_AUTH_ISSUER_INVALID,
     CFG_AUTH_SECRET_INVALID,
     CFG_DATABASE_INVALID,
+    CFG_DEMO_DATABASE_NAME_INVALID,
+    CFG_DEMO_DATABASE_REQUIRED,
+    CFG_DEMO_DATABASE_SAME_TARGET,
     CFG_ENV_INVALID,
     MAXIMUM_JWT_EXPIRE_MINUTES,
     MINIMUM_SECRET_LENGTH,
     ConfigurationError,
     parse_strict_boolean,
     parse_strict_positive_integer,
+    select_database_url,
     validate_ai_provider,
     validate_app_environment,
     validate_deployed_identity_label,
@@ -56,6 +60,9 @@ def _safe_code_from_validation(error: ValidationError, fallback: str) -> str:
         for code in (
             CFG_ENV_INVALID,
             CFG_DATABASE_INVALID,
+            CFG_DEMO_DATABASE_REQUIRED,
+            CFG_DEMO_DATABASE_SAME_TARGET,
+            CFG_DEMO_DATABASE_NAME_INVALID,
             CFG_AUTH_SECRET_INVALID,
             CFG_AUTH_EXPIRY_INVALID,
             CFG_AUTH_ISSUER_INVALID,
@@ -83,17 +90,30 @@ class AppEnvironmentSettings(BaseSettings):
 
 
 class DatabaseSettings(BaseSettings):
-    DATABASE_URL: str = Field(repr=False)
+    APP_ENV: object = None
+    DATABASE_URL: object = Field(default=None, repr=False)
+    DEMO_DATABASE_URL: object = Field(default=None, repr=False)
     SQL_ECHO: object = False
 
     model_config = _BASE_SETTINGS_CONFIG
 
-    @field_validator("DATABASE_URL", mode="before")
-    @classmethod
-    def validate_database_url(cls, value):
-        if not isinstance(value, str) or not value or value != value.strip():
-            raise ConfigurationError(CFG_DATABASE_INVALID)
-        return value
+    @model_validator(mode="after")
+    def select_active_database(self):
+        if self.APP_ENV is None:
+            # Preserve the focused builder's legacy use in isolated unit tests.
+            selected = select_database_url(
+                app_env="development",
+                database_url=self.DATABASE_URL,
+                demo_database_url=None,
+            )
+        else:
+            selected = select_database_url(
+                app_env=self.APP_ENV,
+                database_url=self.DATABASE_URL,
+                demo_database_url=self.DEMO_DATABASE_URL,
+            )
+        object.__setattr__(self, "DATABASE_URL", selected)
+        return self
 
     @field_validator("SQL_ECHO", mode="before")
     @classmethod
@@ -223,6 +243,7 @@ class ApplicationSettings:
         "APP_NAME": "environment",
         "VERSION": "environment",
         "DATABASE_URL": "database",
+        "DEMO_DATABASE_URL": "database",
         "SQL_ECHO": "database",
         "AUTH_JWT_SECRET": "auth",
         "AUTH_JWT_ISSUER": "auth",
@@ -331,8 +352,12 @@ def get_environment_settings() -> AppEnvironmentSettings:
 
 @lru_cache
 def get_database_settings() -> DatabaseSettings:
-    get_environment_settings()
-    return _construct(DatabaseSettings, CFG_DATABASE_INVALID)
+    environment = get_environment_settings()
+    return _construct(
+        DatabaseSettings,
+        CFG_DATABASE_INVALID,
+        APP_ENV=environment.APP_ENV,
+    )
 
 
 @lru_cache

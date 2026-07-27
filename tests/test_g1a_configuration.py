@@ -31,7 +31,12 @@ from app.core.config_validation import (
     CFG_AUTH_EXPIRY_INVALID,
     CFG_AUTH_ISSUER_INVALID,
     CFG_AUTH_SECRET_INVALID,
+    CFG_DATABASE_INVALID,
+    CFG_DEMO_DATABASE_NAME_INVALID,
+    CFG_DEMO_DATABASE_REQUIRED,
+    CFG_DEMO_DATABASE_SAME_TARGET,
     CFG_ENV_INVALID,
+    CFG_TELEGRAM_DEMO_OWNER_FORBIDDEN,
     ConfigurationError,
 )
 from app.integrations.telegram.handlers import TelegramCustomerHandlers
@@ -50,6 +55,12 @@ VALID_JWT_SECRET = "g1a-jwt-secret-safe-random-material-2026"
 VALID_TELEGRAM_SECRET = "g1a-telegram-identity-safe-random-material"
 VALID_TELEGRAM_TOKEN = "123456789:abcdefghijklmnopqrstuvwxyzABCDE"
 VALID_OPENAI_KEY = "g1a-openai-test-key-safe-material-123456"
+VALID_PRIMARY_DATABASE_URL = (
+    "postgresql+psycopg://primary_user:primary_password@localhost:5432/aura"
+)
+VALID_DEMO_DATABASE_URL = (
+    "postgresql+psycopg://demo_user:demo_password@localhost:5432/aura_demo"
+)
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -87,7 +98,7 @@ def runner_settings(**overrides):
 
 class AppEnvironmentConfigurationTests(unittest.TestCase):
     def test_all_exact_environment_values_are_accepted(self):
-        for value in ("development", "test", "staging", "production"):
+        for value in ("development", "test", "demo", "staging", "production"):
             with self.subTest(value=value):
                 configured = build_environment_settings(
                     _env_file=None,
@@ -109,6 +120,121 @@ class AppEnvironmentConfigurationTests(unittest.TestCase):
                 self.assertEqual(str(raised.exception), CFG_ENV_INVALID)
                 if value:
                     self.assertNotIn(value, str(raised.exception))
+
+
+class DemoDatabaseConfigurationTests(unittest.TestCase):
+    @staticmethod
+    def build(**overrides):
+        values = {
+            "APP_ENV": "demo",
+            "DATABASE_URL": VALID_PRIMARY_DATABASE_URL,
+            "DEMO_DATABASE_URL": VALID_DEMO_DATABASE_URL,
+            "SQL_ECHO": False,
+        }
+        values.update(overrides)
+        return build_database_settings(_env_file=None, **values)
+
+    def test_demo_database_url_is_selected(self):
+        configured = self.build()
+        self.assertEqual(configured.APP_ENV, "demo")
+        self.assertEqual(configured.DATABASE_URL, VALID_DEMO_DATABASE_URL)
+
+    def test_demo_database_url_is_required(self):
+        for value in (None, ""):
+            with self.subTest(value=repr(value)):
+                with self.assertRaises(ConfigurationError) as raised:
+                    self.build(DEMO_DATABASE_URL=value)
+                self.assertEqual(
+                    str(raised.exception),
+                    CFG_DEMO_DATABASE_REQUIRED,
+                )
+
+    def test_demo_never_falls_back_to_primary_database_url(self):
+        with self.assertRaises(ConfigurationError) as raised:
+            build_database_settings(
+                _env_file=None,
+                APP_ENV="demo",
+                DATABASE_URL=VALID_PRIMARY_DATABASE_URL,
+                SQL_ECHO=False,
+            )
+        self.assertEqual(str(raised.exception), CFG_DEMO_DATABASE_REQUIRED)
+
+    def test_same_database_target_is_rejected_even_with_different_credentials(self):
+        cases = (
+            VALID_DEMO_DATABASE_URL,
+            (
+                "postgresql+psycopg://other_user:other_password"
+                "@localhost/aura_demo"
+            ),
+        )
+        for primary_url in cases:
+            with self.subTest(primary_url_kind=primary_url.split("@", 1)[-1]):
+                with self.assertRaises(ConfigurationError) as raised:
+                    self.build(DATABASE_URL=primary_url)
+                self.assertEqual(
+                    str(raised.exception),
+                    CFG_DEMO_DATABASE_SAME_TARGET,
+                )
+
+    def test_demo_database_name_must_contain_demo(self):
+        for database_name in ("aura", "aura_production", "postgres"):
+            with self.subTest(database_name=database_name):
+                url = (
+                    "postgresql+psycopg://demo_user:demo_password"
+                    f"@localhost:5432/{database_name}"
+                )
+                with self.assertRaises(ConfigurationError) as raised:
+                    self.build(
+                        DATABASE_URL=(
+                            "postgresql+psycopg://primary_user:primary_password"
+                            "@localhost:5432/aura_primary"
+                        ),
+                        DEMO_DATABASE_URL=url,
+                    )
+                self.assertEqual(
+                    str(raised.exception),
+                    CFG_DEMO_DATABASE_NAME_INVALID,
+                )
+
+    def test_supported_demo_database_names_are_accepted(self):
+        for database_name in ("aura_demo", "demo_aura", "aura-demo", "AURA_DEMO"):
+            with self.subTest(database_name=database_name):
+                url = (
+                    "postgresql+psycopg://demo_user:demo_password"
+                    f"@localhost:5432/{database_name}"
+                )
+                configured = self.build(DEMO_DATABASE_URL=url)
+                self.assertEqual(configured.DATABASE_URL, url)
+
+    def test_demo_database_must_be_postgresql(self):
+        with self.assertRaises(ConfigurationError) as raised:
+            self.build(DEMO_DATABASE_URL="sqlite:///aura_demo.db")
+        self.assertEqual(str(raised.exception), CFG_DATABASE_INVALID)
+
+    def test_demo_database_errors_do_not_disclose_url_or_password(self):
+        password = "Demo-Sentinel-Password-2026"
+        url = (
+            f"postgresql+psycopg://demo_user:{password}"
+            "@localhost:5432/aura_production"
+        )
+        with self.assertRaises(ConfigurationError) as raised:
+            self.build(DEMO_DATABASE_URL=url)
+        output = str(raised.exception) + repr(raised.exception)
+        self.assertNotIn(url, output)
+        self.assertNotIn(password, output)
+        self.assertEqual(str(raised.exception), CFG_DEMO_DATABASE_NAME_INVALID)
+
+    def test_non_demo_environments_keep_primary_database_behavior(self):
+        for app_env in ("development", "test", "staging", "production"):
+            with self.subTest(app_env=app_env):
+                configured = build_database_settings(
+                    _env_file=None,
+                    APP_ENV=app_env,
+                    DATABASE_URL="sqlite://",
+                    DEMO_DATABASE_URL=VALID_DEMO_DATABASE_URL,
+                    SQL_ECHO=False,
+                )
+                self.assertEqual(configured.DATABASE_URL, "sqlite://")
 
 
 class JwtConfigurationTests(unittest.TestCase):
@@ -156,7 +282,7 @@ class JwtConfigurationTests(unittest.TestCase):
                     self.assertNotIn(value, str(raised.exception))
 
     def test_deployed_environments_reject_development_identity_defaults(self):
-        for app_env in ("staging", "production"):
+        for app_env in ("demo", "staging", "production"):
             with self.subTest(app_env=app_env):
                 with self.assertRaises(ConfigurationError) as raised:
                     auth_settings(APP_ENV=app_env)
@@ -326,6 +452,33 @@ class TelegramRunnerConfigurationTests(unittest.TestCase):
                     )
                 )
                 self.assertEqual(configured.owner_chat_id, 987654)
+
+    def test_demo_rejects_owner_notifications_and_commands(self):
+        disabled = validate_runner_configuration(
+            runner_settings(APP_ENV="demo")
+        )
+        self.assertFalse(disabled.owner_notifications_enabled)
+        self.assertFalse(disabled.owner_commands_enabled)
+
+        for flag in (
+            "TELEGRAM_OWNER_NOTIFICATIONS_ENABLED",
+            "TELEGRAM_OWNER_COMMANDS_ENABLED",
+        ):
+            with self.subTest(flag=flag):
+                with self.assertRaises(
+                    TelegramRunnerConfigurationError
+                ) as raised:
+                    validate_runner_configuration(
+                        runner_settings(
+                            APP_ENV="demo",
+                            TELEGRAM_OWNER_CHAT_ID="987654",
+                            **{flag: True},
+                        )
+                    )
+                self.assertEqual(
+                    str(raised.exception),
+                    CFG_TELEGRAM_DEMO_OWNER_FORBIDDEN,
+                )
 
     def test_flags_and_numeric_options_are_strict(self):
         for value in (" true ", "TRUE", 1, None):
