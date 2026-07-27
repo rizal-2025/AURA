@@ -6,8 +6,11 @@ AURA adalah API FastAPI untuk reservasi restoran berbasis percakapan. V1.5 memak
 
 Salin `.env.example` menjadi `.env`, lalu isi nilai lokal yang aman. Variabel minimum:
 
-- `APP_ENV` — wajib dan harus persis `development`, `test`, `staging`, atau `production`; nilai tidak di-trim dan tidak diubah case.
+- `APP_ENV` — wajib dan harus persis `development`, `test`, `demo`, `staging`, atau `production`; nilai tidak di-trim dan tidak diubah case.
 - `DATABASE_URL`
+- `DEMO_DATABASE_URL` — wajib hanya ketika `APP_ENV=demo`; harus menunjuk
+  PostgreSQL terpisah, tidak boleh sama dengan target `DATABASE_URL`, dan nama
+  databasenya harus mengandung `demo`.
 - `AUTH_JWT_SECRET` — 32–512 karakter acak, tanpa whitespace luar, control character, placeholder, atau pola pengulangan trivial.
 - `AUTH_JWT_ISSUER`, `AUTH_JWT_AUDIENCE`, dan `AUTH_JWT_EXPIRE_MINUTES` (integer ketat antara 1 dan 1440).
 - `SQL_ECHO=false` untuk menonaktifkan log SQL dan nilai query secara default. Jangan aktifkan pada lingkungan yang memproses data pelanggan tanpa kontrol log yang memadai.
@@ -20,9 +23,17 @@ Contoh pembuatan secret lokal (jangan kirim atau commit hasilnya):
 
 Konfigurasi JWT yang tidak valid membuat aplikasi gagal memulai dengan kode aman
 `CFG_AUTH_*`; nilai secret tidak dicetak. Nilai expiry boolean, float, string
-desimal, nol, negatif, atau lebih dari 1440 ditolak. Staging dan production
+desimal, nol, negatif, atau lebih dari 1440 ditolak. Demo, staging, dan production
 menolak issuer/audience development `aura` dan `aura-api`, sehingga keduanya
 harus diisi eksplisit untuk deployment.
+
+Mode demo bersifat fail-closed. `DEMO_DATABASE_URL` tidak pernah fallback ke
+`DATABASE_URL`, dan startup ditolak bila target keduanya sama atau nama database
+demo tidak mengandung `demo`. Runner Telegram mode demo juga menolak
+`TELEGRAM_OWNER_NOTIFICATIONS_ENABLED=true` dan
+`TELEGRAM_OWNER_COMMANDS_ENABLED=true`, sehingga demo tidak dapat mengirim
+notifikasi owner atau menjalankan command owner. Gunakan credential khusus demo
+di `.env` lokal dan jangan pernah commit file `.env`.
 
 Konfigurasi dibatasi per proses:
 
@@ -32,15 +43,18 @@ Konfigurasi dibatasi per proses:
 
 `AI_PROVIDER` menerima persis `ollama` atau `openai`. Nilai lain menghentikan
 startup dan tidak fallback ke Ollama. OpenAI membutuhkan API key valid ketika
-dipilih dan tidak lagi menggunakan dummy key. Pada staging/production, URL
+dipilih dan tidak lagi menggunakan dummy key. Pada demo/staging/production, URL
 Ollama HTTP hanya diizinkan untuk loopback; endpoint remote harus memakai HTTPS.
 Inisialisasi provider tidak melakukan request jaringan.
 
 Kode kegagalan konfigurasi yang aman meliputi `CFG_ENV_INVALID`,
+`CFG_DATABASE_INVALID`, `CFG_DEMO_DATABASE_REQUIRED`,
+`CFG_DEMO_DATABASE_SAME_TARGET`, `CFG_DEMO_DATABASE_NAME_INVALID`,
 `CFG_AUTH_SECRET_INVALID`, `CFG_AUTH_EXPIRY_INVALID`,
 `CFG_AUTH_ISSUER_INVALID`, `CFG_AUTH_AUDIENCE_INVALID`,
 `CFG_AI_PROVIDER_INVALID`, `CFG_AI_OPENAI_INVALID`, dan
-`CFG_AI_OLLAMA_INVALID`. Runner memakai kode `CFG_TELEGRAM_*`. Kode tidak
+`CFG_AI_OLLAMA_INVALID`. Runner memakai kode `CFG_TELEGRAM_*`, termasuk
+`CFG_TELEGRAM_DEMO_OWNER_FORBIDDEN`. Kode tidak
 menyertakan raw environment value, token, URL, ID, atau secret.
 
 ## Serialisasi percakapan V2.0 G1C

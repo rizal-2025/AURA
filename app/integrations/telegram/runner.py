@@ -25,6 +25,7 @@ from app.core.config_validation import (
     CFG_DATABASE_INVALID,
     CFG_ENV_INVALID,
     CFG_TELEGRAM_IDENTITY_INVALID,
+    CFG_TELEGRAM_DEMO_OWNER_FORBIDDEN,
     CFG_TELEGRAM_OPTION_INVALID,
     CFG_TELEGRAM_OWNER_INVALID,
     CFG_TELEGRAM_TOKEN_INVALID,
@@ -52,6 +53,7 @@ class TelegramRunnerConfigurationError(RuntimeError):
         CFG_AI_OLLAMA_INVALID,
         CFG_TELEGRAM_TOKEN_INVALID,
         CFG_TELEGRAM_IDENTITY_INVALID,
+        CFG_TELEGRAM_DEMO_OWNER_FORBIDDEN,
         CFG_TELEGRAM_OWNER_INVALID,
         CFG_TELEGRAM_OPTION_INVALID,
     }
@@ -112,7 +114,7 @@ class TelegramRunnerConfiguration:
 def validate_runner_configuration(config=None) -> TelegramRunnerConfiguration:
     config = config or TelegramRunnerSettings()
     try:
-        validate_app_environment(getattr(config, "APP_ENV", None))
+        app_env = validate_app_environment(getattr(config, "APP_ENV", None))
     except ConfigurationError as error:
         raise TelegramRunnerConfigurationError(error.code) from None
 
@@ -160,6 +162,10 @@ def validate_runner_configuration(config=None) -> TelegramRunnerConfiguration:
 
     owner_enabled = strict_boolean("TELEGRAM_OWNER_NOTIFICATIONS_ENABLED", False)
     owner_commands_enabled = strict_boolean("TELEGRAM_OWNER_COMMANDS_ENABLED", False)
+    if app_env == "demo" and (owner_enabled or owner_commands_enabled):
+        raise TelegramRunnerConfigurationError(
+            CFG_TELEGRAM_DEMO_OWNER_FORBIDDEN
+        )
     owner_chat_id = None
     if owner_enabled:
         owner_chat_id = strict_integer(

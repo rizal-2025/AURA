@@ -7,11 +7,14 @@ import re
 import unicodedata
 from urllib.parse import urlsplit
 
+from sqlalchemy.engine import make_url
+from sqlalchemy.exc import ArgumentError
+
 
 VALID_APP_ENVIRONMENTS = frozenset(
-    {"development", "test", "staging", "production"}
+    {"development", "test", "demo", "staging", "production"}
 )
-DEPLOYED_APP_ENVIRONMENTS = frozenset({"staging", "production"})
+DEPLOYED_APP_ENVIRONMENTS = frozenset({"demo", "staging", "production"})
 
 MINIMUM_SECRET_LENGTH = 32
 MAXIMUM_SECRET_LENGTH = 512
@@ -22,6 +25,9 @@ MAXIMUM_TELEGRAM_TOKEN_LENGTH = 256
 
 CFG_ENV_INVALID = "CFG_ENV_INVALID"
 CFG_DATABASE_INVALID = "CFG_DATABASE_INVALID"
+CFG_DEMO_DATABASE_REQUIRED = "CFG_DEMO_DATABASE_REQUIRED"
+CFG_DEMO_DATABASE_SAME_TARGET = "CFG_DEMO_DATABASE_SAME_TARGET"
+CFG_DEMO_DATABASE_NAME_INVALID = "CFG_DEMO_DATABASE_NAME_INVALID"
 CFG_AUTH_SECRET_INVALID = "CFG_AUTH_SECRET_INVALID"
 CFG_AUTH_EXPIRY_INVALID = "CFG_AUTH_EXPIRY_INVALID"
 CFG_AUTH_ISSUER_INVALID = "CFG_AUTH_ISSUER_INVALID"
@@ -33,11 +39,15 @@ CFG_TELEGRAM_TOKEN_INVALID = "CFG_TELEGRAM_TOKEN_INVALID"
 CFG_TELEGRAM_IDENTITY_INVALID = "CFG_TELEGRAM_IDENTITY_INVALID"
 CFG_TELEGRAM_OWNER_INVALID = "CFG_TELEGRAM_OWNER_INVALID"
 CFG_TELEGRAM_OPTION_INVALID = "CFG_TELEGRAM_OPTION_INVALID"
+CFG_TELEGRAM_DEMO_OWNER_FORBIDDEN = "CFG_TELEGRAM_DEMO_OWNER_FORBIDDEN"
 
 SAFE_CONFIGURATION_CODES = frozenset(
     {
         CFG_ENV_INVALID,
         CFG_DATABASE_INVALID,
+        CFG_DEMO_DATABASE_REQUIRED,
+        CFG_DEMO_DATABASE_SAME_TARGET,
+        CFG_DEMO_DATABASE_NAME_INVALID,
         CFG_AUTH_SECRET_INVALID,
         CFG_AUTH_EXPIRY_INVALID,
         CFG_AUTH_ISSUER_INVALID,
@@ -49,6 +59,7 @@ SAFE_CONFIGURATION_CODES = frozenset(
         CFG_TELEGRAM_IDENTITY_INVALID,
         CFG_TELEGRAM_OWNER_INVALID,
         CFG_TELEGRAM_OPTION_INVALID,
+        CFG_TELEGRAM_DEMO_OWNER_FORBIDDEN,
     }
 )
 
@@ -106,6 +117,74 @@ def validate_app_environment(value) -> str:
     if not isinstance(value, str) or value not in VALID_APP_ENVIRONMENTS:
         raise ConfigurationError(CFG_ENV_INVALID)
     return value
+
+
+def validate_database_url(value) -> str:
+    if not isinstance(value, str) or not value or value != value.strip():
+        raise ConfigurationError(CFG_DATABASE_INVALID)
+    return value
+
+
+def _parsed_database_url(value: str):
+    try:
+        return make_url(value)
+    except (ArgumentError, TypeError, ValueError):
+        raise ConfigurationError(CFG_DATABASE_INVALID) from None
+
+
+def _database_target(parsed) -> tuple[str, str, int | None, str]:
+    backend = parsed.get_backend_name().casefold()
+    port = parsed.port
+    if port is None and backend == "postgresql":
+        port = 5432
+    return (
+        backend,
+        (parsed.host or "").casefold(),
+        port,
+        (parsed.database or "").casefold(),
+    )
+
+
+def select_database_url(
+    *,
+    app_env,
+    database_url,
+    demo_database_url,
+) -> str:
+    """Select one validated database URL without exposing either input."""
+    environment = validate_app_environment(app_env)
+    if environment != "demo":
+        return validate_database_url(database_url)
+
+    if demo_database_url is None or demo_database_url == "":
+        raise ConfigurationError(CFG_DEMO_DATABASE_REQUIRED)
+
+    validated_demo_url = validate_database_url(demo_database_url)
+    parsed_demo = _parsed_database_url(validated_demo_url)
+    if parsed_demo.get_backend_name().casefold() != "postgresql":
+        raise ConfigurationError(CFG_DATABASE_INVALID)
+
+    if isinstance(database_url, str) and database_url:
+        try:
+            parsed_primary = _parsed_database_url(
+                validate_database_url(database_url)
+            )
+        except ConfigurationError:
+            parsed_primary = None
+        if (
+            parsed_primary is not None
+            and _database_target(parsed_demo) == _database_target(parsed_primary)
+        ):
+            raise ConfigurationError(CFG_DEMO_DATABASE_SAME_TARGET)
+
+    database_name = parsed_demo.database
+    if (
+        not isinstance(database_name, str)
+        or "demo" not in database_name.casefold()
+    ):
+        raise ConfigurationError(CFG_DEMO_DATABASE_NAME_INVALID)
+
+    return validated_demo_url
 
 
 def validate_secret(
