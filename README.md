@@ -11,6 +11,9 @@ Salin `.env.example` menjadi `.env`, lalu isi nilai lokal yang aman. Variabel mi
 - `DEMO_DATABASE_URL` — wajib hanya ketika `APP_ENV=demo`; harus menunjuk
   PostgreSQL terpisah, tidak boleh sama dengan target `DATABASE_URL`, dan nama
   databasenya harus mengandung `demo`.
+- `DEMO_BFF_SERVICE_TOKEN` wajib hanya ketika `APP_ENV=demo`; gunakan 32–512
+  karakter acak sebagai credential server-only BFF ke AURA. Jangan memakai
+  prefix `NEXT_PUBLIC_` atau mengirim nilainya ke browser.
 - `AUTH_JWT_SECRET` — 32–512 karakter acak, tanpa whitespace luar, control character, placeholder, atau pola pengulangan trivial.
 - `AUTH_JWT_ISSUER`, `AUTH_JWT_AUDIENCE`, dan `AUTH_JWT_EXPIRE_MINUTES` (integer ketat antara 1 dan 1440).
 - `SQL_ECHO=false` untuk menonaktifkan log SQL dan nilai query secara default. Jangan aktifkan pada lingkungan yang memproses data pelanggan tanpa kontrol log yang memadai.
@@ -29,7 +32,9 @@ harus diisi eksplisit untuk deployment.
 
 Mode demo bersifat fail-closed. `DEMO_DATABASE_URL` tidak pernah fallback ke
 `DATABASE_URL`, dan startup ditolak bila target keduanya sama atau nama database
-demo tidak mengandung `demo`. Runner Telegram mode demo juga menolak
+demo tidak mengandung `demo`. `DEMO_BFF_SERVICE_TOKEN` juga wajib dan divalidasi
+sebagai secret non-placeholder; nilainya direpresentasikan dengan redaksi dan
+tidak dimasukkan ke log atau error. Runner Telegram mode demo juga menolak
 `TELEGRAM_OWNER_NOTIFICATIONS_ENABLED=true` dan
 `TELEGRAM_OWNER_COMMANDS_ENABLED=true`, sehingga demo tidak dapat mengirim
 notifikasi owner atau menjalankan command owner. Gunakan credential khusus demo
@@ -38,6 +43,8 @@ di `.env` lokal dan jangan pernah commit file `.env`.
 Konfigurasi dibatasi per proses:
 
 - FastAPI memuat environment, database, JWT, dan provider AI; variabel Telegram tidak dibutuhkan.
+- FastAPI mode demo juga memuat `DEMO_BFF_SERVICE_TOKEN` untuk autentikasi
+  server-to-server pada route internal yang tidak tampil di OpenAPI.
 - Runner Telegram memuat environment, database, provider AI, serta konfigurasi runner Telegram.
 - Migrasi manual memuat environment dan database saja.
 
@@ -50,6 +57,7 @@ Inisialisasi provider tidak melakukan request jaringan.
 Kode kegagalan konfigurasi yang aman meliputi `CFG_ENV_INVALID`,
 `CFG_DATABASE_INVALID`, `CFG_DEMO_DATABASE_REQUIRED`,
 `CFG_DEMO_DATABASE_SAME_TARGET`, `CFG_DEMO_DATABASE_NAME_INVALID`,
+`CFG_DEMO_BFF_SERVICE_TOKEN_INVALID`,
 `CFG_AUTH_SECRET_INVALID`, `CFG_AUTH_EXPIRY_INVALID`,
 `CFG_AUTH_ISSUER_INVALID`, `CFG_AUTH_AUDIENCE_INVALID`,
 `CFG_AI_PROVIDER_INVALID`, `CFG_AI_OPENAI_INVALID`, dan

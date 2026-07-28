@@ -5,7 +5,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from functools import lru_cache
 
-from pydantic import Field, ValidationError, field_validator, model_validator
+from pydantic import (
+    Field,
+    SecretStr,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app.core.config_validation import (
@@ -17,6 +23,7 @@ from app.core.config_validation import (
     CFG_AUTH_ISSUER_INVALID,
     CFG_AUTH_SECRET_INVALID,
     CFG_DATABASE_INVALID,
+    CFG_DEMO_BFF_SERVICE_TOKEN_INVALID,
     CFG_DEMO_DATABASE_NAME_INVALID,
     CFG_DEMO_DATABASE_REQUIRED,
     CFG_DEMO_DATABASE_SAME_TARGET,
@@ -63,6 +70,7 @@ def _safe_code_from_validation(error: ValidationError, fallback: str) -> str:
             CFG_DEMO_DATABASE_REQUIRED,
             CFG_DEMO_DATABASE_SAME_TARGET,
             CFG_DEMO_DATABASE_NAME_INVALID,
+            CFG_DEMO_BFF_SERVICE_TOKEN_INVALID,
             CFG_AUTH_SECRET_INVALID,
             CFG_AUTH_EXPIRY_INVALID,
             CFG_AUTH_ISSUER_INVALID,
@@ -121,6 +129,43 @@ class DatabaseSettings(BaseSettings):
     @classmethod
     def validate_sql_echo(cls, value):
         return parse_strict_boolean(value, code=CFG_DATABASE_INVALID)
+
+
+class DemoSettings(BaseSettings):
+    APP_ENV: object
+    DEMO_BFF_SERVICE_TOKEN: SecretStr | None = Field(
+        default=None,
+        repr=False,
+    )
+
+    model_config = _BASE_SETTINGS_CONFIG
+
+    @field_validator("APP_ENV", mode="before")
+    @classmethod
+    def validate_environment(cls, value):
+        return validate_app_environment(value)
+
+    @model_validator(mode="after")
+    def validate_bff_service_token(self):
+        if self.APP_ENV != "demo":
+            object.__setattr__(self, "DEMO_BFF_SERVICE_TOKEN", None)
+            return self
+        secret = self.DEMO_BFF_SERVICE_TOKEN
+        raw_secret = (
+            secret.get_secret_value()
+            if isinstance(secret, SecretStr)
+            else secret
+        )
+        validated = validate_secret(
+            raw_secret,
+            code=CFG_DEMO_BFF_SERVICE_TOKEN_INVALID,
+        )
+        object.__setattr__(
+            self,
+            "DEMO_BFF_SERVICE_TOKEN",
+            SecretStr(validated),
+        )
+        return self
 
 
 class AuthSettings(BaseSettings):
@@ -237,6 +282,7 @@ class AISettings(BaseSettings):
 class ApplicationSettings:
     environment: AppEnvironmentSettings
     database: DatabaseSettings
+    demo: DemoSettings
     auth: AuthSettings
     ai: AISettings
 
@@ -247,6 +293,7 @@ class ApplicationSettings:
         "DATABASE_URL": "database",
         "DEMO_DATABASE_URL": "database",
         "SQL_ECHO": "database",
+        "DEMO_BFF_SERVICE_TOKEN": "demo",
         "AUTH_JWT_SECRET": "auth",
         "AUTH_JWT_ISSUER": "auth",
         "AUTH_JWT_AUDIENCE": "auth",
@@ -306,6 +353,15 @@ def build_auth_settings(*, _env_file=".env", **values) -> AuthSettings:
     )
 
 
+def build_demo_settings(*, _env_file=".env", **values) -> DemoSettings:
+    return _construct(
+        DemoSettings,
+        CFG_DEMO_BFF_SERVICE_TOKEN_INVALID,
+        _env_file=_env_file,
+        **_settings_values(values),
+    )
+
+
 def build_ai_settings(*, _env_file=".env", **values) -> AISettings:
     return _construct(
         AISettings,
@@ -326,6 +382,10 @@ def build_application_settings(*, _env_file=".env", **values) -> ApplicationSett
     return ApplicationSettings(
         environment=environment,
         database=build_database_settings(
+            _env_file=_env_file,
+            **scoped_values,
+        ),
+        demo=build_demo_settings(
             _env_file=_env_file,
             **scoped_values,
         ),
@@ -373,6 +433,16 @@ def get_auth_settings() -> AuthSettings:
 
 
 @lru_cache
+def get_demo_settings() -> DemoSettings:
+    environment = get_environment_settings()
+    return _construct(
+        DemoSettings,
+        CFG_DEMO_BFF_SERVICE_TOKEN_INVALID,
+        APP_ENV=environment.APP_ENV,
+    )
+
+
+@lru_cache
 def get_ai_settings() -> AISettings:
     environment = get_environment_settings()
     return _construct(
@@ -387,6 +457,7 @@ def get_application_settings() -> ApplicationSettings:
     return ApplicationSettings(
         environment=get_environment_settings(),
         database=get_database_settings(),
+        demo=get_demo_settings(),
         auth=get_auth_settings(),
         ai=get_ai_settings(),
     )
@@ -395,6 +466,7 @@ def get_application_settings() -> ApplicationSettings:
 def clear_settings_cache() -> None:
     get_application_settings.cache_clear()
     get_ai_settings.cache_clear()
+    get_demo_settings.cache_clear()
     get_auth_settings.cache_clear()
     get_database_settings.cache_clear()
     get_environment_settings.cache_clear()

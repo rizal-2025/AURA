@@ -19,6 +19,7 @@ from app.core.config import (
     build_application_settings,
     build_auth_settings,
     build_database_settings,
+    build_demo_settings,
     build_environment_settings,
     clear_settings_cache,
     settings,
@@ -32,6 +33,7 @@ from app.core.config_validation import (
     CFG_AUTH_ISSUER_INVALID,
     CFG_AUTH_SECRET_INVALID,
     CFG_DATABASE_INVALID,
+    CFG_DEMO_BFF_SERVICE_TOKEN_INVALID,
     CFG_DEMO_DATABASE_NAME_INVALID,
     CFG_DEMO_DATABASE_REQUIRED,
     CFG_DEMO_DATABASE_SAME_TARGET,
@@ -55,6 +57,12 @@ VALID_JWT_SECRET = "g1a-jwt-secret-safe-random-material-2026"
 VALID_TELEGRAM_SECRET = "g1a-telegram-identity-safe-random-material"
 VALID_TELEGRAM_TOKEN = "123456789:abcdefghijklmnopqrstuvwxyzABCDE"
 VALID_OPENAI_KEY = "g1a-openai-test-key-safe-material-123456"
+VALID_DEMO_BFF_SERVICE_TOKEN = (
+    "g1a-demo-bff-service-token-safe-material-2026"
+)
+MINIMUM_VALID_DEMO_BFF_SERVICE_TOKEN = (
+    "a9K2mP7qR4tV8xY3zB6cD1fG5hJ0nL2s"
+)
 VALID_PRIMARY_DATABASE_URL = (
     "postgresql+psycopg://primary_user:primary_password@localhost:5432/aura"
 )
@@ -360,6 +368,103 @@ class DemoDatabaseConfigurationTests(unittest.TestCase):
                     SQL_ECHO=False,
                 )
                 self.assertEqual(configured.DATABASE_URL, "sqlite://")
+
+
+class DemoBFFServiceTokenConfigurationTests(unittest.TestCase):
+    @staticmethod
+    def build(**overrides):
+        values = {
+            "APP_ENV": "demo",
+            "DEMO_BFF_SERVICE_TOKEN": VALID_DEMO_BFF_SERVICE_TOKEN,
+        }
+        values.update(overrides)
+        return build_demo_settings(_env_file=None, **values)
+
+    def test_demo_requires_service_token(self):
+        with self.assertRaises(ConfigurationError) as raised:
+            self.build(DEMO_BFF_SERVICE_TOKEN=None)
+        self.assertEqual(
+            str(raised.exception),
+            CFG_DEMO_BFF_SERVICE_TOKEN_INVALID,
+        )
+
+    def test_valid_service_token_is_accepted_and_redacted(self):
+        configured = self.build()
+        self.assertEqual(
+            configured.DEMO_BFF_SERVICE_TOKEN.get_secret_value(),
+            VALID_DEMO_BFF_SERVICE_TOKEN,
+        )
+        self.assertNotIn(
+            VALID_DEMO_BFF_SERVICE_TOKEN,
+            str(configured) + repr(configured),
+        )
+
+    def test_exact_minimum_length_service_token_is_accepted(self):
+        self.assertEqual(len(MINIMUM_VALID_DEMO_BFF_SERVICE_TOKEN), 32)
+        configured = self.build(
+            DEMO_BFF_SERVICE_TOKEN=MINIMUM_VALID_DEMO_BFF_SERVICE_TOKEN
+        )
+        self.assertEqual(
+            configured.DEMO_BFF_SERVICE_TOKEN.get_secret_value(),
+            MINIMUM_VALID_DEMO_BFF_SERVICE_TOKEN,
+        )
+
+    def test_short_service_token_is_rejected(self):
+        with self.assertRaises(ConfigurationError) as raised:
+            self.build(DEMO_BFF_SERVICE_TOKEN="short-service-token")
+        self.assertEqual(
+            str(raised.exception),
+            CFG_DEMO_BFF_SERVICE_TOKEN_INVALID,
+        )
+
+    def test_whitespace_only_service_token_is_rejected(self):
+        with self.assertRaises(ConfigurationError) as raised:
+            self.build(DEMO_BFF_SERVICE_TOKEN=" " * 40)
+        self.assertEqual(
+            str(raised.exception),
+            CFG_DEMO_BFF_SERVICE_TOKEN_INVALID,
+        )
+
+    def test_invalid_token_is_absent_from_exception_representations(self):
+        supplied = " private-service-token-sentinel-material-2026 "
+        with self.assertRaises(ConfigurationError) as raised:
+            self.build(DEMO_BFF_SERVICE_TOKEN=supplied)
+        output = str(raised.exception) + repr(raised.exception)
+        self.assertNotIn(supplied, output)
+        self.assertEqual(
+            str(raised.exception),
+            CFG_DEMO_BFF_SERVICE_TOKEN_INVALID,
+        )
+
+    def test_non_demo_does_not_require_service_token(self):
+        for app_env in ("development", "test", "staging", "production"):
+            with self.subTest(app_env=app_env):
+                configured = build_demo_settings(
+                    _env_file=None,
+                    APP_ENV=app_env,
+                )
+                self.assertIsNone(configured.DEMO_BFF_SERVICE_TOKEN)
+
+    def test_application_aggregate_accepts_complete_demo_configuration(self):
+        configured = build_application_settings(
+            _env_file=None,
+            APP_ENV="demo",
+            DATABASE_URL=VALID_PRIMARY_DATABASE_URL,
+            DEMO_DATABASE_URL=VALID_DEMO_DATABASE_URL,
+            DEMO_BFF_SERVICE_TOKEN=VALID_DEMO_BFF_SERVICE_TOKEN,
+            AUTH_JWT_SECRET=VALID_JWT_SECRET,
+            AUTH_JWT_ISSUER="aura-demo",
+            AUTH_JWT_AUDIENCE="aura-demo-api",
+            AUTH_JWT_EXPIRE_MINUTES=60,
+            AI_PROVIDER="ollama",
+            OLLAMA_BASE_URL="http://localhost:11434/v1",
+            OLLAMA_MODEL="test-model",
+        )
+        self.assertEqual(configured.APP_ENV, "demo")
+        self.assertNotIn(
+            VALID_DEMO_BFF_SERVICE_TOKEN,
+            str(configured) + repr(configured),
+        )
 
 
 class JwtConfigurationTests(unittest.TestCase):

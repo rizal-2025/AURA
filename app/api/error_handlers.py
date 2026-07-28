@@ -32,12 +32,27 @@ from app.core.transaction_errors import (
     PersistenceOutcomeUnknownError,
     TransactionSessionUnusableError,
 )
+from app.services.demo_session_service import (
+    DemoServiceAuthRequiredError,
+    DemoSessionRequiredError,
+)
 
 
 REQUEST_BODY_TOO_LARGE = "REQUEST_BODY_TOO_LARGE"
 INVALID_REQUEST_FRAMING = "INVALID_REQUEST_FRAMING"
 REQUEST_VALIDATION_FAILED = "REQUEST_VALIDATION_FAILED"
 CONVERSATION_BUSY = "CONVERSATION_BUSY"
+
+_DEMO_SESSION_DETAILS = {
+    DemoServiceAuthRequiredError: (
+        "DEMO_SERVICE_AUTH_REQUIRED",
+        "Akses layanan demo tidak valid.",
+    ),
+    DemoSessionRequiredError: (
+        "DEMO_SESSION_REQUIRED",
+        "Sesi demo tidak valid atau telah kedaluwarsa.",
+    ),
+}
 
 _PERSISTENCE_DETAILS = (
     (
@@ -144,6 +159,22 @@ async def transaction_exception_handler(
             "code": code,
             "detail": detail,
         },
+    )
+
+
+async def demo_session_exception_handler(
+    _request: Request,
+    error: DemoServiceAuthRequiredError | DemoSessionRequiredError,
+) -> JSONResponse:
+    code, detail = _DEMO_SESSION_DETAILS[type(error)]
+    logger.info("HTTP REQUEST: status=401 code=%s", code)
+    return JSONResponse(
+        status_code=401,
+        content={
+            "code": code,
+            "detail": detail,
+        },
+        headers={"Cache-Control": "no-store"},
     )
 
 
