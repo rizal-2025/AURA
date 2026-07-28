@@ -2,7 +2,7 @@
 
 from datetime import datetime, timezone
 
-from sqlalchemy import delete, or_, select
+from sqlalchemy import delete, func, or_, select
 
 from app.core.ownership import require_owner_customer_id
 from app.db.models.demo_persistence import (
@@ -26,6 +26,12 @@ def _require_internal_session_id(demo_session_id: int) -> int:
     ):
         raise ValueError("A persisted demo session is required.")
     return demo_session_id
+
+
+def _comparable_utc_datetime(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return validate_utc_datetime(value)
 
 
 class DemoSessionRepository:
@@ -115,11 +121,25 @@ class DemoSessionRepository:
         ).scalar_one_or_none()
         if row is None:
             return None
-        if idle_expiry > row.absolute_expires_at:
-            raise ValueError("Demo idle expiry cannot exceed absolute expiry.")
-        row.last_seen_at = timestamp
-        row.idle_expires_at = idle_expiry
-        row.updated_at = timestamp
+        existing_last_seen = _comparable_utc_datetime(row.last_seen_at)
+        existing_idle_expiry = _comparable_utc_datetime(
+            row.idle_expires_at
+        )
+        absolute_expiry = _comparable_utc_datetime(
+            row.absolute_expires_at
+        )
+        capped_idle_expiry = min(idle_expiry, absolute_expiry)
+        monotonic_last_seen = max(existing_last_seen, timestamp)
+        monotonic_idle_expiry = max(
+            existing_idle_expiry,
+            capped_idle_expiry,
+        )
+        row.last_seen_at = monotonic_last_seen
+        row.idle_expires_at = monotonic_idle_expiry
+        row.updated_at = max(
+            _comparable_utc_datetime(row.updated_at),
+            monotonic_last_seen,
+        )
         db.flush()
         return row
 
@@ -251,6 +271,17 @@ class DemoChatMessageRepository:
             )
         )
         return int(result.rowcount or 0)
+
+    def count_by_demo_session(self, db, *, demo_session_id: int) -> int:
+        session_id = _require_internal_session_id(demo_session_id)
+        return int(
+            db.scalar(
+                select(func.count())
+                .select_from(DemoChatMessage)
+                .where(DemoChatMessage.demo_session_id == session_id)
+            )
+            or 0
+        )
 
 
 class DemoHandoffEventRepository:
