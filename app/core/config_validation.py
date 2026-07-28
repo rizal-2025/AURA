@@ -75,6 +75,8 @@ _TELEGRAM_TOKEN = re.compile(
     r"^[1-9][0-9]{4,19}:[A-Za-z0-9_-]{20,128}$"
 )
 _CANONICAL_POSITIVE_INTEGER = re.compile(r"^[1-9][0-9]*$")
+_POSTGRESQL_BACKENDS = frozenset({"postgres", "postgresql"})
+_CANONICAL_LOOPBACK_HOSTNAME = "loopback"
 
 
 class ConfigurationError(ValueError):
@@ -132,16 +134,41 @@ def _parsed_database_url(value: str):
         raise ConfigurationError(CFG_DATABASE_INVALID) from None
 
 
-def _database_target(parsed) -> tuple[str, str, int | None, str]:
+def _canonical_database_backend(parsed) -> str:
     backend = parsed.get_backend_name().casefold()
-    port = parsed.port
+    if backend in _POSTGRESQL_BACKENDS:
+        return "postgresql"
+    return backend
+
+
+def _canonical_database_hostname(hostname: str) -> str:
+    normalized = hostname.casefold()
+    if normalized == "localhost":
+        return _CANONICAL_LOOPBACK_HOSTNAME
+    try:
+        address = ipaddress.ip_address(normalized)
+    except ValueError:
+        return normalized
+    if address.is_loopback:
+        return _CANONICAL_LOOPBACK_HOSTNAME
+    return str(address)
+
+
+def _database_target(parsed) -> tuple[str, str, int | None, str]:
+    try:
+        backend = _canonical_database_backend(parsed)
+        hostname = _canonical_database_hostname(parsed.host or "")
+        port = parsed.port
+        database = parsed.database or ""
+    except (AttributeError, TypeError, ValueError):
+        raise ConfigurationError(CFG_DATABASE_INVALID) from None
     if port is None and backend == "postgresql":
         port = 5432
     return (
         backend,
-        (parsed.host or "").casefold(),
+        hostname,
         port,
-        (parsed.database or "").casefold(),
+        database,
     )
 
 
@@ -161,7 +188,8 @@ def select_database_url(
 
     validated_demo_url = validate_database_url(demo_database_url)
     parsed_demo = _parsed_database_url(validated_demo_url)
-    if parsed_demo.get_backend_name().casefold() != "postgresql":
+    demo_target = _database_target(parsed_demo)
+    if demo_target[0] != "postgresql":
         raise ConfigurationError(CFG_DATABASE_INVALID)
 
     if isinstance(database_url, str) and database_url:
@@ -173,7 +201,7 @@ def select_database_url(
             parsed_primary = None
         if (
             parsed_primary is not None
-            and _database_target(parsed_demo) == _database_target(parsed_primary)
+            and demo_target == _database_target(parsed_primary)
         ):
             raise ConfigurationError(CFG_DEMO_DATABASE_SAME_TARGET)
 

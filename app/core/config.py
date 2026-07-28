@@ -113,6 +113,8 @@ class DatabaseSettings(BaseSettings):
                 demo_database_url=self.DEMO_DATABASE_URL,
             )
         object.__setattr__(self, "DATABASE_URL", selected)
+        if self.APP_ENV == "demo":
+            object.__setattr__(self, "SQL_ECHO", False)
         return self
 
     @field_validator("SQL_ECHO", mode="before")

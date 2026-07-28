@@ -139,6 +139,30 @@ class DemoDatabaseConfigurationTests(unittest.TestCase):
         self.assertEqual(configured.APP_ENV, "demo")
         self.assertEqual(configured.DATABASE_URL, VALID_DEMO_DATABASE_URL)
 
+    def test_demo_sql_echo_false_remains_false(self):
+        configured = self.build(SQL_ECHO=False)
+        self.assertIs(configured.SQL_ECHO, False)
+
+    def test_demo_sql_echo_true_is_forced_false(self):
+        configured = self.build(SQL_ECHO=True)
+        self.assertIs(configured.SQL_ECHO, False)
+
+    def test_demo_sql_echo_malformed_value_is_rejected(self):
+        with self.assertRaises(ConfigurationError) as raised:
+            self.build(SQL_ECHO="definitely-not-a-boolean")
+        self.assertEqual(str(raised.exception), CFG_DATABASE_INVALID)
+
+    def test_non_demo_sql_echo_behavior_is_preserved(self):
+        for app_env in ("development", "test", "staging", "production"):
+            with self.subTest(app_env=app_env):
+                configured = build_database_settings(
+                    _env_file=None,
+                    APP_ENV=app_env,
+                    DATABASE_URL="sqlite://",
+                    SQL_ECHO=True,
+                )
+                self.assertIs(configured.SQL_ECHO, True)
+
     def test_demo_database_url_is_required(self):
         for value in (None, ""):
             with self.subTest(value=repr(value)):
@@ -175,6 +199,107 @@ class DemoDatabaseConfigurationTests(unittest.TestCase):
                     str(raised.exception),
                     CFG_DEMO_DATABASE_SAME_TARGET,
                 )
+
+    def test_localhost_and_ipv4_loopback_are_same_target(self):
+        with self.assertRaises(ConfigurationError) as raised:
+            self.build(
+                DATABASE_URL=(
+                    "postgresql://primary:secret"
+                    "@127.0.0.1:5432/aura_demo"
+                )
+            )
+        self.assertEqual(str(raised.exception), CFG_DEMO_DATABASE_SAME_TARGET)
+
+    def test_localhost_and_compressed_ipv6_loopback_are_same_target(self):
+        with self.assertRaises(ConfigurationError) as raised:
+            self.build(
+                DATABASE_URL=(
+                    "postgresql://primary:secret@[::1]:5432/aura_demo"
+                )
+            )
+        self.assertEqual(str(raised.exception), CFG_DEMO_DATABASE_SAME_TARGET)
+
+    def test_localhost_and_expanded_ipv6_loopback_are_same_target(self):
+        with self.assertRaises(ConfigurationError) as raised:
+            self.build(
+                DATABASE_URL=(
+                    "postgresql://primary:secret"
+                    "@[0:0:0:0:0:0:0:1]:5432/aura_demo"
+                )
+            )
+        self.assertEqual(str(raised.exception), CFG_DEMO_DATABASE_SAME_TARGET)
+
+    def test_implicit_and_default_postgresql_ports_are_same_target(self):
+        with self.assertRaises(ConfigurationError) as raised:
+            self.build(
+                DATABASE_URL=(
+                    "postgresql://primary:secret@localhost/aura_demo"
+                )
+            )
+        self.assertEqual(str(raised.exception), CFG_DEMO_DATABASE_SAME_TARGET)
+
+    def test_postgresql_drivers_are_same_backend_family(self):
+        with self.assertRaises(ConfigurationError) as raised:
+            self.build(
+                DATABASE_URL=(
+                    "postgres://primary:secret@localhost:5432/aura_demo"
+                )
+            )
+        self.assertEqual(str(raised.exception), CFG_DEMO_DATABASE_SAME_TARGET)
+
+    def test_hostname_comparison_is_case_insensitive(self):
+        with self.assertRaises(ConfigurationError) as raised:
+            self.build(
+                DATABASE_URL=(
+                    "postgresql://primary:secret@LOCALHOST:5432/aura_demo"
+                )
+            )
+        self.assertEqual(str(raised.exception), CFG_DEMO_DATABASE_SAME_TARGET)
+
+    def test_different_database_names_remain_different_targets(self):
+        configured = self.build(
+            DATABASE_URL=(
+                "postgresql://primary:secret@localhost:5432/aura_demo_two"
+            )
+        )
+        self.assertEqual(configured.DATABASE_URL, VALID_DEMO_DATABASE_URL)
+
+    def test_different_non_loopback_hostnames_remain_different_targets(self):
+        configured = self.build(
+            DATABASE_URL=(
+                "postgresql://primary:secret"
+                "@db-one.internal:5432/aura_demo"
+            ),
+            DEMO_DATABASE_URL=(
+                "postgresql://demo:secret"
+                "@db-two.internal:5432/aura_demo"
+            ),
+        )
+        self.assertEqual(
+            configured.DATABASE_URL,
+            "postgresql://demo:secret@db-two.internal:5432/aura_demo",
+        )
+
+    def test_different_non_default_ports_remain_different_targets(self):
+        configured = self.build(
+            DATABASE_URL=(
+                "postgresql://primary:secret@localhost:5433/aura_demo"
+            )
+        )
+        self.assertEqual(configured.DATABASE_URL, VALID_DEMO_DATABASE_URL)
+
+    def test_malformed_demo_url_uses_secret_safe_error(self):
+        password = "Malformed-Demo-Sentinel-Password-2026"
+        url = (
+            f"postgresql://demo:{password}"
+            "@localhost:not-a-port/aura_demo"
+        )
+        with self.assertRaises(ConfigurationError) as raised:
+            self.build(DEMO_DATABASE_URL=url)
+        output = str(raised.exception) + repr(raised.exception)
+        self.assertEqual(str(raised.exception), CFG_DATABASE_INVALID)
+        self.assertNotIn(url, output)
+        self.assertNotIn(password, output)
 
     def test_demo_database_name_must_contain_demo(self):
         for database_name in ("aura", "aura_production", "postgres"):
