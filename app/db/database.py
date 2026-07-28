@@ -11,6 +11,7 @@ import app.db.models.support_ticket
 import app.db.models.telegram_identity
 import app.db.models.support_ticket_notification
 import app.db.models.conversation_workflow_state
+import app.db.models.demo_persistence
 
 database_settings = get_database_settings()
 
