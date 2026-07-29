@@ -132,6 +132,13 @@ _KNOWN_FIELD_CODES = {
 }
 _KNOWN_FIELDS = frozenset(_KNOWN_FIELD_CODES)
 _MAX_SAFE_ERRORS = 8
+_INTERNAL_DEMO_VALIDATION_PATHS = frozenset(
+    {
+        "/internal/demo/chat",
+        "/internal/demo/reservations",
+        "/internal/demo/reset",
+    }
+)
 
 
 def request_body_too_large_response() -> JSONResponse:
@@ -262,10 +269,10 @@ async def request_validation_exception_handler(
     error: RequestValidationError,
 ) -> JSONResponse:
     safe_errors = _safe_validation_errors(error)
-    is_demo_chat = request.url.path == "/internal/demo/chat"
+    is_internal_demo = request.url.path in _INTERNAL_DEMO_VALIDATION_PATHS
     response_code = (
         DEMO_CHAT_VALIDATION_ERROR
-        if is_demo_chat
+        if is_internal_demo
         else REQUEST_VALIDATION_FAILED
     )
     logger.info(
@@ -280,5 +287,5 @@ async def request_validation_exception_handler(
             "detail": "Request validation failed.",
             "errors": safe_errors,
         },
-        headers={"Cache-Control": "no-store"} if is_demo_chat else None,
+        headers={"Cache-Control": "no-store"} if is_internal_demo else None,
     )

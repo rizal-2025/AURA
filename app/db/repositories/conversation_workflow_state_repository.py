@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 
 from app.core.ownership import require_owner_customer_id
 from app.db.models.conversation_workflow_state import ConversationWorkflowState
@@ -26,6 +26,26 @@ class ConversationWorkflowStateRepository:
         if for_update:
             statement = statement.with_for_update()
         return db.execute(statement).scalar_one_or_none()
+
+    def delete_by_scope(
+        self,
+        db,
+        *,
+        owner_customer_id,
+        session_reference_hash: str,
+    ) -> int:
+        require_owner_customer_id(owner_customer_id)
+        if not isinstance(session_reference_hash, str) or not session_reference_hash:
+            raise ValueError("A workflow session scope is required.")
+        result = db.execute(
+            delete(ConversationWorkflowState).where(
+                ConversationWorkflowState.owner_customer_id
+                == owner_customer_id,
+                ConversationWorkflowState.session_reference_hash
+                == session_reference_hash,
+            )
+        )
+        return int(result.rowcount or 0)
 
     def create(
         self,

@@ -91,10 +91,14 @@ def create_app(application_settings=None) -> FastAPI:
     application.include_router(reservation_router)
     if current_settings.APP_ENV == "demo":
         from app.api.internal_demo_chat import router as demo_chat_router
+        from app.api.internal_demo_reservation_reset import (
+            router as demo_reservation_reset_router,
+        )
         from app.api.internal_demo_sessions import router as demo_session_router
 
         application.include_router(demo_session_router)
         application.include_router(demo_chat_router)
+        application.include_router(demo_reservation_reset_router)
 
     @application.get("/")
     async def root():
