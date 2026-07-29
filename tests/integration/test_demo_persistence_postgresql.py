@@ -56,6 +56,10 @@ from migrations.add_demo_persistence import (
     UNIQUE_CONSTRAINTS,
     migrate,
 )
+from migrations.add_demo_chat_request_id import (
+    REQUEST_ID_INDEXES,
+    migrate as migrate_request_id,
+)
 from tests.integration.disposable_schema import DisposableSchemaResources
 
 
@@ -247,6 +251,10 @@ class DemoPersistencePostgreSQLTests(unittest.TestCase):
             cls.engine,
             schema=cls.schema,
         )
+        cls.initial_request_migration_changed = migrate_request_id(
+            cls.engine,
+            schema=cls.schema,
+        )
 
     @classmethod
     def _table(cls, name: str) -> str:
@@ -377,7 +385,11 @@ class DemoPersistencePostgreSQLTests(unittest.TestCase):
 
     def test_01_migration_creates_four_tables_and_is_idempotent(self):
         self.assertTrue(self.initial_migration_changed)
+        self.assertTrue(self.initial_request_migration_changed)
         self.assertFalse(migrate(self.engine, schema=self.schema))
+        self.assertFalse(
+            migrate_request_id(self.engine, schema=self.schema)
+        )
         inspector = inspect(self.engine)
         for table_name in DEMO_TABLES:
             with self.subTest(table_name=table_name):
@@ -599,7 +611,7 @@ class DemoPersistencePostgreSQLTests(unittest.TestCase):
                     for index in table.indexes
                 }
                 required_index_names = {
-                    item[0] for item in INDEXES[table_name]
+                    index.name for index in table.indexes
                 }
                 migrated_indexes = {
                     (
@@ -614,6 +626,35 @@ class DemoPersistencePostgreSQLTests(unittest.TestCase):
                     if item.get("name") in required_index_names
                 }
                 self.assertEqual(migrated_indexes, model_indexes)
+
+                if table_name == "demo_chat_messages":
+                    migrated_by_name = {
+                        item.get("name"): item
+                        for item in inspector.get_indexes(
+                            table_name,
+                            schema=self.schema,
+                        )
+                    }
+                    for name, predicate in REQUEST_ID_INDEXES.items():
+                        migrated = migrated_by_name[name]
+                        model_index = next(
+                            index
+                            for index in table.indexes
+                            if index.name == name
+                        )
+                        self.assertTrue(migrated.get("unique"))
+                        self.assertEqual(
+                            tuple(migrated.get("column_names") or ()),
+                            ("demo_session_id", "request_id"),
+                        )
+                        self.assertIn(
+                            predicate,
+                            str(
+                                model_index.dialect_options[
+                                    "postgresql"
+                                ]["where"]
+                            ),
+                        )
 
                 actual_defaults = {
                     name: _server_default_semantics(
@@ -1048,6 +1089,38 @@ class DemoPersistencePostgreSQLTests(unittest.TestCase):
         self.assertEqual(
             self._core_signature(engine, schema),
             before,
+        )
+
+    def _assert_old_migration_rejects_wrong_request_predicate(self, role):
+        schema, engine = self._new_disposable_engine()
+        self._create_core_tables(engine)
+        self.assertTrue(migrate(engine, schema=schema))
+        self.assertTrue(migrate_request_id(engine, schema=schema))
+        index = f"uq_demo_chat_messages_session_request_{role}"
+        with engine.begin() as connection:
+            connection.execute(text(f'DROP INDEX "{schema}"."{index}"'))
+            connection.execute(
+                text(
+                    f'CREATE UNIQUE INDEX "{index}" '
+                    f'ON "{schema}"."demo_chat_messages" '
+                    "(demo_session_id, request_id) "
+                    f"WHERE role = '{role}'"
+                )
+            )
+
+        with self.assertRaises(DemoPersistenceMigrationError) as captured:
+            migrate(engine, schema=schema)
+
+        rendered = str(captured.exception) + repr(captured.exception)
+        self.assertNotIn("postgresql://", rendered.casefold())
+        self.assertNotIn("password", rendered.casefold())
+
+    def test_old_migration_rejects_wrong_user_predicate_only(self):
+        self._assert_old_migration_rejects_wrong_request_predicate("user")
+
+    def test_old_migration_rejects_wrong_assistant_predicate_only(self):
+        self._assert_old_migration_rejects_wrong_request_predicate(
+            "assistant"
         )
 
     def test_15_partial_migration_failure_rolls_back_all_new_ddl(self):

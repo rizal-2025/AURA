@@ -36,11 +36,18 @@ from app.services.demo_session_service import (
     DemoServiceAuthRequiredError,
     DemoSessionRequiredError,
 )
+from app.services.demo_chat_errors import (
+    DemoChatProviderError,
+    DemoChatProviderTimeoutError,
+    DemoChatRequestConflictError,
+    DemoChatServiceUnavailableError,
+)
 
 
 REQUEST_BODY_TOO_LARGE = "REQUEST_BODY_TOO_LARGE"
 INVALID_REQUEST_FRAMING = "INVALID_REQUEST_FRAMING"
 REQUEST_VALIDATION_FAILED = "REQUEST_VALIDATION_FAILED"
+DEMO_CHAT_VALIDATION_ERROR = "VALIDATION_ERROR"
 CONVERSATION_BUSY = "CONVERSATION_BUSY"
 
 _DEMO_SESSION_DETAILS = {
@@ -51,6 +58,29 @@ _DEMO_SESSION_DETAILS = {
     DemoSessionRequiredError: (
         "DEMO_SESSION_REQUIRED",
         "Sesi demo tidak valid atau telah kedaluwarsa.",
+    ),
+}
+
+_DEMO_CHAT_DETAILS = {
+    DemoChatRequestConflictError: (
+        409,
+        "REQUEST_CONFLICT",
+        "Permintaan demo sedang diproses atau belum selesai.",
+    ),
+    DemoChatProviderError: (
+        502,
+        "PROVIDER_ERROR",
+        "Layanan AI demo gagal memberikan respons.",
+    ),
+    DemoChatServiceUnavailableError: (
+        503,
+        "SERVICE_UNAVAILABLE",
+        "Layanan demo sementara tidak tersedia.",
+    ),
+    DemoChatProviderTimeoutError: (
+        504,
+        "PROVIDER_TIMEOUT",
+        "Layanan AI demo melewati batas waktu.",
     ),
 }
 
@@ -178,6 +208,24 @@ async def demo_session_exception_handler(
     )
 
 
+async def demo_chat_exception_handler(
+    _request: Request,
+    error: (
+        DemoChatRequestConflictError
+        | DemoChatProviderError
+        | DemoChatProviderTimeoutError
+        | DemoChatServiceUnavailableError
+    ),
+) -> JSONResponse:
+    status_code, code, detail = _DEMO_CHAT_DETAILS[type(error)]
+    logger.info("HTTP REQUEST: status=%s code=%s", status_code, code)
+    return JSONResponse(
+        status_code=status_code,
+        content={"code": code, "detail": detail},
+        headers={"Cache-Control": "no-store"},
+    )
+
+
 def _safe_validation_errors(error: RequestValidationError) -> list[dict[str, str]]:
     safe_errors: list[dict[str, str]] = []
     seen: set[tuple[str, str]] = set()
@@ -210,20 +258,27 @@ def _safe_validation_errors(error: RequestValidationError) -> list[dict[str, str
 
 
 async def request_validation_exception_handler(
-    _request: Request,
+    request: Request,
     error: RequestValidationError,
 ) -> JSONResponse:
     safe_errors = _safe_validation_errors(error)
+    is_demo_chat = request.url.path == "/internal/demo/chat"
+    response_code = (
+        DEMO_CHAT_VALIDATION_ERROR
+        if is_demo_chat
+        else REQUEST_VALIDATION_FAILED
+    )
     logger.info(
         "HTTP VALIDATION: status=422 code=%s error_count=%s",
-        REQUEST_VALIDATION_FAILED,
+        response_code,
         len(safe_errors),
     )
     return JSONResponse(
         status_code=422,
         content={
-            "code": REQUEST_VALIDATION_FAILED,
+            "code": response_code,
             "detail": "Request validation failed.",
             "errors": safe_errors,
         },
+        headers={"Cache-Control": "no-store"} if is_demo_chat else None,
     )

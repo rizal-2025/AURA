@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 import logging
 import unittest
+from uuid import uuid4
 
 from sqlalchemy import create_engine, event, func, select, text
 from sqlalchemy.orm import sessionmaker
@@ -347,6 +348,14 @@ class DemoSessionServiceTests(unittest.TestCase):
                 content=f"message-{number:02d}",
                 created_at=self.now + timedelta(seconds=number),
             )
+        self.messages.append_request_message(
+            self.db,
+            demo_session_id=row.id,
+            role="user",
+            content="internal-incomplete-marker",
+            request_id=uuid4(),
+            created_at=self.now + timedelta(seconds=60),
+        )
         self.db.commit()
         result = self.service(
             now=self.now + timedelta(minutes=1)
@@ -355,6 +364,76 @@ class DemoSessionServiceTests(unittest.TestCase):
         self.assertEqual(result.messages[0].content, "message-05")
         self.assertEqual(result.messages[-1].content, "message-54")
         self.assertEqual(result.session.message_count, 55)
+
+    def test_current_hides_incomplete_marker_but_keeps_legacy_and_pair(self):
+        row, _owner = self.seed_session()
+        self.messages.append(
+            self.db,
+            demo_session_id=row.id,
+            role="user",
+            content="legacy",
+            created_at=self.now,
+        )
+        completed_request = uuid4()
+        self.messages.append_request_message(
+            self.db,
+            demo_session_id=row.id,
+            role="user",
+            content="completed-user",
+            request_id=completed_request,
+            created_at=self.now + timedelta(seconds=1),
+        )
+        self.messages.append_request_message(
+            self.db,
+            demo_session_id=row.id,
+            role="assistant",
+            content="completed-assistant",
+            request_id=completed_request,
+            created_at=self.now + timedelta(seconds=2),
+        )
+        self.messages.append_request_message(
+            self.db,
+            demo_session_id=row.id,
+            role="user",
+            content="internal-incomplete-marker",
+            request_id=uuid4(),
+            created_at=self.now + timedelta(seconds=3),
+        )
+        self.db.commit()
+
+        result = self.service().get_current_session(self.db, TOKEN_A)
+        self.assertEqual(
+            [message.content for message in result.messages],
+            ["legacy", "completed-user", "completed-assistant"],
+        )
+        self.assertEqual(result.session.message_count, 3)
+
+    def test_incomplete_marker_in_one_session_does_not_affect_another(self):
+        first, _owner = self.seed_session(TOKEN_A)
+        second, _owner = self.seed_session(TOKEN_B)
+        self.messages.append_request_message(
+            self.db,
+            demo_session_id=first.id,
+            role="user",
+            content="first-incomplete",
+            request_id=uuid4(),
+            created_at=self.now,
+        )
+        self.messages.append(
+            self.db,
+            demo_session_id=second.id,
+            role="user",
+            content="second-public",
+            created_at=self.now,
+        )
+        self.db.commit()
+
+        result = self.service().get_current_session(self.db, TOKEN_B)
+        self.assertEqual(
+            [message.content for message in result.messages],
+            ["second-public"],
+        )
+        self.assertEqual(result.session.message_count, 1)
 
     def test_current_messages_and_handoff_are_session_scoped(self):
         first, _owner = self.seed_session(TOKEN_A)

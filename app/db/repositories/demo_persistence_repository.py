@@ -1,8 +1,11 @@
 """Caller-transaction repositories for isolated demo persistence."""
 
+from dataclasses import dataclass
 from datetime import datetime, timezone
+from uuid import UUID
 
-from sqlalchemy import delete, func, or_, select
+from sqlalchemy import delete, func, or_, select, text
+from sqlalchemy.orm import aliased
 
 from app.core.ownership import require_owner_customer_id
 from app.db.models.demo_persistence import (
@@ -28,10 +31,27 @@ def _require_internal_session_id(demo_session_id: int) -> int:
     return demo_session_id
 
 
-def _comparable_utc_datetime(value: datetime) -> datetime:
+def _comparable_utc_datetime(value: datetime | str) -> datetime:
+    if isinstance(value, str):
+        try:
+            value = datetime.fromisoformat(value)
+        except ValueError:
+            raise ValueError(
+                "A valid persisted demo timestamp is required."
+            ) from None
     if value.tzinfo is None:
         return value.replace(tzinfo=timezone.utc)
     return validate_utc_datetime(value)
+
+
+@dataclass(frozen=True)
+class PersistedDemoChatMessage:
+    id: int
+    demo_session_id: int
+    role: str
+    content: str
+    request_id: UUID
+    created_at: datetime
 
 
 class DemoSessionRepository:
@@ -212,6 +232,24 @@ class DemoSessionRepository:
 class DemoChatMessageRepository:
     """Keep every public message query scoped to one internal demo session."""
 
+    @staticmethod
+    def _public_history_filter():
+        companion = aliased(DemoChatMessage)
+        completed_pair = (
+            select(companion.id)
+            .where(
+                companion.demo_session_id
+                == DemoChatMessage.demo_session_id,
+                companion.request_id == DemoChatMessage.request_id,
+                companion.role != DemoChatMessage.role,
+            )
+            .exists()
+        )
+        return or_(
+            DemoChatMessage.request_id.is_(None),
+            completed_pair,
+        )
+
     def append(
         self,
         db,
@@ -235,6 +273,109 @@ class DemoChatMessageRepository:
         db.flush()
         return row
 
+    def append_request_message(
+        self,
+        db,
+        *,
+        demo_session_id: int,
+        role: str,
+        content: str,
+        request_id: UUID,
+        created_at: datetime | None = None,
+    ) -> PersistedDemoChatMessage:
+        session_id = _require_internal_session_id(demo_session_id)
+        if role not in {"user", "assistant"}:
+            raise ValueError("Unsupported demo message role.")
+        if not isinstance(content, str) or not content:
+            raise ValueError("Demo message content must be non-empty text.")
+        if not isinstance(request_id, UUID):
+            raise ValueError("A valid demo chat request ID is required.")
+        timestamp = validate_utc_datetime(
+            created_at or datetime.now(timezone.utc)
+        )
+        row = db.execute(
+            text(
+                """
+                INSERT INTO demo_chat_messages (
+                    demo_session_id,
+                    role,
+                    content,
+                    request_id,
+                    created_at
+                )
+                VALUES (
+                    :demo_session_id,
+                    :role,
+                    :content,
+                    :request_id,
+                    :created_at
+                )
+                RETURNING
+                    id,
+                    demo_session_id,
+                    role,
+                    content,
+                    request_id,
+                    created_at
+                """
+            ),
+            {
+                "demo_session_id": session_id,
+                "role": role,
+                "content": content,
+                "request_id": str(request_id),
+                "created_at": timestamp,
+            },
+        ).mappings().one()
+        return self._request_message(row)
+
+    def list_by_request_id(
+        self,
+        db,
+        *,
+        demo_session_id: int,
+        request_id: UUID,
+    ) -> list[PersistedDemoChatMessage]:
+        session_id = _require_internal_session_id(demo_session_id)
+        if not isinstance(request_id, UUID):
+            raise ValueError("A valid demo chat request ID is required.")
+        rows = db.execute(
+            text(
+                """
+                SELECT
+                    id,
+                    demo_session_id,
+                    role,
+                    content,
+                    request_id,
+                    created_at
+                FROM demo_chat_messages
+                WHERE demo_session_id = :demo_session_id
+                  AND request_id = :request_id
+                ORDER BY id ASC
+                """
+            ),
+            {
+                "demo_session_id": session_id,
+                "request_id": str(request_id),
+            },
+        ).mappings()
+        return [self._request_message(row) for row in rows]
+
+    @staticmethod
+    def _request_message(row) -> PersistedDemoChatMessage:
+        request_id = row["request_id"]
+        if isinstance(request_id, str):
+            request_id = UUID(request_id)
+        return PersistedDemoChatMessage(
+            id=int(row["id"]),
+            demo_session_id=int(row["demo_session_id"]),
+            role=str(row["role"]),
+            content=str(row["content"]),
+            request_id=request_id,
+            created_at=_comparable_utc_datetime(row["created_at"]),
+        )
+
     def list_latest(
         self,
         db,
@@ -252,7 +393,10 @@ class DemoChatMessageRepository:
         newest_first = list(
             db.execute(
                 select(DemoChatMessage)
-                .where(DemoChatMessage.demo_session_id == session_id)
+                .where(
+                    DemoChatMessage.demo_session_id == session_id,
+                    self._public_history_filter(),
+                )
                 .order_by(
                     DemoChatMessage.created_at.desc(),
                     DemoChatMessage.id.desc(),
@@ -278,7 +422,10 @@ class DemoChatMessageRepository:
             db.scalar(
                 select(func.count())
                 .select_from(DemoChatMessage)
-                .where(DemoChatMessage.demo_session_id == session_id)
+                .where(
+                    DemoChatMessage.demo_session_id == session_id,
+                    self._public_history_filter(),
+                )
             )
             or 0
         )
@@ -339,6 +486,33 @@ class DemoHandoffEventRepository:
         )
         newest_first.reverse()
         return newest_first
+
+    def get_latest_between(
+        self,
+        db,
+        *,
+        demo_session_id: int,
+        started_at: datetime,
+        completed_at: datetime,
+    ):
+        session_id = _require_internal_session_id(demo_session_id)
+        start = validate_utc_datetime(started_at)
+        completion = validate_utc_datetime(completed_at)
+        if start > completion:
+            raise ValueError("Invalid demo handoff time window.")
+        return db.execute(
+            select(DemoHandoffEvent)
+            .where(
+                DemoHandoffEvent.demo_session_id == session_id,
+                DemoHandoffEvent.created_at >= start,
+                DemoHandoffEvent.created_at <= completion,
+            )
+            .order_by(
+                DemoHandoffEvent.created_at.desc(),
+                DemoHandoffEvent.id.desc(),
+            )
+            .limit(1)
+        ).scalar_one_or_none()
 
     def delete_by_demo_session(self, db, *, demo_session_id: int) -> int:
         session_id = _require_internal_session_id(demo_session_id)
