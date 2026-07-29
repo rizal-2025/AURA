@@ -629,3 +629,23 @@ class DemoRateLimitBucketRepository:
             ).execution_options(synchronize_session=False)
         )
         return int(result.rowcount or 0)
+
+    def delete_session_subject(
+        self,
+        db,
+        *,
+        subject_digest: str,
+    ) -> int:
+        subject_digest = demo_session_rate_limit_subject(subject_digest)
+        result = db.execute(
+            delete(DemoRateLimitBucket).where(
+                DemoRateLimitBucket.scope_type == "session",
+                DemoRateLimitBucket.subject_digest == subject_digest,
+            )
+        )
+        return int(result.rowcount or 0)
+
+
+def demo_session_rate_limit_subject(token_digest: str) -> str:
+    """Return the canonical session-bucket subject without exposing raw tokens."""
+    return validate_demo_digest(token_digest)

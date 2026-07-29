@@ -1,4 +1,4 @@
-from sqlalchemy import func, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.orm import Session
 
 from app.core.ownership import require_owner_customer_id
@@ -9,6 +9,56 @@ from app.schemas.reservation import ReservationCreate
 class ReservationRepository:
 
     EDITABLE_FIELDS = {"name", "people", "date", "time"}
+
+    def list_for_owner(
+        self,
+        db: Session,
+        owner_customer_id,
+        limit: int = 50,
+    ):
+        require_owner_customer_id(owner_customer_id)
+        if (
+            isinstance(limit, bool)
+            or not isinstance(limit, int)
+            or not 1 <= limit <= 50
+        ):
+            raise ValueError("Reservation list limit must be between 1 and 50.")
+        return list(
+            db.execute(
+                select(Reservation)
+                .where(Reservation.owner_customer_id == owner_customer_id)
+                .order_by(
+                    Reservation.date.asc(),
+                    Reservation.time.asc(),
+                    Reservation.id.asc(),
+                )
+                .limit(limit)
+            ).scalars()
+        )
+
+    def count_for_owner(self, db: Session, owner_customer_id) -> int:
+        require_owner_customer_id(owner_customer_id)
+        return int(
+            db.scalar(
+                select(func.count())
+                .select_from(Reservation)
+                .where(Reservation.owner_customer_id == owner_customer_id)
+            )
+            or 0
+        )
+
+    def delete_by_owner_customer_id(
+        self,
+        db: Session,
+        owner_customer_id,
+    ) -> int:
+        require_owner_customer_id(owner_customer_id)
+        result = db.execute(
+            delete(Reservation).where(
+                Reservation.owner_customer_id == owner_customer_id
+            )
+        )
+        return int(result.rowcount or 0)
 
     def list_recent(
         self,
