@@ -15,6 +15,7 @@ from app.core.transaction_errors import (
 )
 from app.api.error_handlers import (
     conversation_busy_exception_handler,
+    demo_chat_exception_handler,
     demo_session_exception_handler,
     request_validation_exception_handler,
     transaction_exception_handler,
@@ -23,6 +24,12 @@ from app.middleware.request_body_limit import RequestBodyLimitMiddleware
 from app.services.demo_session_service import (
     DemoServiceAuthRequiredError,
     DemoSessionRequiredError,
+)
+from app.services.demo_chat_errors import (
+    DemoChatProviderError,
+    DemoChatProviderTimeoutError,
+    DemoChatRequestConflictError,
+    DemoChatServiceUnavailableError,
 )
 
 application_settings = get_application_settings()
@@ -68,14 +75,26 @@ def create_app(application_settings=None) -> FastAPI:
             demo_session_error,
             demo_session_exception_handler,
         )
+    for demo_chat_error in (
+        DemoChatRequestConflictError,
+        DemoChatProviderError,
+        DemoChatServiceUnavailableError,
+        DemoChatProviderTimeoutError,
+    ):
+        application.add_exception_handler(
+            demo_chat_error,
+            demo_chat_exception_handler,
+        )
 
     application.include_router(chat_router)
     application.include_router(auth_router)
     application.include_router(reservation_router)
     if current_settings.APP_ENV == "demo":
+        from app.api.internal_demo_chat import router as demo_chat_router
         from app.api.internal_demo_sessions import router as demo_session_router
 
         application.include_router(demo_session_router)
+        application.include_router(demo_chat_router)
 
     @application.get("/")
     async def root():

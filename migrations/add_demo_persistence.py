@@ -220,6 +220,17 @@ EXPECTED_COLUMNS = {
     },
 }
 
+OPTIONAL_ADDITIVE_COLUMNS = {
+    "demo_chat_messages": {
+        "request_id": ("uuid", True),
+    },
+}
+
+OPTIONAL_REQUEST_ID_INDEXES = {
+    "uq_demo_chat_messages_session_request_user": "user",
+    "uq_demo_chat_messages_session_request_assistant": "assistant",
+}
+
 
 class DemoPersistenceMigrationError(RuntimeError):
     """Safe migration failure without SQL or connection details."""
@@ -261,17 +272,88 @@ def _compatible_type(actual, expected: str) -> bool:
     return False
 
 
+def _normalized_request_predicate(value) -> str:
+    normalized = (
+        str(value or "")
+        .casefold()
+        .replace("::text", "")
+        .replace("::character varying", "")
+        .replace('"', "")
+    )
+    return re.sub(r"[\s()]+", "", normalized)
+
+
+def _request_predicate_is_compatible(value, *, role: str) -> bool:
+    normalized = _normalized_request_predicate(value)
+    return normalized in {
+        f"role='{role}'andrequest_idisnotnull",
+        f"request_idisnotnullandrole='{role}'",
+    }
+
+
+def _validate_optional_request_id_indexes(
+    inspector,
+    *,
+    schema: str | None,
+    request_id_present: bool,
+) -> None:
+    indexes = {
+        item.get("name"): item
+        for item in inspector.get_indexes(
+            "demo_chat_messages",
+            schema=schema,
+        )
+    }
+    for name, role in OPTIONAL_REQUEST_ID_INDEXES.items():
+        existing = indexes.get(name)
+        if not request_id_present:
+            if existing is not None:
+                raise DemoPersistenceMigrationError(
+                    "Existing demo chat request index is incompatible."
+                )
+            continue
+        if existing is None:
+            raise DemoPersistenceMigrationError(
+                "Existing demo chat request index is missing."
+            )
+        dialect_options = existing.get("dialect_options") or {}
+        if (
+            tuple(existing.get("column_names") or ())
+            != ("demo_session_id", "request_id")
+            or not bool(existing.get("unique"))
+            or not _request_predicate_is_compatible(
+                dialect_options.get("postgresql_where", ""),
+                role=role,
+            )
+        ):
+            raise DemoPersistenceMigrationError(
+                "Existing demo chat request index is incompatible."
+            )
+
+
 def _validate_columns(inspector, table_name: str, schema: str | None) -> None:
     columns = {
         item["name"]: item
         for item in inspector.get_columns(table_name, schema=schema)
     }
     expected = EXPECTED_COLUMNS[table_name]
-    if set(columns) != set(expected):
+    optional = OPTIONAL_ADDITIVE_COLUMNS.get(table_name, {})
+    if (
+        not set(expected).issubset(columns)
+        or set(columns) - set(expected) - set(optional)
+    ):
         raise DemoPersistenceMigrationError(
             f"Existing {table_name} columns are incompatible."
         )
-    for name, (expected_type, nullable) in expected.items():
+    definitions = dict(expected)
+    definitions.update(
+        {
+            name: definition
+            for name, definition in optional.items()
+            if name in columns
+        }
+    )
+    for name, (expected_type, nullable) in definitions.items():
         column = columns[name]
         if (
             not _compatible_type(column["type"], expected_type)
@@ -285,6 +367,12 @@ def _validate_columns(inspector, table_name: str, schema: str | None) -> None:
     if not id_column.get("identity") and "nextval(" not in default:
         raise DemoPersistenceMigrationError(
             f"Existing {table_name}.id generator is missing."
+        )
+    if table_name == "demo_chat_messages":
+        _validate_optional_request_id_indexes(
+            inspector,
+            schema=schema,
+            request_id_present="request_id" in columns,
         )
 
 

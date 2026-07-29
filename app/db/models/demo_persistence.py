@@ -14,6 +14,8 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    Uuid,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column, validates
 
@@ -171,6 +173,30 @@ class DemoChatMessage(Base):
             "created_at",
             "id",
         ),
+        Index(
+            "uq_demo_chat_messages_session_request_user",
+            "demo_session_id",
+            "request_id",
+            unique=True,
+            postgresql_where=text(
+                "role = 'user' AND request_id IS NOT NULL"
+            ),
+            sqlite_where=text(
+                "role = 'user' AND request_id IS NOT NULL"
+            ),
+        ),
+        Index(
+            "uq_demo_chat_messages_session_request_assistant",
+            "demo_session_id",
+            "request_id",
+            unique=True,
+            postgresql_where=text(
+                "role = 'assistant' AND request_id IS NOT NULL"
+            ),
+            sqlite_where=text(
+                "role = 'assistant' AND request_id IS NOT NULL"
+            ),
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -187,6 +213,10 @@ class DemoChatMessage(Base):
         DateTime(timezone=True),
         nullable=False,
         default=lambda: datetime.now(timezone.utc),
+    )
+    request_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True),
+        nullable=True,
     )
 
     @validates("role")
