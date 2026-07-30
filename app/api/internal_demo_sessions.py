@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.api.internal_demo_dependencies import (
     get_demo_session_service,
+    get_demo_rate_limit_service,
     require_demo_service_auth,
     require_demo_session_token,
 )
@@ -17,6 +18,10 @@ from app.schemas.demo_session import (
     DemoSessionCurrentResponse,
 )
 from app.services.demo_session_service import DemoSessionService
+from app.services.demo_rate_limit_service import (
+    DemoRateLimitAction,
+    DemoRateLimitService,
+)
 
 
 router = APIRouter(
@@ -49,7 +54,14 @@ def create_demo_session(
     _empty_body: None = Depends(require_empty_request_body),
     db: Session = Depends(get_db),
     service: DemoSessionService = Depends(get_demo_session_service),
+    rate_limits: DemoRateLimitService = Depends(
+        get_demo_rate_limit_service
+    ),
 ) -> DemoSessionCreateResponse:
+    rate_limits.enforce(
+        db,
+        action=DemoRateLimitAction.SESSION_CREATE,
+    )
     created = service.create_session(db)
     response.headers["Cache-Control"] = "no-store"
     return created
@@ -68,7 +80,19 @@ def get_current_demo_session(
     response: Response,
     db: Session = Depends(get_db),
     service: DemoSessionService = Depends(get_demo_session_service),
+    rate_limits: DemoRateLimitService = Depends(
+        get_demo_rate_limit_service
+    ),
 ) -> DemoSessionCurrentResponse:
+    token_digest = rate_limits.resolve_active_session_digest(
+        db,
+        session_token,
+    )
+    rate_limits.enforce(
+        db,
+        action=DemoRateLimitAction.SESSION_CURRENT,
+        session_token_digest=token_digest,
+    )
     current = service.get_current_session(db, session_token)
     response.headers["Cache-Control"] = "no-store"
     return current

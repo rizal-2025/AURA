@@ -10,6 +10,7 @@ from pydantic import SecretStr, ValidationError
 from app.api.internal_demo_reservation_reset import (
     get_demo_reservation_reset_service,
 )
+from app.api.internal_demo_dependencies import get_demo_rate_limit_service
 from app.core.config import get_demo_settings
 from app.db.database import get_db
 from app.main import create_app
@@ -28,6 +29,14 @@ from app.services.demo_session_service import DemoSessionRequiredError
 
 SERVICE_TOKEN = "safe-bff-service-token-for-reset-tests-2026"
 SESSION_TOKEN = "U" * 43
+
+
+class _AllowingRateLimits:
+    def resolve_active_session_digest(self, _db, _raw_token):
+        return "c" * 64
+
+    def enforce(self, _db, **_values):
+        return ()
 
 
 class _StubReservationResetService:
@@ -86,6 +95,9 @@ class InternalDemoReservationResetAPITests(unittest.TestCase):
         self.app.dependency_overrides[
             get_demo_reservation_reset_service
         ] = lambda: self.service
+        self.app.dependency_overrides[get_demo_rate_limit_service] = (
+            _AllowingRateLimits
+        )
         self.app.dependency_overrides[get_db] = lambda: self.db
         self.client = TestClient(self.app)
 

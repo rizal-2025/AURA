@@ -17,6 +17,7 @@ from app.api.error_handlers import (
     conversation_busy_exception_handler,
     demo_chat_exception_handler,
     demo_session_exception_handler,
+    demo_rate_limit_exception_handler,
     request_validation_exception_handler,
     transaction_exception_handler,
 )
@@ -31,6 +32,7 @@ from app.services.demo_chat_errors import (
     DemoChatRequestConflictError,
     DemoChatServiceUnavailableError,
 )
+from app.services.demo_rate_limit_service import DemoRateLimitExceededError
 
 application_settings = get_application_settings()
 
@@ -85,6 +87,10 @@ def create_app(application_settings=None) -> FastAPI:
             demo_chat_error,
             demo_chat_exception_handler,
         )
+    application.add_exception_handler(
+        DemoRateLimitExceededError,
+        demo_rate_limit_exception_handler,
+    )
 
     application.include_router(chat_router)
     application.include_router(auth_router)

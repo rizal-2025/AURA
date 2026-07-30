@@ -7,6 +7,7 @@ from fastapi.exceptions import RequestValidationError
 from sqlalchemy.orm import Session
 
 from app.api.internal_demo_dependencies import (
+    get_demo_rate_limit_service,
     require_demo_service_auth,
     require_demo_session_token,
 )
@@ -19,6 +20,10 @@ from app.schemas.demo_reservation_reset import (
 from app.services.demo_reservation_reset_service import (
     DemoReservationResetService,
     demo_reservation_reset_service,
+)
+from app.services.demo_rate_limit_service import (
+    DemoRateLimitAction,
+    DemoRateLimitService,
 )
 
 
@@ -60,7 +65,19 @@ def get_demo_reservations(
     service: DemoReservationResetService = Depends(
         get_demo_reservation_reset_service
     ),
+    rate_limits: DemoRateLimitService = Depends(
+        get_demo_rate_limit_service
+    ),
 ) -> DemoReservationListResponse:
+    token_digest = rate_limits.resolve_active_session_digest(
+        db,
+        session_token,
+    )
+    rate_limits.enforce(
+        db,
+        action=DemoRateLimitAction.RESERVATIONS_READ,
+        session_token_digest=token_digest,
+    )
     result = service.list_reservations(
         db,
         raw_session_token=session_token,
@@ -83,7 +100,19 @@ async def reset_demo_session_data(
     service: DemoReservationResetService = Depends(
         get_demo_reservation_reset_service
     ),
+    rate_limits: DemoRateLimitService = Depends(
+        get_demo_rate_limit_service
+    ),
 ) -> DemoResetResponse:
+    token_digest = rate_limits.resolve_active_session_digest(
+        db,
+        session_token,
+    )
+    rate_limits.enforce(
+        db,
+        action=DemoRateLimitAction.RESET,
+        session_token_digest=token_digest,
+    )
     result = await service.reset(
         db,
         raw_session_token=session_token,
