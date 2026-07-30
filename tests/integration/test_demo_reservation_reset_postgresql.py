@@ -42,7 +42,7 @@ from app.db.models.support_ticket_notification import (
 )
 from app.db.models.telegram_identity import TelegramIdentity
 from app.db.repositories.demo_persistence_repository import (
-    DemoRateLimitBucketRepository,
+    DemoChatMessageRepository,
     demo_session_rate_limit_subject,
 )
 from app.db.repositories.reservation_repository import ReservationRepository
@@ -105,11 +105,11 @@ def _skip_reason():
 SKIP_REASON = _skip_reason()
 
 
-class _FailAfterSessionBucketDelete(DemoRateLimitBucketRepository):
-    def delete_session_subject(self, db, *, subject_digest):
-        super().delete_session_subject(
+class _FailAfterMessageDelete(DemoChatMessageRepository):
+    def delete_by_demo_session(self, db, *, demo_session_id):
+        super().delete_by_demo_session(
             db,
-            subject_digest=subject_digest,
+            demo_session_id=demo_session_id,
         )
         raise RuntimeError("forced rollback")
 
@@ -660,6 +660,18 @@ class DemoReservationResetPostgreSQLTests(unittest.TestCase):
             )
             scopes = set(db.scalars(select(DemoRateLimitBucket.scope_type)))
             self.assertEqual(scopes, {"session", "ip", "global"})
+            retained_session_bucket_count = db.scalar(
+                select(func.count())
+                .select_from(DemoRateLimitBucket)
+                .where(
+                    DemoRateLimitBucket.scope_type == "session",
+                    DemoRateLimitBucket.subject_digest
+                    == demo_session_rate_limit_subject(
+                        retained.token_digest
+                    ),
+                )
+            )
+            self.assertEqual(retained_session_bucket_count, 1)
             current = self.service().list_reservations(
                 db,
                 raw_session_token=TOKEN_A,
@@ -704,7 +716,7 @@ class DemoReservationResetPostgreSQLTests(unittest.TestCase):
             db.commit()
             before = self.database_snapshot()
             service = self.service(
-                rate_bucket_repository=_FailAfterSessionBucketDelete(),
+                message_repository=_FailAfterMessageDelete(),
             )
             with self.assertRaises(DemoChatServiceUnavailableError):
                 asyncio.run(service.reset(db, raw_session_token=TOKEN_A))

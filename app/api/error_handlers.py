@@ -1,5 +1,7 @@
 """Safe HTTP error envelopes that never reflect request input."""
 
+import math
+
 from fastapi import Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
@@ -42,6 +44,7 @@ from app.services.demo_chat_errors import (
     DemoChatRequestConflictError,
     DemoChatServiceUnavailableError,
 )
+from app.services.demo_rate_limit_service import DemoRateLimitExceededError
 
 
 REQUEST_BODY_TOO_LARGE = "REQUEST_BODY_TOO_LARGE"
@@ -230,6 +233,29 @@ async def demo_chat_exception_handler(
         status_code=status_code,
         content={"code": code, "detail": detail},
         headers={"Cache-Control": "no-store"},
+    )
+
+
+async def demo_rate_limit_exception_handler(
+    _request: Request,
+    error: DemoRateLimitExceededError,
+) -> JSONResponse:
+    logger.info("HTTP REQUEST: status=429 code=RATE_LIMIT_EXCEEDED")
+    return JSONResponse(
+        status_code=429,
+        content={
+            "code": "RATE_LIMIT_EXCEEDED",
+            "detail": "Batas permintaan demo telah tercapai.",
+        },
+        headers={
+            "Cache-Control": "no-store",
+            "Retry-After": str(error.retry_after_seconds),
+            "X-RateLimit-Limit": str(error.limit),
+            "X-RateLimit-Remaining": str(error.remaining),
+            "X-RateLimit-Reset": str(
+                math.ceil(error.reset_at.timestamp())
+            ),
+        },
     )
 
 

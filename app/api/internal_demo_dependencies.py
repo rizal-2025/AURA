@@ -15,6 +15,10 @@ from app.services.demo_session_service import (
     demo_session_service,
     validate_demo_session_token,
 )
+from app.services.demo_rate_limit_service import (
+    DemoRateLimitService,
+    demo_rate_limit_service,
+)
 
 
 def digest_demo_service_token(raw_token: str) -> bytes:
@@ -55,3 +59,11 @@ def require_demo_session_token(
 
 def get_demo_session_service() -> DemoSessionService:
     return demo_session_service
+
+
+def get_demo_rate_limit_service() -> DemoRateLimitService:
+    """Provide the limiter.
+
+    X-RateLimit-Reset uses Unix epoch seconds in UTC.
+    """
+    return demo_rate_limit_service

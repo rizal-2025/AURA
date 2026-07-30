@@ -12,6 +12,7 @@ from pydantic import SecretStr, ValidationError
 
 from app.api.internal_demo_dependencies import (
     digest_demo_service_token,
+    get_demo_rate_limit_service,
     get_demo_session_service,
 )
 from app.core.config import get_demo_settings
@@ -29,6 +30,14 @@ from app.services.demo_session_service import DemoSessionRequiredError
 
 SERVICE_TOKEN = "safe-bff-service-token-for-api-tests-2026"
 SESSION_TOKEN = "S" * 43
+
+
+class _AllowingRateLimits:
+    def resolve_active_session_digest(self, _db, _raw_token):
+        return "a" * 64
+
+    def enforce(self, _db, **_values):
+        return ()
 
 
 class _StubDemoSessionService:
@@ -91,6 +100,9 @@ class InternalDemoSessionAPITests(unittest.TestCase):
         )
         self.app.dependency_overrides[get_demo_session_service] = (
             lambda: self.service
+        )
+        self.app.dependency_overrides[get_demo_rate_limit_service] = (
+            _AllowingRateLimits
         )
         self.app.dependency_overrides[get_db] = lambda: object()
         self.client = TestClient(self.app)

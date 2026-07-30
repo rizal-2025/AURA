@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, Response, status
 from sqlalchemy.orm import Session
 
 from app.api.internal_demo_dependencies import (
+    get_demo_rate_limit_service,
     require_demo_service_auth,
     require_demo_session_token,
 )
@@ -14,6 +15,10 @@ from app.schemas.demo_chat import DemoChatRequest, DemoChatResponse
 from app.services.demo_chat_service import (
     DemoChatService,
     demo_chat_service,
+)
+from app.services.demo_rate_limit_service import (
+    DemoRateLimitAction,
+    DemoRateLimitService,
 )
 
 
@@ -42,7 +47,19 @@ async def post_demo_chat(
     response: Response,
     db: Session = Depends(get_db),
     service: DemoChatService = Depends(get_demo_chat_service),
+    rate_limits: DemoRateLimitService = Depends(
+        get_demo_rate_limit_service
+    ),
 ) -> DemoChatResponse:
+    token_digest = rate_limits.resolve_active_session_digest(
+        db,
+        session_token,
+    )
+    rate_limits.enforce(
+        db,
+        action=DemoRateLimitAction.CHAT,
+        session_token_digest=token_digest,
+    )
     result = await service.process(
         db,
         raw_session_token=session_token,

@@ -23,8 +23,6 @@ from app.db.repositories.conversation_workflow_state_repository import (
 from app.db.repositories.demo_persistence_repository import (
     DemoChatMessageRepository,
     DemoHandoffEventRepository,
-    DemoRateLimitBucketRepository,
-    demo_session_rate_limit_subject,
 )
 from app.db.repositories.reservation_repository import ReservationRepository
 from app.schemas.demo_reservation_reset import (
@@ -58,7 +56,6 @@ class DemoReservationResetService:
         reservation_repository: ReservationRepository | None = None,
         message_repository: DemoChatMessageRepository | None = None,
         handoff_repository: DemoHandoffEventRepository | None = None,
-        rate_bucket_repository: DemoRateLimitBucketRepository | None = None,
         workflow_repository: ConversationWorkflowStateRepository | None = None,
         lock_manager: ConversationLockManager | None = None,
         database_lock: DemoPostgreSQLAdvisoryLock | None = None,
@@ -68,9 +65,6 @@ class DemoReservationResetService:
         self.reservations = reservation_repository or ReservationRepository()
         self.messages = message_repository or DemoChatMessageRepository()
         self.handoffs = handoff_repository or DemoHandoffEventRepository()
-        self.rate_buckets = (
-            rate_bucket_repository or DemoRateLimitBucketRepository()
-        )
         self.workflows = (
             workflow_repository or ConversationWorkflowStateRepository()
         )
@@ -224,12 +218,6 @@ class DemoReservationResetService:
                 self.reservations.delete_by_owner_customer_id(
                     db,
                     owner_customer_id=owner.id,
-                )
-                self.rate_buckets.delete_session_subject(
-                    db,
-                    subject_digest=demo_session_rate_limit_subject(
-                        session.token_digest
-                    ),
                 )
                 result = DemoResetResponse(
                     session=self.session_service.build_session_summary(

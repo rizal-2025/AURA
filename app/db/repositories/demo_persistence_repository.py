@@ -1,10 +1,13 @@
 """Caller-transaction repositories for isolated demo persistence."""
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+import re
 from uuid import UUID
 
-from sqlalchemy import delete, func, or_, select, text
+from sqlalchemy import case, delete, func, or_, select, text
+from sqlalchemy.dialects.postgresql import insert as postgresql_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import aliased
 
 from app.core.ownership import require_owner_customer_id
@@ -198,6 +201,20 @@ class DemoSessionRepository:
         timestamp = validate_utc_datetime(now or datetime.now(timezone.utc))
         if isinstance(limit, bool) or not isinstance(limit, int) or limit < 1:
             raise ValueError("Demo cleanup limit must be positive.")
+        revoked_or_absolute = case(
+            (
+                DemoSession.revoked_at.is_not(None),
+                DemoSession.revoked_at,
+            ),
+            else_=DemoSession.absolute_expires_at,
+        )
+        cleanup_timestamp = case(
+            (
+                DemoSession.idle_expires_at <= revoked_or_absolute,
+                DemoSession.idle_expires_at,
+            ),
+            else_=revoked_or_absolute,
+        )
         return list(
             db.execute(
                 select(DemoSession)
@@ -210,12 +227,35 @@ class DemoSessionRepository:
                     ),
                 )
                 .order_by(
-                    DemoSession.absolute_expires_at.asc(),
+                    cleanup_timestamp.asc(),
                     DemoSession.id.asc(),
                 )
                 .limit(limit)
             ).scalars()
         )
+
+    def get_expired_by_id_for_update(
+        self,
+        db,
+        *,
+        demo_session_id: int,
+        now: datetime | None = None,
+    ):
+        session_id = _require_internal_session_id(demo_session_id)
+        timestamp = validate_utc_datetime(now or datetime.now(timezone.utc))
+        return db.execute(
+            select(DemoSession)
+            .where(
+                DemoSession.id == session_id,
+                DemoSession.environment_scope == DEMO_ENVIRONMENT_SCOPE,
+                or_(
+                    DemoSession.revoked_at.is_not(None),
+                    DemoSession.idle_expires_at <= timestamp,
+                    DemoSession.absolute_expires_at <= timestamp,
+                ),
+            )
+            .with_for_update()
+        ).scalar_one_or_none()
 
     def delete_internal_by_id(self, db, *, demo_session_id: int) -> int:
         """Delete only after callers have performed explicit child-first cleanup."""
@@ -527,6 +567,111 @@ class DemoHandoffEventRepository:
 class DemoRateLimitBucketRepository:
     """Stage rate-limit buckets; atomic increment belongs to the service phase."""
 
+    _ACTION_PATTERN = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
+    _VALID_SCOPES = frozenset({"session", "ip", "global"})
+
+    @classmethod
+    def _validate_identity(
+        cls,
+        *,
+        scope_type: str,
+        subject_digest: str,
+        action: str,
+        window_started_at: datetime,
+        window_seconds: int,
+        expires_at: datetime,
+    ) -> tuple[datetime, datetime]:
+        if scope_type not in cls._VALID_SCOPES:
+            raise ValueError("Unsupported demo rate-limit scope.")
+        validate_demo_digest(subject_digest)
+        if not isinstance(action, str) or not cls._ACTION_PATTERN.fullmatch(action):
+            raise ValueError("Invalid demo rate-limit action.")
+        if (
+            isinstance(window_seconds, bool)
+            or not isinstance(window_seconds, int)
+            or window_seconds < 1
+        ):
+            raise ValueError("Demo rate-limit window must be positive.")
+        window_start = validate_utc_datetime(window_started_at)
+        expiry = validate_utc_datetime(expires_at)
+        if (
+            window_start.microsecond != 0
+            or int(window_start.timestamp()) % window_seconds != 0
+        ):
+            raise ValueError(
+                "Demo rate-limit window start must be canonically aligned."
+            )
+        canonical_expiry = window_start + timedelta(
+            seconds=window_seconds
+        )
+        if expiry != canonical_expiry:
+            raise ValueError(
+                "Demo rate-limit expiry must match its canonical window."
+            )
+        return window_start, expiry
+
+    def consume_atomic(
+        self,
+        db,
+        *,
+        scope_type: str,
+        subject_digest: str,
+        action: str,
+        window_started_at: datetime,
+        window_seconds: int,
+        expires_at: datetime,
+        now: datetime | None = None,
+    ) -> int:
+        """Atomically create or increment exactly one fully-scoped bucket."""
+        window_start, expiry = self._validate_identity(
+            scope_type=scope_type,
+            subject_digest=subject_digest,
+            action=action,
+            window_started_at=window_started_at,
+            window_seconds=window_seconds,
+            expires_at=expires_at,
+        )
+        timestamp = validate_utc_datetime(now or datetime.now(timezone.utc))
+        dialect = db.get_bind().dialect.name
+        if dialect == "postgresql":
+            insert_builder = postgresql_insert
+        elif dialect == "sqlite":
+            insert_builder = sqlite_insert
+        else:
+            raise ValueError("Unsupported demo rate-limit database dialect.")
+        statement = insert_builder(DemoRateLimitBucket).values(
+            scope_type=scope_type,
+            subject_digest=subject_digest,
+            action=action,
+            window_started_at=window_start,
+            window_seconds=window_seconds,
+            request_count=1,
+            expires_at=expiry,
+            updated_at=timestamp,
+        )
+        updated_values = {
+            "request_count": DemoRateLimitBucket.request_count + 1,
+            "updated_at": statement.excluded.updated_at,
+        }
+        if dialect == "postgresql":
+            statement = statement.on_conflict_do_update(
+                constraint="uq_demo_rate_limit_buckets_identity",
+                set_=updated_values,
+            )
+        else:
+            statement = statement.on_conflict_do_update(
+                index_elements=(
+                    DemoRateLimitBucket.scope_type,
+                    DemoRateLimitBucket.subject_digest,
+                    DemoRateLimitBucket.action,
+                    DemoRateLimitBucket.window_started_at,
+                    DemoRateLimitBucket.window_seconds,
+                ),
+                set_=updated_values,
+            )
+        statement = statement.returning(DemoRateLimitBucket.request_count)
+        return int(db.execute(statement).scalar_one())
+
     def get_bucket(
         self,
         db,
@@ -627,6 +772,32 @@ class DemoRateLimitBucketRepository:
             delete(DemoRateLimitBucket).where(
                 DemoRateLimitBucket.expires_at <= timestamp
             ).execution_options(synchronize_session=False)
+        )
+        return int(result.rowcount or 0)
+
+    def delete_expired_batch(
+        self,
+        db,
+        *,
+        now: datetime | None = None,
+        limit: int = 100,
+    ) -> int:
+        timestamp = validate_utc_datetime(now or datetime.now(timezone.utc))
+        if isinstance(limit, bool) or not isinstance(limit, int) or limit < 1:
+            raise ValueError("Demo bucket cleanup limit must be positive.")
+        expired_ids = (
+            select(DemoRateLimitBucket.id)
+            .where(DemoRateLimitBucket.expires_at <= timestamp)
+            .order_by(
+                DemoRateLimitBucket.expires_at.asc(),
+                DemoRateLimitBucket.id.asc(),
+            )
+            .limit(limit)
+        )
+        result = db.execute(
+            delete(DemoRateLimitBucket)
+            .where(DemoRateLimitBucket.id.in_(expired_ids))
+            .execution_options(synchronize_session=False)
         )
         return int(result.rowcount or 0)
 
