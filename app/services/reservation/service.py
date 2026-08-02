@@ -6,6 +6,9 @@ from app.db.repositories.reservation_repository import ReservationRepository
 from app.schemas.reservation import ReservationCreate
 from app.core.unit_of_work import UnitOfWork
 from app.services.reservation.dto import PersistedReservationDTO
+from app.services.reservation.public_reference import (
+    canonicalize_public_reference,
+)
 
 
 class ReservationService:
@@ -19,6 +22,12 @@ class ReservationService:
     def _dto(value) -> PersistedReservationDTO | None:
         if value is None:
             return None
+        persisted_reference = vars(value).get("public_reference")
+        reference = (
+            canonicalize_public_reference(persisted_reference)
+            if persisted_reference is not None
+            else None
+        )
         return PersistedReservationDTO(
             id=value.id,
             name=value.name,
@@ -26,6 +35,7 @@ class ReservationService:
             date=value.date,
             time=value.time,
             status=value.status,
+            reference=reference,
         )
 
     @classmethod
@@ -88,6 +98,23 @@ class ReservationService:
             unit.commit()
         return result
 
+    def get_reservation_by_reference(
+        self,
+        db: Session,
+        public_reference: str,
+        owner_customer_id,
+    ):
+        require_owner_customer_id(owner_customer_id)
+        with UnitOfWork(db) as unit:
+            row = self.repository.get_by_public_reference(
+                db,
+                public_reference,
+                owner_customer_id,
+            )
+            result = self._dto(row)
+            unit.commit()
+        return result
+
     def update_reservation_field(
         self,
         db: Session,
@@ -122,6 +149,49 @@ class ReservationService:
                 db,
                 reservation_id,
                 owner_customer_id,
+            )
+            result = self._dto(persisted)
+            unit.commit()
+        return result
+
+    def update_reservation_field_by_reference(
+        self,
+        db: Session,
+        public_reference: str,
+        field_name: str,
+        new_value,
+        owner_customer_id,
+    ):
+        require_owner_customer_id(owner_customer_id)
+        new_value = validate_reservation_field(field_name, new_value)
+        with UnitOfWork(db) as unit:
+            persisted = (
+                self.repository.update_reservation_field_by_public_reference(
+                    db,
+                    public_reference,
+                    field_name,
+                    new_value,
+                    owner_customer_id,
+                )
+            )
+            result = self._dto(persisted)
+            unit.commit()
+        return result
+
+    def cancel_reservation_by_reference(
+        self,
+        db: Session,
+        public_reference: str,
+        owner_customer_id,
+    ):
+        require_owner_customer_id(owner_customer_id)
+        with UnitOfWork(db) as unit:
+            persisted = (
+                self.repository.cancel_reservation_by_public_reference(
+                    db,
+                    public_reference,
+                    owner_customer_id,
+                )
             )
             result = self._dto(persisted)
             unit.commit()

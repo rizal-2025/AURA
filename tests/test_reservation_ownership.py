@@ -211,7 +211,11 @@ class TestReservationOwnership(unittest.TestCase):
         with patch(
             "app.db.repositories.reservation_repository.Reservation",
             return_value=created_reservation,
-        ) as reservation_model:
+        ) as reservation_model, patch(
+            "app.db.repositories.reservation_repository."
+            "generate_public_reference",
+            return_value="RSV_" + ("a" * 32),
+        ):
             ReservationRepository().create(
                 db,
                 data,
@@ -224,6 +228,7 @@ class TestReservationOwnership(unittest.TestCase):
             date="2026-07-22",
             time="19:00",
             owner_customer_id=owner_customer_id,
+            public_reference="RSV_" + ("a" * 32),
         )
 
     def test_direct_create_uses_authenticated_owner_identity(self):

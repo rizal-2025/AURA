@@ -18,7 +18,10 @@ from sqlalchemy.orm import sessionmaker
 
 from app.agents.reservation_agent import ReservationAgent
 from app.api.internal_demo_chat import get_demo_chat_service
-from app.api.internal_demo_dependencies import get_demo_session_service
+from app.api.internal_demo_dependencies import (
+    get_demo_rate_limit_service,
+    get_demo_session_service,
+)
 from app.api.internal_demo_reservation_reset import (
     get_demo_reservation_reset_service,
 )
@@ -65,6 +68,7 @@ from app.services.demo_chat_service import (
 from app.services.demo_reservation_reset_service import (
     DemoReservationResetService,
 )
+from app.services.demo_rate_limit_service import DemoRateLimitService
 from app.services.demo_session_service import (
     DemoSessionRequiredError,
     DemoSessionService,
@@ -261,6 +265,7 @@ class DemoReservationResetPostgreSQLTests(unittest.TestCase):
         session_service=None,
         chat_service=None,
         reset_service=None,
+        rate_limit_service=None,
     ):
         app = create_app(
             SimpleNamespace(
@@ -293,6 +298,10 @@ class DemoReservationResetPostgreSQLTests(unittest.TestCase):
             app.dependency_overrides[
                 get_demo_reservation_reset_service
             ] = lambda: reset_service
+        if rate_limit_service is not None:
+            app.dependency_overrides[
+                get_demo_rate_limit_service
+            ] = lambda: rate_limit_service
         client = TestClient(app)
         try:
             yield client
@@ -1281,26 +1290,35 @@ class DemoReservationResetPostgreSQLTests(unittest.TestCase):
         self.assertEqual(self.database_snapshot(), before)
 
     def test_old_token_remains_valid_through_every_internal_api(self):
+        def logical_clock():
+            return self.now
+
         session_service = DemoSessionService(
             token_generator=lambda: TOKEN_C,
-            clock=lambda: self.now,
+            clock=logical_clock,
         )
         core = _ReplyCore()
         chat_service = DemoChatService(
-            session_service=DemoSessionService(clock=lambda: self.now),
+            session_service=session_service,
             lock_manager=ConversationLockManager(),
             database_lock=DemoPostgreSQLAdvisoryLock(),
             core_factory=lambda _session_id: core,
-            clock=lambda: self.now,
+            clock=logical_clock,
         )
         reset_service = self.service(
+            session_service=session_service,
             lock_manager=ConversationLockManager(),
             database_lock=DemoPostgreSQLAdvisoryLock(),
+        )
+        rate_limit_service = DemoRateLimitService(
+            session_service=session_service,
+            clock=logical_clock,
         )
         with self.api_client(
             session_service=session_service,
             chat_service=chat_service,
             reset_service=reset_service,
+            rate_limit_service=rate_limit_service,
         ) as client:
             created = client.post(
                 "/internal/demo/sessions",

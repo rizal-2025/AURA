@@ -1,5 +1,6 @@
 import asyncio
 import unittest
+from contextlib import nullcontext
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
@@ -62,6 +63,9 @@ class SpySession:
         self.transaction_active = True
         if self.flush_error is not None:
             raise self.flush_error
+
+    def begin_nested(self):
+        return nullcontext()
 
     def commit(self):
         self.commits += 1

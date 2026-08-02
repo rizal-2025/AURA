@@ -16,3 +16,4 @@ class PersistedReservationDTO:
     date: str
     time: str
     status: str
+    reference: str | None = None
