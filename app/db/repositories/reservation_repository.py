@@ -1,9 +1,37 @@
+import sqlite3
+
 from sqlalchemy import delete, func, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.ownership import require_owner_customer_id
 from app.db.models.reservation import Reservation
 from app.schemas.reservation import ReservationCreate
+from app.services.reservation.public_reference import (
+    PUBLIC_REFERENCE_MAX_ATTEMPTS,
+    PUBLIC_REFERENCE_UNIQUE_CONSTRAINT,
+    PublicReservationReferenceCollisionError,
+    canonicalize_public_reference,
+    generate_public_reference,
+)
+
+
+def _is_public_reference_unique_violation(error: IntegrityError) -> bool:
+    original = error.orig
+    diagnostic = getattr(original, "diag", None)
+    if (
+        getattr(diagnostic, "constraint_name", None)
+        == PUBLIC_REFERENCE_UNIQUE_CONSTRAINT
+    ):
+        return True
+
+    return (
+        isinstance(original, sqlite3.IntegrityError)
+        and getattr(original, "sqlite_errorcode", None)
+        == sqlite3.SQLITE_CONSTRAINT_UNIQUE
+        and str(original)
+        == "UNIQUE constraint failed: reservations.public_reference"
+    )
 
 
 class ReservationRepository:
@@ -89,6 +117,23 @@ class ReservationRepository:
             .first()
         )
 
+    def get_by_public_reference(
+        self,
+        db: Session,
+        public_reference: str,
+        owner_customer_id,
+    ):
+        require_owner_customer_id(owner_customer_id)
+        canonical_reference = canonicalize_public_reference(public_reference)
+        return (
+            db.query(Reservation)
+            .filter(
+                Reservation.owner_customer_id == owner_customer_id,
+                Reservation.public_reference == canonical_reference,
+            )
+            .first()
+        )
+
     def update_reservation_field(
         self,
         db: Session,
@@ -132,6 +177,51 @@ class ReservationRepository:
         )
         return db.execute(statement).scalar_one_or_none()
 
+    def update_reservation_field_by_public_reference(
+        self,
+        db: Session,
+        public_reference: str,
+        field_name: str,
+        new_value,
+        owner_customer_id,
+    ):
+        require_owner_customer_id(owner_customer_id)
+        canonical_reference = canonicalize_public_reference(public_reference)
+        if field_name not in self.EDITABLE_FIELDS:
+            raise ValueError(f"Field '{field_name}' cannot be updated.")
+
+        statement = (
+            update(Reservation)
+            .where(
+                Reservation.owner_customer_id == owner_customer_id,
+                Reservation.public_reference == canonical_reference,
+                func.lower(Reservation.status) != "cancelled",
+            )
+            .values({field_name: new_value})
+            .returning(Reservation)
+        )
+        return db.execute(statement).scalar_one_or_none()
+
+    def cancel_reservation_by_public_reference(
+        self,
+        db: Session,
+        public_reference: str,
+        owner_customer_id,
+    ):
+        require_owner_customer_id(owner_customer_id)
+        canonical_reference = canonicalize_public_reference(public_reference)
+        statement = (
+            update(Reservation)
+            .where(
+                Reservation.owner_customer_id == owner_customer_id,
+                Reservation.public_reference == canonical_reference,
+                func.lower(Reservation.status) != "cancelled",
+            )
+            .values(status="cancelled")
+            .returning(Reservation)
+        )
+        return db.execute(statement).scalar_one_or_none()
+
     def create(
         self,
         db: Session,
@@ -148,11 +238,18 @@ class ReservationRepository:
         }
         reservation_fields["owner_customer_id"] = owner_customer_id
 
-        data = Reservation(
-            **reservation_fields,
-        )
+        for _attempt in range(PUBLIC_REFERENCE_MAX_ATTEMPTS):
+            data = Reservation(
+                **reservation_fields,
+                public_reference=generate_public_reference(),
+            )
+            try:
+                with db.begin_nested():
+                    db.add(data)
+                    db.flush()
+                return data
+            except IntegrityError as error:
+                if not _is_public_reference_unique_violation(error):
+                    raise
 
-        db.add(data)
-        db.flush()
-
-        return data
+        raise PublicReservationReferenceCollisionError()
