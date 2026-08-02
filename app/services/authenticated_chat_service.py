@@ -1,6 +1,7 @@
 """Single trusted boundary for HTTP and integration customer chat messages."""
 
 from app.agents.orchestrator import AgentOrchestrator
+from app.agents.result import AgentTurnResult
 from app.core.conversation_memory import build_authenticated_memory_key
 from app.core.conversation_lock_manager import ConversationLockManager
 from app.core.input_validation import (
@@ -15,6 +16,13 @@ from app.core.transaction_errors import (
     TransactionSessionUnusableError,
 )
 from sqlalchemy.orm import Session as SQLAlchemySession
+from app.services.conversation_workflow_state_service import WorkflowRestoreOutcome
+
+
+LEGACY_WORKFLOW_UNAVAILABLE_RESPONSE = (
+    "Sesi reservasi sebelumnya tidak dapat dipulihkan. "
+    "Silakan mulai kembali dari daftar reservasi Anda."
+)
 
 
 class AuthenticatedChatService:
@@ -48,7 +56,14 @@ class AuthenticatedChatService:
         except Exception:
             return False
 
-    async def process(self, *, db, customer, session_reference: str, message: str) -> str:
+    async def process_turn(
+        self,
+        *,
+        db,
+        customer,
+        session_reference: str,
+        message: str,
+    ) -> AgentTurnResult:
         owner_customer_id = require_owner_customer_id(getattr(customer, "id", None))
         session_reference = validate_session_reference(session_reference)
         message = normalize_chat_message(message)
@@ -63,11 +78,18 @@ class AuthenticatedChatService:
                 )
             )
             if workflow_persistence_enabled:
-                workflow_state_service.restore(
+                restore_outcome = workflow_state_service.restore(
                     db,
                     owner_customer_id=owner_customer_id,
                     memory_key=memory_key,
                 )
+                if (
+                    restore_outcome
+                    is WorkflowRestoreOutcome.LEGACY_UNAVAILABLE
+                ):
+                    return AgentTurnResult(
+                        reply=LEGACY_WORKFLOW_UNAVAILABLE_RESPONSE
+                    )
             try:
                 self.agent.handoff_service.restore_active_handoff(
                     memory_key,
@@ -87,7 +109,10 @@ class AuthenticatedChatService:
                 response = self.agent.handoff_service.recovery_error_response()
             else:
                 try:
-                    response = await self.agent.handle(
+                    handler = getattr(self.agent, "handle_turn", None)
+                    if handler is None:
+                        handler = self.agent.handle
+                    response = await handler(
                         session_id=memory_key,
                         message=message,
                         db=db,
@@ -112,7 +137,25 @@ class AuthenticatedChatService:
                         owner_customer_id=owner_customer_id,
                         memory_key=memory_key,
                     )
-        return response
+        if type(response) is AgentTurnResult:
+            return response
+        return AgentTurnResult(reply=response)
+
+    async def process(
+        self,
+        *,
+        db,
+        customer,
+        session_reference: str,
+        message: str,
+    ) -> str:
+        result = await self.process_turn(
+            db=db,
+            customer=customer,
+            session_reference=session_reference,
+            message=message,
+        )
+        return result.reply
 
     async def ticket_status(self, *, db, customer, session_reference: str) -> str:
         """Return customer-scoped active ticket status without AI mutation."""

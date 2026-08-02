@@ -44,6 +44,7 @@ class InMemorySecureReservationService:
                 time="18:00",
                 status="pending",
                 owner_customer_id=None,
+                reference="RSV_33333333333333333333333333333333",
             ),
             2: SimpleNamespace(
                 id=2,
@@ -53,6 +54,7 @@ class InMemorySecureReservationService:
                 time="19:00",
                 status="pending",
                 owner_customer_id=customer_b_id,
+                reference="RSV_22222222222222222222222222222222",
             ),
             1: SimpleNamespace(
                 id=1,
@@ -62,6 +64,7 @@ class InMemorySecureReservationService:
                 time="20:00",
                 status="pending",
                 owner_customer_id=customer_a_id,
+                reference="RSV_11111111111111111111111111111111",
             ),
         }
         self.list_owners = []
@@ -80,41 +83,46 @@ class InMemorySecureReservationService:
             reverse=True,
         )[:limit]
 
-    def get_reservation_by_id(self, _db, reservation_id, owner_customer_id):
-        reservation = self.reservations.get(reservation_id)
-        if reservation is None or reservation.owner_customer_id != owner_customer_id:
-            return None
-        return reservation
+    def get_reservation_by_reference(self, _db, reference, owner_customer_id):
+        return next(
+            (
+                reservation
+                for reservation in self.reservations.values()
+                if reservation.reference == reference
+                and reservation.owner_customer_id == owner_customer_id
+            ),
+            None,
+        )
 
-    def update_reservation_field(
+    def update_reservation_field_by_reference(
         self,
         _db,
-        reservation_id,
+        reference,
         field_name,
         new_value,
         owner_customer_id,
     ):
-        reservation = self.get_reservation_by_id(
+        reservation = self.get_reservation_by_reference(
             _db,
-            reservation_id,
+            reference,
             owner_customer_id,
         )
         if reservation is None:
             return None
         setattr(reservation, field_name, new_value)
-        self.update_calls.append((reservation_id, owner_customer_id))
+        self.update_calls.append((reference, owner_customer_id))
         return reservation
 
-    def cancel_reservation(self, _db, reservation_id, owner_customer_id):
-        reservation = self.get_reservation_by_id(
+    def cancel_reservation_by_reference(self, _db, reference, owner_customer_id):
+        reservation = self.get_reservation_by_reference(
             _db,
-            reservation_id,
+            reference,
             owner_customer_id,
         )
         if reservation is None or reservation.status == "cancelled":
             return None
         reservation.status = "cancelled"
-        self.cancel_calls.append((reservation_id, owner_customer_id))
+        self.cancel_calls.append((reference, owner_customer_id))
         return reservation
 
 
@@ -214,21 +222,35 @@ class TestSecureReservationManagement(unittest.TestCase):
 
     def test_customer_b_cannot_update_or_cancel_customer_a_reservation(self):
         update_start = self._chat(self.customer_b, "update-b", "ubah reservasi saya")
-        update_attempt = self._chat(self.customer_b, "update-b", "1")
+        update_attempt = self._chat(
+            self.customer_b,
+            "update-b",
+            "RSV_11111111111111111111111111111111",
+        )
 
         cancel_start = self._chat(
             self.customer_b,
             "cancel-b",
             "batalkan reservasi saya",
         )
-        cancel_attempt = self._chat(self.customer_b, "cancel-b", "1")
+        cancel_attempt = self._chat(
+            self.customer_b,
+            "cancel-b",
+            "RSV_11111111111111111111111111111111",
+        )
 
         self.assertEqual(update_start.status_code, 200)
         self.assertIn("Customer B", update_start.json()["reply"])
-        self.assertIn("ID reservasi tidak ditemukan", update_attempt.json()["reply"])
+        self.assertEqual(
+            update_attempt.json()["reply"],
+            "Referensi reservasi tidak ditemukan.",
+        )
         self.assertEqual(cancel_start.status_code, 200)
         self.assertIn("Customer B", cancel_start.json()["reply"])
-        self.assertIn("ID reservasi tidak ditemukan", cancel_attempt.json()["reply"])
+        self.assertEqual(
+            cancel_attempt.json()["reply"],
+            "Referensi reservasi tidak ditemukan.",
+        )
         self.assertEqual(self.service.reservations[1].people, 4)
         self.assertEqual(self.service.reservations[1].status, "pending")
         self.assertEqual(self.service.update_calls, [])
@@ -238,9 +260,17 @@ class TestSecureReservationManagement(unittest.TestCase):
         shared_session_id = "shared-update"
 
         self._chat(self.customer_a, shared_session_id, "ubah reservasi saya")
-        select_a = self._chat(self.customer_a, shared_session_id, "1")
+        select_a = self._chat(
+            self.customer_a,
+            shared_session_id,
+            "RSV_11111111111111111111111111111111",
+        )
         self._chat(self.customer_b, shared_session_id, "ubah reservasi saya")
-        select_b = self._chat(self.customer_b, shared_session_id, "2")
+        select_b = self._chat(
+            self.customer_b,
+            shared_session_id,
+            "RSV_22222222222222222222222222222222",
+        )
 
         state_a = chat_agent.memory_manager.get_session(
             self._memory_key(self.customer_a, shared_session_id),
@@ -253,13 +283,23 @@ class TestSecureReservationManagement(unittest.TestCase):
         self.assertIn("field mana", select_a.json()["reply"].lower())
         self.assertEqual(select_b.status_code, 200)
         self.assertIn("field mana", select_b.json()["reply"].lower())
-        self.assertEqual(state_a["reservation_id"], 1)
-        self.assertEqual(state_b["reservation_id"], 2)
+        self.assertEqual(
+            state_a["reservation_reference"],
+            "RSV_11111111111111111111111111111111",
+        )
+        self.assertEqual(
+            state_b["reservation_reference"],
+            "RSV_22222222222222222222222222222222",
+        )
         self.assertNotIn(shared_session_id, chat_agent.memory_manager._sessions)
 
     def test_same_customer_different_session_ids_have_separate_update_state(self):
         self._chat(self.customer_a, "shared-update", "ubah reservasi saya")
-        self._chat(self.customer_a, "shared-update", "1")
+        self._chat(
+            self.customer_a,
+            "shared-update",
+            "RSV_11111111111111111111111111111111",
+        )
         self._chat(self.customer_a, "separate-update", "ubah reservasi saya")
 
         first_state = chat_agent.memory_manager.get_session(
@@ -269,8 +309,11 @@ class TestSecureReservationManagement(unittest.TestCase):
             self._memory_key(self.customer_a, "separate-update"),
         )
 
-        self.assertEqual(first_state["reservation_id"], 1)
-        self.assertIsNone(second_state.get("reservation_id"))
+        self.assertEqual(
+            first_state["reservation_reference"],
+            "RSV_11111111111111111111111111111111",
+        )
+        self.assertIsNone(second_state.get("reservation_reference"))
         self.assertNotEqual(
             first_state["update_reservation_stage"],
             second_state["update_reservation_stage"],
@@ -288,8 +331,14 @@ class TestSecureReservationManagement(unittest.TestCase):
             self._memory_key(self.customer_b, shared_session_id),
         )
 
-        self.assertEqual(state_a["cancel_reservation_stage"], "select_reservation_id")
-        self.assertEqual(state_b["cancel_reservation_stage"], "select_reservation_id")
+        self.assertEqual(
+            state_a["cancel_reservation_stage"],
+            "select_reservation_reference",
+        )
+        self.assertEqual(
+            state_b["cancel_reservation_stage"],
+            "select_reservation_reference",
+        )
         self.assertNotEqual(
             self._memory_key(self.customer_a, shared_session_id),
             self._memory_key(self.customer_b, shared_session_id),

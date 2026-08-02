@@ -24,6 +24,7 @@ def persisted(identifier):
         date="2026-08-01",
         time="19:00",
         status="pending",
+        reference="RSV_92929292929292929292929292929292",
     )
 
 

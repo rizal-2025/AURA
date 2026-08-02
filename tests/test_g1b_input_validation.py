@@ -226,14 +226,14 @@ class ReservationValidationTests(unittest.TestCase):
         service = ReservationService()
         service.repository = MagicMock()
         with self.assertRaises(InputValidationError):
-            service.update_reservation_field(
+            service.update_reservation_field_by_reference(
                 MagicMock(),
-                1,
+                "RSV_11111111111111111111111111111111",
                 "people",
                 21,
                 owner_customer_id=uuid4(),
             )
-        service.repository.update_reservation_field.assert_not_called()
+        service.repository.update_reservation_field_by_public_reference.assert_not_called()
 
     def test_create_service_revalidates_fresh_fields_and_preserves_owner(self):
         service = ReservationService()
@@ -244,6 +244,7 @@ class ReservationValidationTests(unittest.TestCase):
                 id=7,
                 **validated.model_dump(),
                 status="pending",
+                public_reference="RSV_77777777777777777777777777777777",
             )
 
         service.repository.create.side_effect = persist
@@ -339,6 +340,7 @@ class ReservationValidationTests(unittest.TestCase):
             date="2028-02-29",
             time="19:00",
             status="pending",
+            public_reference="RSV_88888888888888888888888888888888",
         )
 
         service.create_reservation(

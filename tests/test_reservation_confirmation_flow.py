@@ -6,11 +6,15 @@ from uuid import uuid4
 
 from app.agents.orchestrator import AgentOrchestrator
 from app.agents.reservation_agent import ReservationAgent
+from app.agents.result import ReservationOperationType
 from app.brain.memory_manager import MemoryManager
 from app.brain.reservation_workflow_snapshot import (
-    capture_reservation_workflow_snapshot,
+    capture_reservation_workflow_snapshot_v2,
 )
 from app.services.reservation.dto import PersistedReservationDTO
+
+
+SEEDED_CREATE_RESERVATION_ID = (2**30) + 104_729
 
 
 def persisted(identifier, *, people=4):
@@ -21,6 +25,7 @@ def persisted(identifier, *, people=4):
         date="2026-07-19",
         time="19:00",
         status="pending",
+        reference=f"RSV_{identifier:032x}",
     )
 
 
@@ -62,16 +67,30 @@ class TestReservationConfirmationFlow(unittest.TestCase):
     def test_confirmation_success_flow(self):
         memory = MemoryManager()
         agent = ReservationAgent(memory_manager=memory)
-        state = {"name": "Rizal", "people": 4, "date": "2026-07-19", "time": "19:00", "completed": False, "awaiting_confirmation": False}
+        state = {
+            "intent": "reservation",
+            "name": "Rizal",
+            "people": 4,
+            "date": "2026-07-19",
+            "time": "19:00",
+            "completed": False,
+            "awaiting_confirmation": True,
+            "editing_field": None,
+            "asked_fields": ["name", "people", "date", "time"],
+        }
         memory.update_session("s1", state)
+        before_snapshot = capture_reservation_workflow_snapshot_v2(
+            memory,
+            "s1",
+        )
 
         db = MagicMock()
         with patch.object(
             agent.reservation_service,
             "create_reservation",
-            return_value=persisted(41),
+            return_value=persisted(SEEDED_CREATE_RESERVATION_ID),
         ) as create_reservation:
-            result = asyncio.run(
+            payload = asyncio.run(
                 agent.handle_confirmation(
                     "ya",
                     "s1",
@@ -80,12 +99,72 @@ class TestReservationConfirmationFlow(unittest.TestCase):
                 )
             )
 
-        self.assertIn("Reservasi berhasil dibuat", result["response"])
+        result = AgentOrchestrator._turn_result_from_agent_payload(payload)
+        boundary_text = "\n".join(
+            (
+                result.reply,
+                repr(result),
+                repr(result.reservation_operation),
+                str(vars(result.reservation_operation)),
+                str(memory.get_session("s1")),
+                str(before_snapshot.materialize()),
+            )
+        )
+        self.assertNotIn(str(SEEDED_CREATE_RESERVATION_ID), boundary_text)
+        self.assertIn("Reservasi berhasil dibuat", result.reply)
+        self.assertNotIn("Nomor reservasi", result.reply)
+        self.assertIn(
+            persisted(SEEDED_CREATE_RESERVATION_ID).reference,
+            result.reply,
+        )
+        self.assertEqual(
+            result.reservation_operation.operation,
+            ReservationOperationType.CREATED,
+        )
+        self.assertEqual(
+            result.reservation_operation.reference,
+            persisted(SEEDED_CREATE_RESERVATION_ID).reference,
+        )
         self.assertEqual(memory.get_session("s1")["completed"], True)
         self.assertEqual(
             create_reservation.call_args.kwargs["owner_customer_id"],
             self.OWNER_CUSTOMER_ID,
         )
+
+    def test_create_with_missing_public_reference_fails_closed(self):
+        memory = MemoryManager()
+        agent = ReservationAgent(memory_manager=memory)
+        self._seed_confirmation_state(memory, "missing-reference")
+        unsafe = PersistedReservationDTO(
+            id=987654,
+            name="Rizal",
+            people=4,
+            date="2026-07-19",
+            time="19:00",
+            status="pending",
+            reference=None,
+        )
+        agent.reservation_service.create_reservation = MagicMock(
+            return_value=unsafe
+        )
+
+        result = asyncio.run(
+            agent.handle_confirmation(
+                "Ya",
+                "missing-reference",
+                owner_customer_id=self.OWNER_CUSTOMER_ID,
+                db=MagicMock(),
+            )
+        )
+
+        self.assertEqual(result["status"], "reference_unavailable")
+        self.assertEqual(
+            result["response"],
+            "Data reservasi belum dapat diproses dengan aman. Silakan coba lagi nanti.",
+        )
+        self.assertNotIn("reservation_operation", result)
+        self.assertNotIn("987654", result["response"])
+        self.assertFalse(memory.get_session("missing-reference")["completed"])
 
     def test_phrase_aware_positive_confirmations_create_once(self):
         phrases = (
@@ -181,7 +260,7 @@ class TestReservationConfirmationFlow(unittest.TestCase):
                 self.assertFalse(session.get("awaiting_confirmation", False))
                 self.assertNotIn("field", result["response"].casefold())
                 self.assertIsNone(
-                    capture_reservation_workflow_snapshot(memory, session_id)
+                    capture_reservation_workflow_snapshot_v2(memory, session_id)
                 )
                 create_reservation.assert_not_called()
 
@@ -225,11 +304,11 @@ class TestReservationConfirmationFlow(unittest.TestCase):
             ) as repository_create,
             patch.object(
                 agent.reservation_service.repository,
-                "update_reservation_field",
+                "update_reservation_field_by_public_reference",
             ) as repository_update,
             patch.object(
                 agent.reservation_service.repository,
-                "cancel_reservation",
+                "cancel_reservation_by_public_reference",
             ) as repository_cancel,
         ):
             asyncio.run(agent.handle_confirmation("batal aja", "s1"))
@@ -325,7 +404,8 @@ class TestReservationConfirmationFlow(unittest.TestCase):
         self.assertIn("Reservasi berhasil dibuat", result)
         self.assertTrue(session["completed"])
         self.assertFalse(session["awaiting_confirmation"])
-        self.assertIn("reservation_id", session)
+        self.assertEqual(session["reservation_reference"], f"RSV_{43:032x}")
+        self.assertNotIn("reservation_id", session)
 
     def test_orchestrator_rejection_terminates_without_handoff(self):
         orchestrator = AgentOrchestrator()
@@ -564,7 +644,8 @@ class TestReservationConfirmationFlow(unittest.TestCase):
         self.assertEqual(result["status"], "completed")
         self.assertTrue(session["completed"])
         self.assertFalse(session["awaiting_confirmation"])
-        self.assertIn("reservation_id", session)
+        self.assertEqual(session["reservation_reference"], f"RSV_{44:032x}")
+        self.assertNotIn("reservation_id", session)
         self.assertIs(create_reservation.call_args.args[0], db)
 
     def test_explicit_correction_then_confirm_saves_updated_value(self):

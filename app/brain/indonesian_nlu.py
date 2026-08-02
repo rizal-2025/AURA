@@ -364,15 +364,6 @@ def parse_people_count(value: str, *, allow_bare: bool = True) -> int | None:
         return None
 
 
-def parse_reservation_id(value: str) -> int | None:
-    """Compatibility wrapper for the canonical entity extractor parser."""
-    from app.brain.reservation_entity_extractor import (
-        parse_reservation_id as extract_reservation_id,
-    )
-
-    return extract_reservation_id(value)
-
-
 def parse_target_field(value: str) -> str | None:
     """Resolve one allowlisted editable field from natural update wording."""
     normalized = normalize_indonesian_text(value)

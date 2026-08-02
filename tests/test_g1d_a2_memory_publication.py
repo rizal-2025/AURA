@@ -61,6 +61,7 @@ def persisted(identifier=71, *, people=4, status="pending"):
         date="2026-08-01",
         time="19:00",
         status=status,
+        reference="RSV_71717171717171717171717171717171",
     )
 
 
@@ -123,6 +124,14 @@ def build_orchestrator(memory):
 
 
 class SnapshotTests(unittest.TestCase):
+    def test_runtime_defaults_are_reference_only(self):
+        state = MemoryManager().get_session("reference-defaults")
+
+        self.assertIsNone(state["reservation_reference"])
+        self.assertIsNone(state["cancel_reservation_reference"])
+        self.assertNotIn("reservation_id", state)
+        self.assertNotIn("cancel_reservation_id", state)
+
     def test_nested_values_are_isolated_in_both_directions(self):
         memory = MemoryManager()
         state = memory.get_session("one")
@@ -309,9 +318,9 @@ class SnapshotTests(unittest.TestCase):
                 "intent_confidence": 0.99,
                 "awaiting_confirmation": True,
                 "asked_fields": ["name", "people", "date", "time"],
-                "reservation_id": 12,
+                "reservation_reference": "RSV_12121212121212121212121212121212",
                 "update_reservation_stage": "input_value",
-                "cancel_reservation_id": 12,
+                "cancel_reservation_reference": "RSV_12121212121212121212121212121212",
                 "cancel_reservation_stage": "confirm_cancellation",
                 "misunderstanding_count": 1,
                 "invalid_input_context": None,
@@ -346,7 +355,7 @@ class SnapshotTests(unittest.TestCase):
 
     def test_forbidden_keys_are_exact_normalized_and_legitimate_ids_work(self):
         legitimate = {
-            "reservation_id": 1,
+            "reservation_reference": "RSV_11111111111111111111111111111111",
             "ticket_id": 2,
             "token_version": 1,
             "owner_customer_id": "internal-safe-scalar",
@@ -440,7 +449,10 @@ class CreatePublicationTests(unittest.TestCase):
         state = self.memory.get_session(self.key)
 
         self.assertEqual(result["status"], "completed")
-        self.assertEqual(state["reservation_id"], 901)
+        self.assertEqual(
+            state["reservation_reference"],
+            "RSV_71717171717171717171717171717171",
+        )
         self.assertTrue(state["completed"])
         self.assertFalse(state["awaiting_confirmation"])
         self.assertIsNone(state["editing_field"])
@@ -694,7 +706,10 @@ class CreatePublicationTests(unittest.TestCase):
             COMMITTED_OPERATION_FORMAT_FALLBACK_RESPONSE,
         )
         self.assertTrue(state["completed"])
-        self.assertEqual(state["reservation_id"], 902)
+        self.assertEqual(
+            state["reservation_reference"],
+            "RSV_71717171717171717171717171717171",
+        )
         self.assertFalse(state["awaiting_confirmation"])
 
     def test_confirmed_commit_publication_failure_installs_emergency_guard(self):
@@ -818,7 +833,7 @@ class UpdatePublicationTests(unittest.TestCase):
         self.memory = MemoryManager()
         self.memory.get_session(self.key).update(
             {
-                "reservation_id": 51,
+                "reservation_reference": "RSV_51515151515151515151515151515151",
                 "editing_field": "people",
                 "update_reservation_stage": UpdateReservationAgent.INPUT_VALUE,
                 "workflow_nested": {"asked": ["people"]},
@@ -834,7 +849,7 @@ class UpdatePublicationTests(unittest.TestCase):
         before = self.memory.snapshot_conversation(self.key).materialize()
 
         class Service:
-            def update_reservation_field(inner_self, *_args, **_kwargs):
+            def update_reservation_field_by_reference(inner_self, *_args, **_kwargs):
                 state = self.memory.get_session(self.key)
                 state["workflow_nested"]["asked"].append("mutated")
                 raise PersistenceOperationError()
@@ -845,7 +860,7 @@ class UpdatePublicationTests(unittest.TestCase):
 
     def test_unknown_outcome_clears_actionable_stage_and_preserves_handoff(self):
         class Service:
-            def update_reservation_field(self, *_args, **_kwargs):
+            def update_reservation_field_by_reference(self, *_args, **_kwargs):
                 raise PersistenceOutcomeUnknownError()
 
         with self.assertRaises(PersistenceOutcomeUnknownError):
@@ -861,7 +876,7 @@ class UpdatePublicationTests(unittest.TestCase):
 
     def test_success_clears_only_update_state(self):
         class Service:
-            def update_reservation_field(self, *_args, **_kwargs):
+            def update_reservation_field_by_reference(self, *_args, **_kwargs):
                 return persisted(51, people=7)
 
         result = self._run(Service())
@@ -869,13 +884,13 @@ class UpdatePublicationTests(unittest.TestCase):
         self.assertEqual(result["status"], "updated")
         self.assertIsNone(state["update_reservation_stage"])
         self.assertIsNone(state["editing_field"])
-        self.assertEqual(state["reservation_id"], 51)
+        self.assertNotIn("reservation_id", state)
         self.assertEqual(state["workflow_nested"], {"asked": ["people"]})
         self.assertEqual(state["handoff_state"], {"category": "safe-marker"})
 
     def test_response_failure_after_success_does_not_restore_update_stage(self):
         class Service:
-            def update_reservation_field(self, *_args, **_kwargs):
+            def update_reservation_field_by_reference(self, *_args, **_kwargs):
                 return persisted(51, people=7)
 
         agent = UpdateReservationAgent(self.memory, Service())
@@ -897,7 +912,7 @@ class UpdatePublicationTests(unittest.TestCase):
 
     def test_confirmed_update_publication_failure_blocks_retry_and_allows_view(self):
         service = MagicMock()
-        service.update_reservation_field.return_value = persisted(51, people=7)
+        service.update_reservation_field_by_reference.return_value = persisted(51, people=7)
         agent = UpdateReservationAgent(self.memory, service)
 
         with patch.object(
@@ -913,7 +928,7 @@ class UpdatePublicationTests(unittest.TestCase):
             retry["response"],
             COMMITTED_OPERATION_STATE_UNAVAILABLE_RESPONSE,
         )
-        service.update_reservation_field.assert_called_once()
+        service.update_reservation_field_by_reference.assert_called_once()
 
         orchestrator = build_orchestrator(self.memory)
         viewed = asyncio.run(
@@ -928,7 +943,7 @@ class UpdatePublicationTests(unittest.TestCase):
 
     def test_update_formatter_failure_through_orchestrator_has_no_handoff(self):
         service = MagicMock()
-        service.update_reservation_field.return_value = persisted(51, people=7)
+        service.update_reservation_field_by_reference.return_value = persisted(51, people=7)
         orchestrator = build_orchestrator(self.memory)
         orchestrator.update_reservation_agent = UpdateReservationAgent(
             self.memory,
@@ -954,7 +969,7 @@ class UpdatePublicationTests(unittest.TestCase):
             COMMITTED_OPERATION_FORMAT_FALLBACK_RESPONSE,
         )
         orchestrator.handoff_service.require_handoff.assert_not_called()
-        service.update_reservation_field.assert_called_once()
+        service.update_reservation_field_by_reference.assert_called_once()
 
 
 class CancelPublicationTests(unittest.TestCase):
@@ -964,7 +979,7 @@ class CancelPublicationTests(unittest.TestCase):
         self.memory = MemoryManager()
         self.memory.get_session(self.key).update(
             {
-                "cancel_reservation_id": 63,
+                "cancel_reservation_reference": "RSV_63636363636363636363636363636363",
                 "cancel_reservation_stage": (
                     CancelReservationAgent.CONFIRM_CANCELLATION
                 ),
@@ -981,7 +996,7 @@ class CancelPublicationTests(unittest.TestCase):
         before = self.memory.snapshot_conversation(self.key).materialize()
 
         class Service:
-            def cancel_reservation(inner_self, *_args, **_kwargs):
+            def cancel_reservation_by_reference(inner_self, *_args, **_kwargs):
                 self.memory.get_session(self.key)["workflow_nested"]["asked"].append(
                     "mutated"
                 )
@@ -993,14 +1008,14 @@ class CancelPublicationTests(unittest.TestCase):
 
     def test_unknown_outcome_clears_actionable_confirmation(self):
         class Service:
-            def cancel_reservation(self, *_args, **_kwargs):
+            def cancel_reservation_by_reference(self, *_args, **_kwargs):
                 raise TransactionSessionUnusableError()
 
         with self.assertRaises(TransactionSessionUnusableError):
             self._run(Service())
         state = self.memory.get_session(self.key)
         self.assertIsNone(state["cancel_reservation_stage"])
-        self.assertIsNone(state["cancel_reservation_id"])
+        self.assertIsNone(state["cancel_reservation_reference"])
         self.assertEqual(
             state[RESERVATION_PERSISTENCE_STATE],
             {"status": SESSION_UNUSABLE, "operation": "cancel"},
@@ -1009,21 +1024,21 @@ class CancelPublicationTests(unittest.TestCase):
     def test_success_and_terminal_reconciliation_clear_only_cancel_state(self):
         cases = (
             SimpleNamespace(
-                cancel_reservation=lambda *_args, **_kwargs: persisted(
+                cancel_reservation_by_reference=lambda *_args, **_kwargs: persisted(
                     63,
                     status="cancelled",
                 )
             ),
             SimpleNamespace(
-                cancel_reservation=lambda *_args, **_kwargs: None,
-                get_reservation_by_id=lambda *_args, **_kwargs: persisted(
+                cancel_reservation_by_reference=lambda *_args, **_kwargs: None,
+                get_reservation_by_reference=lambda *_args, **_kwargs: persisted(
                     63,
                     status="cancelled",
                 ),
             ),
         )
         for service in cases:
-            with self.subTest(terminal=hasattr(service, "get_reservation_by_id")):
+            with self.subTest(terminal=hasattr(service, "get_reservation_by_reference")):
                 memory = MemoryManager()
                 memory.get_session(self.key).update(
                     self.memory.snapshot_conversation(self.key).materialize()
@@ -1034,7 +1049,7 @@ class CancelPublicationTests(unittest.TestCase):
                 )
                 state = memory.get_session(self.key)
                 self.assertIsNone(state["cancel_reservation_stage"])
-                self.assertIsNone(state["cancel_reservation_id"])
+                self.assertIsNone(state["cancel_reservation_reference"])
                 self.assertEqual(
                     state["handoff_state"],
                     {"category": "safe-marker"},
@@ -1046,7 +1061,7 @@ class CancelPublicationTests(unittest.TestCase):
 
     def test_confirmed_cancel_publication_failure_blocks_second_cancel(self):
         service = MagicMock()
-        service.cancel_reservation.return_value = persisted(
+        service.cancel_reservation_by_reference.return_value = persisted(
             63,
             status="cancelled",
         )
@@ -1069,12 +1084,12 @@ class CancelPublicationTests(unittest.TestCase):
             retry["response"],
             COMMITTED_OPERATION_STATE_UNAVAILABLE_RESPONSE,
         )
-        service.cancel_reservation.assert_called_once()
+        service.cancel_reservation_by_reference.assert_called_once()
 
     def test_terminal_cancel_publication_failure_blocks_second_cancel(self):
         service = MagicMock()
-        service.cancel_reservation.return_value = None
-        service.get_reservation_by_id.return_value = persisted(
+        service.cancel_reservation_by_reference.return_value = None
+        service.get_reservation_by_reference.return_value = persisted(
             63,
             status="cancelled",
         )
@@ -1091,12 +1106,12 @@ class CancelPublicationTests(unittest.TestCase):
                 )
 
         asyncio.run(agent.run(object(), self.key, "Ya", self.owner))
-        service.cancel_reservation.assert_called_once()
-        service.get_reservation_by_id.assert_called_once()
+        service.cancel_reservation_by_reference.assert_called_once()
+        service.get_reservation_by_reference.assert_called_once()
 
     def test_cancel_formatter_failure_through_orchestrator_has_no_handoff(self):
         service = MagicMock()
-        service.cancel_reservation.return_value = persisted(
+        service.cancel_reservation_by_reference.return_value = persisted(
             63,
             status="cancelled",
         )
@@ -1125,7 +1140,7 @@ class CancelPublicationTests(unittest.TestCase):
             COMMITTED_OPERATION_FORMAT_FALLBACK_RESPONSE,
         )
         orchestrator.handoff_service.require_handoff.assert_not_called()
-        service.cancel_reservation.assert_called_once()
+        service.cancel_reservation_by_reference.assert_called_once()
 
 
 class LockBoundaryTests(unittest.IsolatedAsyncioTestCase):

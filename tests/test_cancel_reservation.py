@@ -5,9 +5,20 @@ from unittest.mock import MagicMock, patch
 
 from app.agents.cancel_reservation_agent import CancelReservationAgent
 from app.agents.orchestrator import AgentOrchestrator
+from app.agents.result import ReservationOperationType
 from app.brain.classifier import IntentClassifier
 from app.brain.memory_manager import MemoryManager
+from app.brain.reservation_workflow_snapshot import (
+    capture_reservation_workflow_snapshot_v2,
+)
 from app.db.repositories.reservation_repository import ReservationRepository
+
+
+SEEDED_CANCEL_RESERVATION_ID = (2**30) + 104_779
+
+
+def reference_for(index: int) -> str:
+    return f"RSV_{index:032x}"
 
 
 class FakeCancellationService:
@@ -17,6 +28,7 @@ class FakeCancellationService:
         self.reservations = {
             5: SimpleNamespace(
                 id=5,
+                reference=reference_for(5),
                 name="Legacy",
                 people=1,
                 date="2026-07-23",
@@ -26,6 +38,7 @@ class FakeCancellationService:
             ),
             4: SimpleNamespace(
                 id=4,
+                reference=reference_for(4),
                 name="Customer Lain",
                 people=3,
                 date="2026-07-23",
@@ -35,6 +48,7 @@ class FakeCancellationService:
             ),
             3: SimpleNamespace(
                 id=3,
+                reference=reference_for(3),
                 name="Citra",
                 people=5,
                 date="2026-07-22",
@@ -44,6 +58,7 @@ class FakeCancellationService:
             ),
             2: SimpleNamespace(
                 id=2,
+                reference=reference_for(2),
                 name="Rizal",
                 people=4,
                 date="2026-07-21",
@@ -53,6 +68,7 @@ class FakeCancellationService:
             ),
             1: SimpleNamespace(
                 id=1,
+                reference=reference_for(1),
                 name="Budi",
                 people=2,
                 date="2026-07-20",
@@ -77,19 +93,30 @@ class FakeCancellationService:
             reverse=True,
         )[:limit]
 
-    def get_reservation_by_id(self, db, reservation_id, owner_customer_id):
-        reservation = self.reservations.get(reservation_id)
+    def get_reservation_by_reference(self, db, public_reference, owner_customer_id):
+        reservation = next(
+            (
+                item
+                for item in self.reservations.values()
+                if item.reference == public_reference
+            ),
+            None,
+        )
         if reservation is None or reservation.owner_customer_id != owner_customer_id:
             return None
         return reservation
 
-    def cancel_reservation(self, db, reservation_id, owner_customer_id):
-        reservation = self.get_reservation_by_id(db, reservation_id, owner_customer_id)
+    def cancel_reservation_by_reference(self, db, public_reference, owner_customer_id):
+        reservation = self.get_reservation_by_reference(
+            db,
+            public_reference,
+            owner_customer_id,
+        )
         if reservation is None or reservation.status == "cancelled":
             return None
 
         reservation.status = "cancelled"
-        self.cancel_calls.append((db, reservation_id, owner_customer_id))
+        self.cancel_calls.append((db, public_reference, owner_customer_id))
         return reservation
 
 
@@ -135,13 +162,13 @@ class TestCancelReservation(unittest.TestCase):
             )
         )
 
-    def _start_and_select_reservation(self, reservation_id="2"):
+    def _start_and_select_reservation(self, reservation_reference=None):
         self._send("batalkan reservasi saya")
-        return self._send(reservation_id)
+        return self._send(reservation_reference or reference_for(2))
 
     def test_successful_cancellation(self):
         start_result = self._send("batalkan reservasi saya")
-        selected_result = self._send("2")
+        selected_result = self._send(reference_for(2))
         result = self._send("Ya")
         session = self.memory.get_session(self.session_id)
 
@@ -149,8 +176,9 @@ class TestCancelReservation(unittest.TestCase):
             self.service.list_calls,
             [(self.db, self.service.OWNER_ID, 5)],
         )
-        self.assertIn("Pilih ID reservasi", start_result["response"])
-        self.assertIn("ID: 2", selected_result["response"])
+        self.assertIn("Pilih referensi reservasi", start_result["response"])
+        self.assertIn(reference_for(2), selected_result["response"])
+        self.assertNotIn("ID:", selected_result["response"])
         self.assertIn(
             "Yakin ingin membatalkan reservasi ini? Ya / Tidak",
             selected_result["response"],
@@ -159,33 +187,122 @@ class TestCancelReservation(unittest.TestCase):
         self.assertEqual(self.service.reservations[2].status, "cancelled")
         self.assertEqual(
             self.service.cancel_calls,
-            [(self.db, 2, self.service.OWNER_ID)],
+            [(self.db, reference_for(2), self.service.OWNER_ID)],
         )
         self.assertIn("Status: cancelled", result["response"])
+        self.assertEqual(
+            result["reservation_operation"].operation,
+            ReservationOperationType.CANCELLED,
+        )
+        self.assertEqual(
+            result["reservation_operation"].reference,
+            reference_for(2),
+        )
         self.assertIsNone(session["cancel_reservation_stage"])
-        self.assertIsNone(session["cancel_reservation_id"])
+        self.assertIsNone(session["cancel_reservation_reference"])
+        self.assertNotIn("cancel_reservation_id", session)
 
-    def test_invalid_reservation_id(self):
+    def test_seeded_id_is_absent_across_actual_cancel_flow(self):
+        seeded_reference = reference_for(SEEDED_CANCEL_RESERVATION_ID)
+        self.service.reservations[SEEDED_CANCEL_RESERVATION_ID] = SimpleNamespace(
+            id=SEEDED_CANCEL_RESERVATION_ID,
+            reference=seeded_reference,
+            name="Rizal",
+            people=4,
+            date="2026-07-21",
+            time="19:00",
+            status="pending",
+            owner_customer_id=self.service.OWNER_ID,
+        )
+
+        self._send("batalkan reservasi saya")
+        selection = self._send(f"[{seeded_reference}]")
+        snapshot = capture_reservation_workflow_snapshot_v2(
+            self.memory,
+            self.session_id,
+        ).materialize()
+        rejection = self._send("Tidak")
+
+        self._send("batalkan reservasi saya")
+        second_selection = self._send(seeded_reference)
+        success = self._send("Ya")
+        operation = success["reservation_operation"]
+        memory_state = self.memory.get_session(self.session_id)
+        boundary_text = "\n".join(
+            (
+                selection["response"],
+                rejection["response"],
+                second_selection["response"],
+                success["response"],
+                repr(operation),
+                str(vars(operation)),
+                str(memory_state),
+                str(snapshot),
+            )
+        )
+
+        self.assertNotIn(str(SEEDED_CANCEL_RESERVATION_ID), boundary_text)
+        self.assertIn(seeded_reference, selection["response"])
+        self.assertIn(seeded_reference, success["response"])
+        self.assertEqual(operation.operation, ReservationOperationType.CANCELLED)
+        self.assertEqual(operation.reference, seeded_reference)
+        self.assertEqual(
+            snapshot["cancel_reservation_reference"],
+            seeded_reference,
+        )
+        self.assertNotIn("cancel_reservation_id", snapshot)
+        self.assertNotIn("cancel_reservation_id", memory_state)
+
+    def test_numeric_reservation_selector_is_rejected(self):
         self._send("batalkan reservasi saya")
 
         result = self._send("999")
         session = self.memory.get_session(self.session_id)
 
-        self.assertIn("ID reservasi tidak ditemukan", result["response"])
+        self.assertIn("format RSV_", result["response"])
         self.assertEqual(
             session["cancel_reservation_stage"],
-            CancelReservationAgent.SELECT_RESERVATION_ID,
+            CancelReservationAgent.SELECT_RESERVATION_REFERENCE,
         )
-        self.assertIsNone(session["cancel_reservation_id"])
+        self.assertIsNone(session["cancel_reservation_reference"])
         self.assertEqual(self.service.cancel_calls, [])
+
+    def test_reference_selection_handles_mixed_case_missing_malformed_and_ambiguous(self):
+        self._send("batalkan reservasi saya")
+        mixed = self._send(reference_for(2).replace("RSV_", "rSv_"))
+        self.assertIn("Reservasi dipilih", mixed["response"])
+        self.assertEqual(
+            self.memory.get_session(self.session_id)[
+                "cancel_reservation_reference"
+            ],
+            reference_for(2),
+        )
+
+        for index, (message, expected) in enumerate(
+            (
+                ("referensinya belum ada", "Gunakan referensi reservasi"),
+                ("RSV_not-valid", "Gunakan referensi reservasi"),
+                (
+                    f"{reference_for(1)} dan {reference_for(2)}",
+                    "Kirim tepat satu referensi reservasi.",
+                ),
+            )
+        ):
+            with self.subTest(message=message):
+                self.session_id = f"unsafe-cancel-reference-{index}"
+                self._send("batalkan reservasi saya")
+                result = self._send(message)
+                self.assertIn(expected, result["response"])
+                self.assertNotIn(message, result["response"])
+                self.assertEqual(self.service.cancel_calls, [])
 
     def test_natural_selection_phrases_require_confirmation_before_cancel(self):
         for index, message in enumerate(
             (
-                "yang nomor dua",
-                "reservasi nomor 2",
-                "booking yang kedua",
-                "pesanan saya yang nomor dua",
+                reference_for(2),
+                f"referensi reservasi: {reference_for(2)}",
+                f"reservasi {reference_for(2)}",
+                f"gunakan referensi {reference_for(2)}",
             )
         ):
             with self.subTest(message=message):
@@ -214,7 +331,10 @@ class TestCancelReservation(unittest.TestCase):
                 )
 
                 session = memory.get_session(session_id)
-                self.assertEqual(session["cancel_reservation_id"], 2)
+                self.assertEqual(
+                    session["cancel_reservation_reference"],
+                    reference_for(2),
+                )
                 self.assertEqual(
                     session["cancel_reservation_stage"],
                     CancelReservationAgent.CONFIRM_CANCELLATION,
@@ -233,7 +353,7 @@ class TestCancelReservation(unittest.TestCase):
         self.assertEqual(self.service.reservations[2].status, "pending")
         self.assertEqual(self.service.cancel_calls, [])
         self.assertIsNone(session["cancel_reservation_stage"])
-        self.assertIsNone(session["cancel_reservation_id"])
+        self.assertIsNone(session["cancel_reservation_reference"])
 
     def test_batal_rejects_instead_of_confirming_cancellation(self):
         self._start_and_select_reservation()
@@ -245,20 +365,20 @@ class TestCancelReservation(unittest.TestCase):
         self.assertEqual(self.service.reservations[2].status, "pending")
         self.assertEqual(self.service.cancel_calls, [])
         self.assertIsNone(session["cancel_reservation_stage"])
-        self.assertIsNone(session["cancel_reservation_id"])
+        self.assertIsNone(session["cancel_reservation_reference"])
 
     def test_already_cancelled_reservation_is_rejected(self):
         self._send("batalkan reservasi saya")
 
-        result = self._send("3")
+        result = self._send(reference_for(3))
         session = self.memory.get_session(self.session_id)
 
         self.assertIn("sudah dibatalkan", result["response"])
         self.assertEqual(
             session["cancel_reservation_stage"],
-            CancelReservationAgent.SELECT_RESERVATION_ID,
+            CancelReservationAgent.SELECT_RESERVATION_REFERENCE,
         )
-        self.assertIsNone(session["cancel_reservation_id"])
+        self.assertIsNone(session["cancel_reservation_reference"])
         self.assertEqual(self.service.cancel_calls, [])
 
     def test_state_persists_across_messages(self):
@@ -266,11 +386,11 @@ class TestCancelReservation(unittest.TestCase):
         session = self.memory.get_session(self.session_id)
         self.assertEqual(
             session["cancel_reservation_stage"],
-            CancelReservationAgent.SELECT_RESERVATION_ID,
+            CancelReservationAgent.SELECT_RESERVATION_REFERENCE,
         )
 
-        self._send("2")
-        self.assertEqual(session["cancel_reservation_id"], 2)
+        self._send(reference_for(2))
+        self.assertEqual(session["cancel_reservation_reference"], reference_for(2))
         self.assertEqual(
             session["cancel_reservation_stage"],
             CancelReservationAgent.CONFIRM_CANCELLATION,
@@ -278,7 +398,7 @@ class TestCancelReservation(unittest.TestCase):
 
         result = self._send("mungkin")
         self.assertEqual(result["status"], "awaiting_cancellation")
-        self.assertEqual(session["cancel_reservation_id"], 2)
+        self.assertEqual(session["cancel_reservation_reference"], reference_for(2))
         self.assertEqual(
             session["cancel_reservation_stage"],
             CancelReservationAgent.CONFIRM_CANCELLATION,
@@ -287,6 +407,7 @@ class TestCancelReservation(unittest.TestCase):
     def test_repository_cancels_by_updating_status_without_deleting(self):
         reservation = SimpleNamespace(
             id=2,
+            reference=reference_for(2),
             name="Rizal",
             people=4,
             date="2026-07-21",
@@ -298,9 +419,9 @@ class TestCancelReservation(unittest.TestCase):
         db.execute.return_value = FakeAtomicResult(reservation)
         repository = ReservationRepository()
 
-        updated = repository.cancel_reservation(
+        updated = repository.cancel_reservation_by_public_reference(
             db,
-            2,
+            reference_for(2),
             self.service.OWNER_ID,
         )
 
@@ -309,7 +430,7 @@ class TestCancelReservation(unittest.TestCase):
         db.rollback.assert_not_called()
         db.refresh.assert_not_called()
         statement = db.execute.call_args.args[0]
-        self.assertIn("reservations.id", str(statement))
+        self.assertIn("public_reference", str(statement))
         self.assertIn("owner_customer_id", str(statement))
         self.assertIn("cancelled", statement.compile().params.values())
         db.delete.assert_not_called()
@@ -319,16 +440,16 @@ class TestCancelReservation(unittest.TestCase):
         db.execute.return_value = FakeAtomicResult(None)
         repository = ReservationRepository()
 
-        result = repository.cancel_reservation(
+        result = repository.cancel_reservation_by_public_reference(
             db,
-            3,
+            reference_for(3),
             self.service.OWNER_ID,
         )
 
         self.assertIsNone(result)
         db.commit.assert_not_called()
         statement = db.execute.call_args.args[0]
-        self.assertIn("reservations.id", str(statement))
+        self.assertIn("public_reference", str(statement))
         self.assertIn("owner_customer_id", str(statement))
         self.assertIn("cancelled", statement.compile().params.values())
         db.delete.assert_not_called()
@@ -336,23 +457,23 @@ class TestCancelReservation(unittest.TestCase):
     def test_user_cannot_cancel_another_customers_reservation(self):
         self._send("batalkan reservasi saya")
 
-        result = self._send("4")
+        result = self._send(reference_for(4))
         session = self.memory.get_session(self.session_id)
 
-        self.assertIn("ID reservasi tidak ditemukan", result["response"])
+        self.assertEqual(result["response"], "Referensi reservasi tidak ditemukan.")
         self.assertEqual(
             session["cancel_reservation_stage"],
-            CancelReservationAgent.SELECT_RESERVATION_ID,
+            CancelReservationAgent.SELECT_RESERVATION_REFERENCE,
         )
         self.assertEqual(self.service.reservations[4].status, "pending")
         self.assertEqual(self.service.cancel_calls, [])
 
     def test_legacy_reservation_is_not_listed_or_selectable(self):
         start_result = self._send("batalkan reservasi saya")
-        result = self._send("5")
+        result = self._send(reference_for(5))
 
         self.assertNotIn("Legacy", start_result["response"])
-        self.assertIn("ID reservasi tidak ditemukan", result["response"])
+        self.assertEqual(result["response"], "Referensi reservasi tidak ditemukan.")
         self.assertEqual(self.service.reservations[5].status, "pending")
 
     def test_orchestrator_routes_each_cancel_phrase(self):
@@ -393,7 +514,7 @@ class TestCancelReservation(unittest.TestCase):
                         )
                         return {
                             "status": "awaiting_cancellation",
-                            "response": "Pilih ID reservasi",
+                            "response": "Pilih referensi reservasi",
                         }
 
                 handler = DummyCancelReservationAgent()
@@ -410,7 +531,7 @@ class TestCancelReservation(unittest.TestCase):
                     )
                 )
 
-                self.assertEqual(response, "Pilih ID reservasi")
+                self.assertEqual(response, "Pilih referensi reservasi")
                 self.assertEqual(
                     handler.args,
                     (db, session_id, phrase, owner_customer_id),
@@ -444,7 +565,7 @@ class TestCancelReservation(unittest.TestCase):
                 )
                 return {
                     "status": "awaiting_cancellation",
-                    "response": "Pilih ID reservasi",
+                    "response": "Pilih referensi reservasi",
                 }
 
         handler = DummyCancelReservationAgent()
@@ -461,7 +582,7 @@ class TestCancelReservation(unittest.TestCase):
             )
         )
 
-        self.assertEqual(response, "Pilih ID reservasi")
+        self.assertEqual(response, "Pilih referensi reservasi")
         self.assertEqual(
             handler.args,
             (db, "cancel-new-session", "hapus booking saya", owner_customer_id),
@@ -476,7 +597,7 @@ class TestCancelReservation(unittest.TestCase):
             {
                 "intent": "reservation",
                 "awaiting_confirmation": True,
-                "cancel_reservation_id": 2,
+                "cancel_reservation_reference": reference_for(2),
                 "cancel_reservation_stage": CancelReservationAgent.CONFIRM_CANCELLATION,
             }
         )

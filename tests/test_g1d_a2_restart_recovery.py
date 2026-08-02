@@ -13,8 +13,9 @@ from app.brain.reservation_memory import (
 from app.brain.reservation_workflow_snapshot import (
     WORKFLOW_PAYLOAD_MAX_BYTES,
     WORKFLOW_SCHEMA_VERSION,
-    capture_reservation_workflow_snapshot,
-    validate_persisted_workflow_snapshot,
+    WORKFLOW_SCHEMA_VERSION_V2,
+    capture_reservation_workflow_snapshot_v2,
+    validate_persisted_workflow_snapshot_v1,
 )
 from app.core.conversation_lock_manager import ConversationLockManager
 from app.core.conversation_memory import build_authenticated_memory_key
@@ -72,7 +73,7 @@ class WorkflowSnapshotValidationTests(unittest.TestCase):
         ]
         for payload in cases:
             with self.subTest(payload=payload):
-                snapshot = validate_persisted_workflow_snapshot(
+                snapshot = validate_persisted_workflow_snapshot_v1(
                     payload,
                     schema_version=WORKFLOW_SCHEMA_VERSION,
                 )
@@ -98,7 +99,7 @@ class WorkflowSnapshotValidationTests(unittest.TestCase):
         ]
         for payload in cases:
             with self.subTest(payload=payload):
-                snapshot = validate_persisted_workflow_snapshot(
+                snapshot = validate_persisted_workflow_snapshot_v1(
                     payload,
                     schema_version=WORKFLOW_SCHEMA_VERSION,
                 )
@@ -117,7 +118,7 @@ class WorkflowSnapshotValidationTests(unittest.TestCase):
         ]
         for payload in cases:
             with self.subTest(payload=payload):
-                snapshot = validate_persisted_workflow_snapshot(
+                snapshot = validate_persisted_workflow_snapshot_v1(
                     payload,
                     schema_version=WORKFLOW_SCHEMA_VERSION,
                 )
@@ -130,7 +131,7 @@ class WorkflowSnapshotValidationTests(unittest.TestCase):
                 "operation": "create",
             }
         }
-        snapshot = validate_persisted_workflow_snapshot(
+        snapshot = validate_persisted_workflow_snapshot_v1(
             payload,
             schema_version=WORKFLOW_SCHEMA_VERSION,
         )
@@ -149,7 +150,7 @@ class WorkflowSnapshotValidationTests(unittest.TestCase):
                 payload = create_payload()
                 payload[key] = value
                 with self.assertRaises(ConversationMemoryValidationError):
-                    validate_persisted_workflow_snapshot(
+                    validate_persisted_workflow_snapshot_v1(
                         payload,
                         schema_version=WORKFLOW_SCHEMA_VERSION,
                     )
@@ -185,22 +186,22 @@ class WorkflowSnapshotValidationTests(unittest.TestCase):
         for payload, schema_version in cases:
             with self.subTest(payload=payload):
                 with self.assertRaises(ConversationMemoryValidationError):
-                    validate_persisted_workflow_snapshot(
+                    validate_persisted_workflow_snapshot_v1(
                         payload,
                         schema_version=schema_version,
                     )
 
         memory = MemoryManager()
         state = memory.get_session("mixed")
-        state["update_reservation_stage"] = "select_reservation_id"
-        state["cancel_reservation_stage"] = "select_reservation_id"
+        state["update_reservation_stage"] = "select_reservation_reference"
+        state["cancel_reservation_stage"] = "select_reservation_reference"
         with self.assertRaises(ConversationMemoryValidationError):
-            capture_reservation_workflow_snapshot(memory, "mixed")
+            capture_reservation_workflow_snapshot_v2(memory, "mixed")
 
     def test_oversized_payload_is_rejected(self):
         payload = create_payload(name="A" * (WORKFLOW_PAYLOAD_MAX_BYTES + 1))
         with self.assertRaises(ConversationMemoryValidationError):
-            validate_persisted_workflow_snapshot(
+            validate_persisted_workflow_snapshot_v1(
                 payload,
                 schema_version=WORKFLOW_SCHEMA_VERSION,
             )
@@ -217,7 +218,7 @@ class WorkflowSnapshotValidationTests(unittest.TestCase):
                 "intent_confidence": 0.99,
             }
         )
-        payload = capture_reservation_workflow_snapshot(
+        payload = capture_reservation_workflow_snapshot_v2(
             memory,
             "safe",
         ).materialize()
@@ -227,7 +228,7 @@ class WorkflowSnapshotValidationTests(unittest.TestCase):
 
     def test_snapshot_does_not_alias_live_or_materialized_state(self):
         payload = create_payload(asked_fields=["name", "people"])
-        snapshot = validate_persisted_workflow_snapshot(
+        snapshot = validate_persisted_workflow_snapshot_v1(
             payload,
             schema_version=WORKFLOW_SCHEMA_VERSION,
         )
@@ -252,7 +253,7 @@ class WorkflowSnapshotValidationTests(unittest.TestCase):
             )
         )
         self.assertIsNone(
-            capture_reservation_workflow_snapshot(memory, "done")
+            capture_reservation_workflow_snapshot_v2(memory, "done")
         )
 
 
@@ -366,12 +367,12 @@ class WorkflowStateServiceTests(unittest.TestCase):
             ),
             {
                 "update_reservation_stage": "input_value",
-                "reservation_id": 7,
+                "reservation_reference": f"RSV_{7:032x}",
                 "editing_field": "people",
             },
             {
                 "cancel_reservation_stage": "confirm_cancellation",
-                "cancel_reservation_id": 7,
+                "cancel_reservation_reference": f"RSV_{7:032x}",
             },
             {
                 RESERVATION_PERSISTENCE_STATE: {
@@ -403,7 +404,7 @@ class WorkflowStateServiceTests(unittest.TestCase):
                     owner_customer_id=self.owner,
                     memory_key=key,
                 )
-                restored = capture_reservation_workflow_snapshot(
+                restored = capture_reservation_workflow_snapshot_v2(
                     restarted_memory,
                     key,
                 )
@@ -466,6 +467,7 @@ class WorkflowStateServiceTests(unittest.TestCase):
         self.assertFalse(row.is_active)
         self.assertEqual(row.payload, {})
         self.assertEqual(row.revision, 2)
+        self.assertEqual(row.schema_version, WORKFLOW_SCHEMA_VERSION_V2)
 
     def test_rejected_create_publishes_inactive_and_cannot_restore_after_restart(self):
         memory = MemoryManager()
@@ -512,7 +514,7 @@ class WorkflowStateServiceTests(unittest.TestCase):
         self.assertFalse(row.is_active)
         self.assertEqual(row.payload, {})
         self.assertIsNone(
-            capture_reservation_workflow_snapshot(
+            capture_reservation_workflow_snapshot_v2(
                 restarted_memory,
                 self.memory_key,
             )

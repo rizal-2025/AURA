@@ -31,6 +31,7 @@ from app.db.models.support_ticket_notification import (
 from app.db.repositories.demo_persistence_repository import (
     DemoChatMessageRepository,
 )
+from app.core.conversation_memory import build_authenticated_memory_key
 from app.integrations.telegram.owner_notification_dispatcher import (
     OwnerNotificationDispatcher,
 )
@@ -46,6 +47,9 @@ from app.services.demo_session_service import (
     DemoSessionService,
     digest_demo_session_token,
 )
+from app.services.conversation_workflow_state_service import (
+    ConversationWorkflowStateService,
+)
 from app.services.reservation.service import ReservationService
 from migrations.add_demo_chat_request_id import (
     DemoChatRequestIdMigrationError,
@@ -57,6 +61,7 @@ from tests.integration.disposable_schema import DisposableSchemaResources
 
 TOKEN_A = "P" * 43
 TOKEN_B = "Q" * 43
+SEEDED_DEMO_RESERVATION_ID = (2**30) + 104_831
 
 
 def _skip_reason():
@@ -1263,6 +1268,93 @@ class DemoChatPostgreSQLTests(unittest.TestCase):
         self.assertEqual(calls[0][0], session_a.owner_customer_id)
         self.assertIsNone(response.reservation_mutation)
 
+    def test_new_shared_agent_reply_never_publishes_exact_seeded_id(self):
+        demo_session = self.session_row(TOKEN_A)
+        session_reference = f"demo-session-{demo_session.id}"
+        memory_key = build_authenticated_memory_key(
+            demo_session.owner_customer_id,
+            session_reference,
+        )
+        with self.Session.begin() as db:
+            db.add(
+                ConversationWorkflowState(
+                    owner_customer_id=demo_session.owner_customer_id,
+                    session_reference_hash=(
+                        ConversationWorkflowStateService.hash_session_reference(
+                            memory_key
+                        )
+                    ),
+                    schema_version=2,
+                    payload={
+                        "intent": "reservation",
+                        "name": "Rizal",
+                        "people": 4,
+                        "date": "2026-08-01",
+                        "time": "19:00",
+                        "completed": False,
+                        "awaiting_confirmation": True,
+                        "editing_field": None,
+                        "asked_fields": ["name", "people", "date", "time"],
+                    },
+                    is_active=True,
+                    revision=1,
+                )
+            )
+        with self.engine.begin() as connection:
+            connection.execute(
+                text(
+                    "SELECT setval("
+                    "pg_get_serial_sequence('reservations', 'id'), "
+                    ":seeded_id, false)"
+                ),
+                {"seeded_id": SEEDED_DEMO_RESERVATION_ID},
+            )
+
+        request_id = uuid4()
+        service = DemoChatService(clock=lambda: self.now)
+        with self.Session() as db:
+            response = self.run_process(
+                service,
+                db,
+                TOKEN_A,
+                request_id,
+                message="Ya",
+            )
+        with self.Session() as db:
+            reservation = db.get(Reservation, SEEDED_DEMO_RESERVATION_ID)
+            rows = DemoChatMessageRepository().list_by_request_id(
+                db,
+                demo_session_id=demo_session.id,
+                request_id=request_id,
+            )
+        with self.Session() as db:
+            replay = self.run_process(
+                DemoChatService(clock=lambda: self.now),
+                db,
+                TOKEN_A,
+                request_id,
+                message="Ya",
+            )
+
+        assistant = next(row for row in rows if row.role == "assistant")
+        boundary_text = "\n".join(
+            (
+                response.reply.content,
+                assistant.content,
+                replay.reply.content,
+            )
+        )
+        self.assertIsNotNone(reservation)
+        self.assertNotIn(str(SEEDED_DEMO_RESERVATION_ID), boundary_text)
+        self.assertIn(reservation.public_reference, response.reply.content)
+        self.assertIn(reservation.public_reference, assistant.content)
+        self.assertEqual(replay.reply.content, response.reply.content)
+        self.assertIsNone(response.reservation_mutation)
+        self.assertIsNone(replay.reservation_mutation)
+        self.assertIsNone(
+            response.model_dump(by_alias=True)["reservationMutation"]
+        )
+
     def test_update_and_cancel_use_owner_filter_for_each_demo_session(self):
         self.create_session(TOKEN_B)
         session_a = self.session_row(TOKEN_A)
@@ -1288,18 +1380,18 @@ class DemoChatPostgreSQLTests(unittest.TestCase):
                 reservation_service = ReservationService()
                 if _self.operation == "update":
                     _self.result = (
-                        reservation_service.update_reservation_field(
+                        reservation_service.update_reservation_field_by_reference(
                             db,
-                            reservation_b.id,
+                            reservation_b.reference,
                             "people",
                             5,
                             customer.id,
                         )
                     )
                 else:
-                    _self.result = reservation_service.cancel_reservation(
+                    _self.result = reservation_service.cancel_reservation_by_reference(
                         db,
-                        reservation_b.id,
+                        reservation_b.reference,
                         customer.id,
                     )
                 return "Operasi selesai secara aman."

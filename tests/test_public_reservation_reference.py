@@ -20,6 +20,7 @@ from app.services.reservation.public_reference import (
     PUBLIC_REFERENCE_MAX_ATTEMPTS,
     InvalidPublicReservationReferenceError,
     PublicReservationReferenceCollisionError,
+    PublicReservationReferenceUnavailableError,
     canonicalize_public_reference,
     generate_public_reference,
     is_valid_public_reference,
@@ -262,13 +263,13 @@ class TestPublicReservationReferenceFoundation(unittest.TestCase):
                 created.reference,
             )
 
-    def test_numeric_compatibility_and_existing_list_order_remain(self):
+    def test_numeric_lookup_is_converter_only_and_existing_list_order_remains(self):
         first = self._create()
         second = self._create()
         service = ReservationService()
 
         with self.Session() as db:
-            numeric = service.get_reservation_by_id(
+            numeric = ReservationRepository().get_by_id_for_workflow_v1_conversion(
                 db,
                 first.id,
                 self.owner_a,
@@ -286,7 +287,7 @@ class TestPublicReservationReferenceFoundation(unittest.TestCase):
             [second.id, first.id],
         )
 
-    def test_legacy_null_reference_is_explicit_in_internal_dto(self):
+    def test_legacy_null_reference_fails_closed_at_safe_service_boundary(self):
         with self.Session.begin() as db:
             row = Reservation(
                 name="Legacy",
@@ -297,16 +298,13 @@ class TestPublicReservationReferenceFoundation(unittest.TestCase):
                 public_reference=None,
             )
             db.add(row)
-            db.flush()
-            identifier = row.id
 
         with self.Session() as db:
-            result = ReservationService().get_reservation_by_id(
-                db,
-                identifier,
-                self.owner_a,
-            )
-        self.assertIsNone(result.reference)
+            with self.assertRaises(PublicReservationReferenceUnavailableError):
+                ReservationService().list_recent_reservations(
+                    db,
+                    self.owner_a,
+                )
 
     def test_exact_collision_uses_savepoint_and_retries(self):
         with self.Session.begin() as db:

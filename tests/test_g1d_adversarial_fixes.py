@@ -93,12 +93,12 @@ class ChatTransactionPropagationTests(unittest.TestCase):
             )
             orchestrator.workflow.execute = AsyncMock(side_effect=error_type())
         elif operation == "update":
-            session["update_reservation_stage"] = "select_reservation_id"
+            session["update_reservation_stage"] = "select_reservation_reference"
             orchestrator.update_reservation_agent.run = AsyncMock(
                 side_effect=error_type()
             )
         else:
-            session["cancel_reservation_stage"] = "select_reservation_id"
+            session["cancel_reservation_stage"] = "select_reservation_reference"
             orchestrator.cancel_reservation_agent.run = AsyncMock(
                 side_effect=error_type()
             )
@@ -313,33 +313,38 @@ class PersistedReservationDTOTests(unittest.TestCase):
             time="7pm",
             status="pending",
             owner_customer_id=uuid4(),
+            public_reference="RSV_91919191919191919191919191919191",
         )
 
     def test_legacy_row_bypasses_current_input_validators_but_is_detached(self):
         row = self._legacy_row()
         repository = MagicMock()
         repository.list_recent.return_value = [row]
-        repository.get_by_id.return_value = row
-        repository.update_reservation_field.return_value = row
-        repository.cancel_reservation.return_value = row
+        repository.get_by_public_reference.return_value = row
+        repository.update_reservation_field_by_public_reference.return_value = row
+        repository.cancel_reservation_by_public_reference.return_value = row
         service = ReservationService(repository)
         owner = uuid4()
 
         listed = service.list_recent_reservations(
             TransactionSpySession(), owner_customer_id=owner
         )[0]
-        selected = service.get_reservation_by_id(
-            TransactionSpySession(), 91, owner_customer_id=owner
-        )
-        updated = service.update_reservation_field(
+        selected = service.get_reservation_by_reference(
             TransactionSpySession(),
-            91,
+            "RSV_91919191919191919191919191919191",
+            owner_customer_id=owner,
+        )
+        updated = service.update_reservation_field_by_reference(
+            TransactionSpySession(),
+            "RSV_91919191919191919191919191919191",
             "name",
             "Nama Baru",
             owner_customer_id=owner,
         )
-        cancelled = service.cancel_reservation(
-            TransactionSpySession(), 91, owner_customer_id=owner
+        cancelled = service.cancel_reservation_by_reference(
+            TransactionSpySession(),
+            "RSV_91919191919191919191919191919191",
+            owner_customer_id=owner,
         )
 
         for value in (listed, selected, updated, cancelled):
@@ -359,6 +364,7 @@ class PersistedReservationDTOTests(unittest.TestCase):
             date="01/08/2026",
             time="7pm",
             status="pending",
+            reference="RSV_91919191919191919191919191919191",
         )
         service = MagicMock()
         service.list_recent_reservations.return_value = (row,)
@@ -393,14 +399,15 @@ class CancelReconciliationBoundaryTests(unittest.TestCase):
             date="2026-08-01",
             time="19:00",
             status="cancelled",
+            public_reference="RSV_12121212121212121212121212121212",
         )
 
         class Repository:
-            def cancel_reservation(self, db, *_args, **_kwargs):
+            def cancel_reservation_by_public_reference(self, db, *_args, **_kwargs):
                 db.transaction_active = True
                 return None
 
-            def get_by_id(self, db, *_args, **_kwargs):
+            def get_by_public_reference(self, db, *_args, **_kwargs):
                 observations.append(db.in_transaction())
                 db.transaction_active = True
                 return cancelled
@@ -411,7 +418,7 @@ class CancelReconciliationBoundaryTests(unittest.TestCase):
         session.update(
             {
                 "cancel_reservation_stage": "confirm_cancellation",
-                "cancel_reservation_id": 12,
+                "cancel_reservation_reference": "RSV_12121212121212121212121212121212",
             }
         )
         agent = CancelReservationAgent(
@@ -425,18 +432,18 @@ class CancelReconciliationBoundaryTests(unittest.TestCase):
 
     def test_secondary_read_persistence_failure_is_not_mapped_to_not_found(self):
         class Repository:
-            def cancel_reservation(self, db, *_args, **_kwargs):
+            def cancel_reservation_by_public_reference(self, db, *_args, **_kwargs):
                 db.transaction_active = True
                 return None
 
-            def get_by_id(self, db, *_args, **_kwargs):
+            def get_by_public_reference(self, db, *_args, **_kwargs):
                 raise PersistenceOperationError()
 
         memory = MemoryManager()
         memory.get_session("cancel-key").update(
             {
                 "cancel_reservation_stage": "confirm_cancellation",
-                "cancel_reservation_id": 12,
+                "cancel_reservation_reference": "RSV_12121212121212121212121212121212",
             }
         )
         agent = CancelReservationAgent(

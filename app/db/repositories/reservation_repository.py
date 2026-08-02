@@ -103,7 +103,7 @@ class ReservationRepository:
             .all()
         )
 
-    def get_by_id(
+    def get_by_id_for_workflow_v1_conversion(
         self,
         db: Session,
         reservation_id: int,
@@ -133,49 +133,6 @@ class ReservationRepository:
             )
             .first()
         )
-
-    def update_reservation_field(
-        self,
-        db: Session,
-        reservation_id: int,
-        field_name: str,
-        new_value,
-        owner_customer_id,
-    ):
-        require_owner_customer_id(owner_customer_id)
-        if field_name not in self.EDITABLE_FIELDS:
-            raise ValueError(f"Field '{field_name}' cannot be updated.")
-
-        statement = (
-            update(Reservation)
-            .where(
-                Reservation.id == reservation_id,
-                Reservation.owner_customer_id == owner_customer_id,
-                func.lower(Reservation.status) != "cancelled",
-            )
-            .values({field_name: new_value})
-            .returning(Reservation)
-        )
-        return db.execute(statement).scalar_one_or_none()
-
-    def cancel_reservation(
-        self,
-        db: Session,
-        reservation_id: int,
-        owner_customer_id,
-    ):
-        require_owner_customer_id(owner_customer_id)
-        statement = (
-            update(Reservation)
-            .where(
-                Reservation.id == reservation_id,
-                Reservation.owner_customer_id == owner_customer_id,
-                func.lower(Reservation.status) != "cancelled",
-            )
-            .values(status="cancelled")
-            .returning(Reservation)
-        )
-        return db.execute(statement).scalar_one_or_none()
 
     def update_reservation_field_by_public_reference(
         self,

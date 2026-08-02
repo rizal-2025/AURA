@@ -87,6 +87,7 @@ class WorkflowReservationService:
                 time="19:00",
                 status="pending",
                 owner_customer_id=owner_customer_id,
+                reference="RSV_77777777777777777777777777777777",
             ),
         }
 
@@ -95,8 +96,15 @@ class WorkflowReservationService:
             return []
         return list(self.reservations.values())[:limit]
 
-    def get_reservation_by_id(self, _db, reservation_id, owner_customer_id):
-        reservation = self.reservations.get(reservation_id)
+    def get_reservation_by_reference(self, _db, reference, owner_customer_id):
+        reservation = next(
+            (
+                item
+                for item in self.reservations.values()
+                if item.reference == reference
+            ),
+            None,
+        )
         if (
             reservation is None
             or owner_customer_id != self.owner_customer_id
@@ -105,17 +113,17 @@ class WorkflowReservationService:
             return None
         return reservation
 
-    def update_reservation_field(
+    def update_reservation_field_by_reference(
         self,
         _db,
-        reservation_id,
+        reference,
         field_name,
         new_value,
         owner_customer_id,
     ):
-        reservation = self.get_reservation_by_id(
+        reservation = self.get_reservation_by_reference(
             _db,
-            reservation_id,
+            reference,
             owner_customer_id,
         )
         if reservation is None:
@@ -123,10 +131,10 @@ class WorkflowReservationService:
         setattr(reservation, field_name, new_value)
         return reservation
 
-    def cancel_reservation(self, _db, reservation_id, owner_customer_id):
-        reservation = self.get_reservation_by_id(
+    def cancel_reservation_by_reference(self, _db, reference, owner_customer_id):
+        reservation = self.get_reservation_by_reference(
             _db,
-            reservation_id,
+            reference,
             owner_customer_id,
         )
         if reservation is None or reservation.status == "cancelled":
@@ -364,7 +372,10 @@ class ConversationSerializationServiceTests(unittest.IsolatedAsyncioTestCase):
         memory = MemoryManager()
         reservation_service = WorkflowReservationService(customer.id)
         orchestrator = real_workflow_orchestrator(memory, reservation_service)
-        agent = BlockingWorkflowAgent(orchestrator, blocked_message="7")
+        agent = BlockingWorkflowAgent(
+            orchestrator,
+            blocked_message="RSV_77777777777777777777777777777777",
+        )
         service = AuthenticatedChatService(
             agent=agent,
             lock_manager=ConversationLockManager(),
@@ -372,14 +383,14 @@ class ConversationSerializationServiceTests(unittest.IsolatedAsyncioTestCase):
         memory_key = build_authenticated_memory_key(customer.id, "real-update")
         session = memory.get_session(memory_key)
         session["update_reservation_stage"] = (
-            UpdateReservationAgent.SELECT_RESERVATION_ID
+            UpdateReservationAgent.SELECT_RESERVATION_REFERENCE
         )
 
         select_task = asyncio.create_task(service.process(
             db=object(),
             customer=customer,
             session_reference="real-update",
-            message="7",
+            message="RSV_77777777777777777777777777777777",
         ))
         await agent.first_entered.wait()
         field_task = asyncio.create_task(service.process(
@@ -393,7 +404,7 @@ class ConversationSerializationServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(field_task.done())
         self.assertEqual(
             session["update_reservation_stage"],
-            UpdateReservationAgent.SELECT_RESERVATION_ID,
+            UpdateReservationAgent.SELECT_RESERVATION_REFERENCE,
         )
         agent.release_first.set()
         selected_response, field_response = await asyncio.wait_for(
@@ -403,7 +414,10 @@ class ConversationSerializationServiceTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIn("Reservasi dipilih", selected_response)
         self.assertIn("Jumlah orang baru", field_response)
-        self.assertEqual(session["reservation_id"], 7)
+        self.assertEqual(
+            session["reservation_reference"],
+            "RSV_77777777777777777777777777777777",
+        )
         self.assertEqual(session["editing_field"], "people")
         self.assertEqual(
             session["update_reservation_stage"],
@@ -415,7 +429,10 @@ class ConversationSerializationServiceTests(unittest.IsolatedAsyncioTestCase):
         memory = MemoryManager()
         reservation_service = WorkflowReservationService(customer.id)
         orchestrator = real_workflow_orchestrator(memory, reservation_service)
-        agent = BlockingWorkflowAgent(orchestrator, blocked_message="7")
+        agent = BlockingWorkflowAgent(
+            orchestrator,
+            blocked_message="RSV_77777777777777777777777777777777",
+        )
         service = AuthenticatedChatService(
             agent=agent,
             lock_manager=ConversationLockManager(),
@@ -423,14 +440,14 @@ class ConversationSerializationServiceTests(unittest.IsolatedAsyncioTestCase):
         memory_key = build_authenticated_memory_key(customer.id, "real-cancel")
         session = memory.get_session(memory_key)
         session["cancel_reservation_stage"] = (
-            CancelReservationAgent.SELECT_RESERVATION_ID
+            CancelReservationAgent.SELECT_RESERVATION_REFERENCE
         )
 
         select_task = asyncio.create_task(service.process(
             db=object(),
             customer=customer,
             session_reference="real-cancel",
-            message="7",
+            message="RSV_77777777777777777777777777777777",
         ))
         await agent.first_entered.wait()
         confirm_task = asyncio.create_task(service.process(
@@ -444,7 +461,7 @@ class ConversationSerializationServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(confirm_task.done())
         self.assertEqual(
             session["cancel_reservation_stage"],
-            CancelReservationAgent.SELECT_RESERVATION_ID,
+            CancelReservationAgent.SELECT_RESERVATION_REFERENCE,
         )
         agent.release_first.set()
         selected_response, confirm_response = await asyncio.wait_for(
@@ -457,14 +474,17 @@ class ConversationSerializationServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(reservation_service.reservations[7].status, "cancelled")
         session = memory.get_session(memory_key)
         self.assertIsNone(session["cancel_reservation_stage"])
-        self.assertIsNone(session["cancel_reservation_id"])
+        self.assertIsNone(session["cancel_reservation_reference"])
 
     async def test_real_update_stage_prevents_cancel_from_overwriting_intermediate_state(self):
         customer = SimpleNamespace(id=uuid4())
         memory = MemoryManager()
         reservation_service = WorkflowReservationService(customer.id)
         orchestrator = real_workflow_orchestrator(memory, reservation_service)
-        agent = BlockingWorkflowAgent(orchestrator, blocked_message="7")
+        agent = BlockingWorkflowAgent(
+            orchestrator,
+            blocked_message="RSV_77777777777777777777777777777777",
+        )
         service = AuthenticatedChatService(
             agent=agent,
             lock_manager=ConversationLockManager(),
@@ -472,14 +492,14 @@ class ConversationSerializationServiceTests(unittest.IsolatedAsyncioTestCase):
         memory_key = build_authenticated_memory_key(customer.id, "mixed-workflow")
         session = memory.get_session(memory_key)
         session["update_reservation_stage"] = (
-            UpdateReservationAgent.SELECT_RESERVATION_ID
+            UpdateReservationAgent.SELECT_RESERVATION_REFERENCE
         )
 
         select_task = asyncio.create_task(service.process(
             db=object(),
             customer=customer,
             session_reference="mixed-workflow",
-            message="7",
+            message="RSV_77777777777777777777777777777777",
         ))
         await agent.first_entered.wait()
         cancel_task = asyncio.create_task(service.process(
@@ -497,7 +517,10 @@ class ConversationSerializationServiceTests(unittest.IsolatedAsyncioTestCase):
             timeout=1,
         )
         self.assertIn("Field tidak valid", cancel_response)
-        self.assertEqual(session["reservation_id"], 7)
+        self.assertEqual(
+            session["reservation_reference"],
+            "RSV_77777777777777777777777777777777",
+        )
         self.assertEqual(
             session["update_reservation_stage"],
             UpdateReservationAgent.SELECT_FIELD,
@@ -547,7 +570,7 @@ class ConversationSerializationServiceTests(unittest.IsolatedAsyncioTestCase):
                 session_reference,
             )
             memory.get_session(memory_key)["update_reservation_stage"] = (
-                UpdateReservationAgent.SELECT_RESERVATION_ID
+                UpdateReservationAgent.SELECT_RESERVATION_REFERENCE
             )
 
         tasks = [
@@ -555,7 +578,7 @@ class ConversationSerializationServiceTests(unittest.IsolatedAsyncioTestCase):
                 db=object(),
                 customer=customer,
                 session_reference=session_reference,
-                message="7",
+                message="RSV_77777777777777777777777777777777",
             ))
             for session_reference in ("real-one", "real-two")
         ]
@@ -570,7 +593,10 @@ class ConversationSerializationServiceTests(unittest.IsolatedAsyncioTestCase):
                 session_reference,
             )
             session = memory.get_session(memory_key)
-            self.assertEqual(session["reservation_id"], 7)
+            self.assertEqual(
+                session["reservation_reference"],
+                "RSV_77777777777777777777777777777777",
+            )
             self.assertEqual(
                 session["update_reservation_stage"],
                 UpdateReservationAgent.SELECT_FIELD,

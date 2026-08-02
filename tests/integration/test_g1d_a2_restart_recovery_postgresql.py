@@ -41,6 +41,9 @@ from migrations.add_conversation_workflow_states import (
     SESSION_HASH_CHECK_NAME,
     migrate,
 )
+from migrations.allow_public_reference_workflow_schema_v2 import (
+    migrate as migrate_workflow_v2,
+)
 from tests.integration.disposable_schema import DisposableSchemaResources
 
 
@@ -119,6 +122,7 @@ class TestG1DA2RestartRecoveryPostgreSQL(unittest.TestCase):
         Customer.__table__.create(cls.engine)
         Reservation.__table__.create(cls.engine)
         migrate(cls.engine, schema=cls.schema)
+        migrate_workflow_v2(cls.engine, schema=cls.schema)
 
     @classmethod
     def _table(cls, name):
@@ -155,10 +159,11 @@ class TestG1DA2RestartRecoveryPostgreSQL(unittest.TestCase):
                 date="2026-08-01",
                 time="19:00",
                 status="pending",
+                public_reference="RSV_42424242424242424242424242424242",
             )
             db.add(reservation)
             db.flush()
-            return reservation.id
+            return reservation.id, reservation.public_reference
 
     def test_01_migration_is_additive_idempotent_and_repairs_safe_objects(self):
         with self.engine.begin() as connection:
@@ -304,6 +309,17 @@ class TestG1DA2RestartRecoveryPostgreSQL(unittest.TestCase):
                 owner_customer_id=owner,
                 memory_key=key,
             )
+        with self.Session() as db:
+            row = db.scalar(
+                select(ConversationWorkflowState).where(
+                    ConversationWorkflowState.owner_customer_id == owner,
+                    ConversationWorkflowState.session_reference_hash
+                    == initial.hash_session_reference(key),
+                )
+            )
+            self.assertEqual(row.schema_version, 2)
+            self.assertNotIn("reservation_id", row.payload)
+            self.assertNotIn("cancel_reservation_id", row.payload)
 
         winner_memory = MemoryManager()
         stale_memory = MemoryManager()
@@ -406,13 +422,13 @@ class TestG1DA2RestartRecoveryPostgreSQL(unittest.TestCase):
 
     def test_06_update_and_cancel_commit_markers_survive_restart(self):
         owner = self._owner()
-        reservation_id = self._seed_reservation(owner)
+        reservation_id, reservation_reference = self._seed_reservation(owner)
         cases = (
             (
                 "update",
                 {
                     "update_reservation_stage": "input_value",
-                    "reservation_id": reservation_id,
+                    "reservation_reference": reservation_reference,
                     "editing_field": "people",
                 },
                 "6",
@@ -421,7 +437,7 @@ class TestG1DA2RestartRecoveryPostgreSQL(unittest.TestCase):
                 "cancel",
                 {
                     "cancel_reservation_stage": "confirm_cancellation",
-                    "cancel_reservation_id": reservation_id,
+                    "cancel_reservation_reference": reservation_reference,
                 },
                 "Ya",
             ),
@@ -441,16 +457,32 @@ class TestG1DA2RestartRecoveryPostgreSQL(unittest.TestCase):
                         owner_customer_id=owner,
                         memory_key=key,
                     )
-                    if operation == "update":
-                        agent = UpdateReservationAgent(
-                            memory,
-                            workflow_state_service=persistence,
+                with self.Session() as db:
+                    persisted = db.scalar(
+                        select(ConversationWorkflowState).where(
+                            ConversationWorkflowState.owner_customer_id
+                            == owner,
+                            ConversationWorkflowState.session_reference_hash
+                            == persistence.hash_session_reference(key),
                         )
-                    else:
-                        agent = CancelReservationAgent(
-                            memory,
-                            workflow_state_service=persistence,
-                        )
+                    )
+                    self.assertEqual(persisted.schema_version, 2)
+                    self.assertNotIn("reservation_id", persisted.payload)
+                    self.assertNotIn(
+                        "cancel_reservation_id",
+                        persisted.payload,
+                    )
+                if operation == "update":
+                    agent = UpdateReservationAgent(
+                        memory,
+                        workflow_state_service=persistence,
+                    )
+                else:
+                    agent = CancelReservationAgent(
+                        memory,
+                        workflow_state_service=persistence,
+                    )
+                with self.Session() as db:
                     result = asyncio.run(
                         agent.run(db, key, message, owner)
                     )

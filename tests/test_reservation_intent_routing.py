@@ -53,7 +53,11 @@ class TestReservationIntentRouting(unittest.TestCase):
         )
         orchestrator.memory_manager.update_session(
             "cancel-key",
-            {"cancel_reservation_stage": CancelReservationAgent.SELECT_RESERVATION_ID},
+            {
+                "cancel_reservation_stage": (
+                    CancelReservationAgent.SELECT_RESERVATION_REFERENCE
+                )
+            },
         )
 
         update_response = asyncio.run(

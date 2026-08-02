@@ -426,12 +426,12 @@ def build_workflow_snapshot_v2(payload: object) -> ReservationWorkflowSnapshot:
     )
 
 
-def validate_persisted_workflow_snapshot(
+def validate_persisted_workflow_snapshot_v1(
     payload: object,
     *,
     schema_version: object,
 ) -> ReservationWorkflowSnapshot:
-    """Compatibility entry point used by the active schema-v1 writer."""
+    """Explicit compatibility decoder for legacy schema-v1 tests."""
 
     return decode_workflow_snapshot_v1(
         payload,
@@ -439,7 +439,7 @@ def validate_persisted_workflow_snapshot(
     )
 
 
-def capture_reservation_workflow_snapshot(
+def capture_reservation_workflow_snapshot_v2(
     memory_manager: MemoryManager,
     memory_key: str,
 ) -> ReservationWorkflowSnapshot | None:
@@ -452,9 +452,8 @@ def capture_reservation_workflow_snapshot(
         state,
     )
     if blocker is not None:
-        return validate_persisted_workflow_snapshot(
+        return build_workflow_snapshot_v2(
             {RESERVATION_PERSISTENCE_STATE: blocker},
-            schema_version=WORKFLOW_SCHEMA_VERSION,
         )
 
     update_stage = state.get("update_reservation_stage")
@@ -469,27 +468,27 @@ def capture_reservation_workflow_snapshot(
         raise _validation_error()
 
     if update_stage is not None:
-        return validate_persisted_workflow_snapshot(
+        return build_workflow_snapshot_v2(
             {
                 "update_reservation_stage": update_stage,
-                "reservation_id": state.get("reservation_id"),
+                "reservation_reference": state.get("reservation_reference"),
                 "editing_field": state.get("editing_field"),
             },
-            schema_version=WORKFLOW_SCHEMA_VERSION,
         )
     if cancel_stage is not None:
         if state.get("editing_field") is not None:
             raise _validation_error()
-        return validate_persisted_workflow_snapshot(
+        return build_workflow_snapshot_v2(
             {
                 "cancel_reservation_stage": cancel_stage,
-                "cancel_reservation_id": state.get("cancel_reservation_id"),
+                "cancel_reservation_reference": state.get(
+                    "cancel_reservation_reference"
+                ),
             },
-            schema_version=WORKFLOW_SCHEMA_VERSION,
         )
 
     if state.get("intent") == "reservation" and not completed:
-        return validate_persisted_workflow_snapshot(
+        return build_workflow_snapshot_v2(
             {
                 "intent": "reservation",
                 "name": state.get("name"),
@@ -501,22 +500,20 @@ def capture_reservation_workflow_snapshot(
                 "editing_field": state.get("editing_field"),
                 "asked_fields": list(state.get("asked_fields") or []),
             },
-            schema_version=WORKFLOW_SCHEMA_VERSION,
         )
     if awaiting_confirmation or state.get("editing_field") is not None:
         raise _validation_error()
     return None
 
 
-def mutation_blocker_snapshot(operation: str) -> ReservationWorkflowSnapshot:
+def mutation_blocker_snapshot_v2(operation: str) -> ReservationWorkflowSnapshot:
     if operation not in RESERVATION_OPERATIONS:
         raise _validation_error()
-    return validate_persisted_workflow_snapshot(
+    return build_workflow_snapshot_v2(
         {
             RESERVATION_PERSISTENCE_STATE: {
                 "status": "mutation_reconciliation_required",
                 "operation": operation,
             }
-        },
-        schema_version=WORKFLOW_SCHEMA_VERSION,
+        }
     )

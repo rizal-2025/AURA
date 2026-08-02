@@ -36,6 +36,12 @@ class PublicReservationReferenceCollisionError(PersistenceOperationError):
     code = "RESERVATION_REFERENCE_UNAVAILABLE"
 
 
+class PublicReservationReferenceUnavailableError(PersistenceOperationError):
+    """A persisted reservation cannot cross a public-safe boundary."""
+
+    code = "RESERVATION_REFERENCE_UNAVAILABLE"
+
+
 def generate_public_reference() -> str:
     """Generate one canonical reference with exactly 128 bits of entropy."""
 
@@ -58,3 +64,15 @@ def is_valid_public_reference(value: object) -> bool:
     if not isinstance(value, str):
         return False
     return _PUBLIC_REFERENCE_PATTERN.fullmatch(value) is not None
+
+
+def require_canonical_public_reference(value: object) -> str:
+    """Return a stored canonical reference or fail with a stable safe error."""
+
+    try:
+        canonical = canonicalize_public_reference(value)
+    except InvalidPublicReservationReferenceError:
+        raise PublicReservationReferenceUnavailableError() from None
+    if value != canonical:
+        raise PublicReservationReferenceUnavailableError()
+    return canonical

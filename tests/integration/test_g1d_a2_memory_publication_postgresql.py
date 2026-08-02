@@ -6,6 +6,7 @@ application migration.
 """
 
 import asyncio
+import json
 import os
 import unittest
 from unittest.mock import MagicMock, patch
@@ -20,6 +21,9 @@ from app.agents.orchestrator import AgentOrchestrator
 from app.agents.reservation_agent import ReservationAgent
 from app.agents.update_reservation_agent import UpdateReservationAgent
 from app.brain.memory_manager import MemoryManager
+from app.brain.reservation_workflow_snapshot import (
+    capture_reservation_workflow_snapshot_v2,
+)
 from app.brain.reservation_memory import (
     COMMITTED_MEMORY_UNAVAILABLE,
     COMMITTED_OPERATION_FORMAT_FALLBACK_RESPONSE,
@@ -31,6 +35,9 @@ from app.core.memory_errors import (
 )
 from app.core.transaction_errors import PersistenceOperationError
 from app.db.models.customer import Customer
+from app.db.models.conversation_workflow_state import (
+    ConversationWorkflowState,
+)
 from app.db.models.reservation import Reservation
 from app.db.models.support_ticket import SupportTicket
 from app.db.models.support_ticket_notification import SupportTicketNotification
@@ -38,6 +45,9 @@ from app.db.repositories.reservation_repository import ReservationRepository
 from app.schemas.reservation import ReservationCreate
 from app.services.reservation.dto import PersistedReservationDTO
 from app.services.reservation.service import ReservationService
+from app.services.conversation_workflow_state_service import (
+    ConversationWorkflowStateService,
+)
 from tests.integration.disposable_schema import DisposableSchemaResources
 
 
@@ -76,6 +86,7 @@ def _skip_reason():
 
 
 SKIP_REASON = _skip_reason()
+SEEDED_POSTGRESQL_RESERVATION_ID = (2**30) + 104_827
 
 
 @unittest.skipIf(SKIP_REASON is not None, SKIP_REASON or "")
@@ -111,6 +122,7 @@ class TestG1DA2MemoryPublicationPostgreSQL(unittest.TestCase):
         )
         Customer.__table__.create(self.engine)
         Reservation.__table__.create(self.engine)
+        ConversationWorkflowState.__table__.create(self.engine)
         SupportTicket.__table__.create(self.engine)
         SupportTicketNotification.__table__.create(self.engine)
         self.owner = uuid4()
@@ -146,7 +158,19 @@ class TestG1DA2MemoryPublicationPostgreSQL(unittest.TestCase):
         with self.Session() as db:
             return db.scalar(select(func.count()).select_from(model))
 
-    def test_successful_create_publishes_real_persisted_id(self):
+    def _seed_next_reservation_id(self):
+        with self.engine.begin() as connection:
+            connection.execute(
+                text(
+                    "SELECT setval("
+                    "pg_get_serial_sequence('reservations', 'id'), "
+                    ":seeded_id, false)"
+                ),
+                {"seeded_id": SEEDED_POSTGRESQL_RESERVATION_ID},
+            )
+
+    def test_successful_create_publishes_public_reference_without_numeric_id(self):
+        self._seed_next_reservation_id()
         memory = MemoryManager()
         key = "owner:create-success"
         self._seed_create(memory, key)
@@ -162,11 +186,102 @@ class TestG1DA2MemoryPublicationPostgreSQL(unittest.TestCase):
                 )
             )
 
-        reservation_id = memory.get_session(key)["reservation_id"]
-        self.assertGreater(reservation_id, 0)
-        self.assertIn(str(reservation_id), result["response"])
+        reference = memory.get_session(key)["reservation_reference"]
+        self.assertIn(reference, result["response"])
         with self.Session() as db:
-            self.assertIsNotNone(db.get(Reservation, reservation_id))
+            row = db.scalar(
+                select(Reservation).where(
+                    Reservation.public_reference == reference
+                )
+            )
+            self.assertIsNotNone(row)
+            self.assertEqual(row.id, SEEDED_POSTGRESQL_RESERVATION_ID)
+            self.assertNotIn(
+                str(SEEDED_POSTGRESQL_RESERVATION_ID),
+                result["response"],
+            )
+            self.assertNotIn(
+                str(SEEDED_POSTGRESQL_RESERVATION_ID),
+                str(memory.get_session(key)),
+            )
+            self.assertNotIn(f"ID Reservasi: {row.id}", result["response"])
+            self.assertNotIn(f"ID: {row.id}", result["response"])
+
+    def test_seeded_id_is_absent_from_real_v2_workflow_persistence(self):
+        self._seed_next_reservation_id()
+        with self.Session() as db:
+            created = ReservationService().create_reservation(
+                db,
+                self._data(),
+                owner_customer_id=self.owner,
+            )
+        self.assertEqual(created.id, SEEDED_POSTGRESQL_RESERVATION_ID)
+
+        memory = MemoryManager()
+        key = "owner:seeded-v2-workflow"
+        memory.update_session(
+            key,
+            {
+                "update_reservation_stage": UpdateReservationAgent.INPUT_VALUE,
+                "reservation_reference": created.reference,
+                "editing_field": "people",
+            },
+        )
+        snapshot = capture_reservation_workflow_snapshot_v2(
+            memory,
+            key,
+        ).materialize()
+        workflow = ConversationWorkflowStateService(memory)
+        with self.Session() as db:
+            workflow.publish(
+                db,
+                owner_customer_id=self.owner,
+                memory_key=key,
+            )
+        with self.Session() as db:
+            row = db.scalar(
+                select(ConversationWorkflowState).where(
+                    ConversationWorkflowState.owner_customer_id == self.owner,
+                    ConversationWorkflowState.session_reference_hash
+                    == workflow.hash_session_reference(key),
+                )
+            )
+            persisted_payload = dict(row.payload)
+            persisted_schema_version = row.schema_version
+            persisted_revision = row.revision
+            persisted_is_active = row.is_active
+
+        agent = UpdateReservationAgent(memory, ReservationService())
+        with self.Session() as db:
+            result = asyncio.run(agent.run(db, key, "7", self.owner))
+        serialized = json.dumps(
+            persisted_payload,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        boundary_text = "\n".join(
+            (
+                result["response"],
+                repr(result["reservation_operation"]),
+                str(memory.get_session(key)),
+                json.dumps(snapshot, sort_keys=True),
+                serialized,
+            )
+        )
+
+        self.assertNotIn(
+            str(SEEDED_POSTGRESQL_RESERVATION_ID),
+            boundary_text,
+        )
+        self.assertEqual(
+            persisted_payload["reservation_reference"],
+            created.reference,
+        )
+        self.assertEqual(persisted_schema_version, 2)
+        self.assertEqual(persisted_revision, 1)
+        self.assertTrue(persisted_is_active)
+        self.assertNotIn("reservation_id", persisted_payload)
+        self.assertNotIn("reservation_id", memory.get_session(key))
 
     def test_forced_precommit_create_failure_restores_memory_and_no_row(self):
         class FailingRepository(ReservationRepository):
@@ -246,7 +361,7 @@ class TestG1DA2MemoryPublicationPostgreSQL(unittest.TestCase):
         key = "owner:update-publication"
         memory.get_session(key).update(
             {
-                "reservation_id": created.id,
+                "reservation_reference": created.reference,
                 "editing_field": "people",
                 "update_reservation_stage": UpdateReservationAgent.INPUT_VALUE,
             }
@@ -279,15 +394,15 @@ class TestG1DA2MemoryPublicationPostgreSQL(unittest.TestCase):
         key = "owner:cancel-publication"
         memory.get_session(key).update(
             {
-                "cancel_reservation_id": created.id,
+                "cancel_reservation_reference": created.reference,
                 "cancel_reservation_stage": (
                     CancelReservationAgent.CONFIRM_CANCELLATION
                 ),
             }
         )
         service = ReservationService()
-        service.cancel_reservation = MagicMock(
-            wraps=service.cancel_reservation
+        service.cancel_reservation_by_reference = MagicMock(
+            wraps=service.cancel_reservation_by_reference
         )
         agent = CancelReservationAgent(memory, service)
 
@@ -305,7 +420,7 @@ class TestG1DA2MemoryPublicationPostgreSQL(unittest.TestCase):
                 "cancelled",
             )
             asyncio.run(agent.run(db, key, "Ya", self.owner))
-        service.cancel_reservation.assert_called_once()
+        service.cancel_reservation_by_reference.assert_called_once()
 
     def test_formatter_failure_keeps_commit_and_creates_no_handoff_rows(self):
         memory = MemoryManager()
