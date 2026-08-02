@@ -229,9 +229,9 @@ def _ensure_owner_session_unique(
 def _check_definition_matches(name: str, sqltext) -> bool:
     normalized = " ".join(str(sqltext or "").lower().split())
     if name == SCHEMA_VERSION_CHECK_NAME:
-        return "schema_version" in normalized and re.search(
-            r"schema_version\s*=\s*1", normalized
-        ) is not None
+        # Accept exact known v2 as a safe newer state without downgrading it
+        # when this idempotent initial migration is rerun.
+        return _workflow_schema_version(normalized) in {1, 2}
     if name == REVISION_CHECK_NAME:
         return "revision" in normalized and re.search(
             r"revision\s*>=\s*1", normalized
@@ -251,6 +251,57 @@ def _check_definition_matches(name: str, sqltext) -> bool:
     return False
 
 
+def _strip_outer_parentheses(value: str) -> str:
+    candidate = value.strip()
+    while candidate.startswith("(") and candidate.endswith(")"):
+        depth = 0
+        encloses_all = True
+        for index, character in enumerate(candidate):
+            if character == "(":
+                depth += 1
+            elif character == ")":
+                depth -= 1
+                if depth < 0:
+                    return candidate
+                if depth == 0 and index != len(candidate) - 1:
+                    encloses_all = False
+                    break
+        if depth != 0 or not encloses_all:
+            break
+        candidate = candidate[1:-1].strip()
+    return candidate
+
+
+_WORKFLOW_VERSION_COLUMN = (
+    r'(?:(?:"schema_version")|schema_version)(?:::\s*integer)?'
+)
+_WORKFLOW_VERSION_V1 = re.compile(
+    rf"{_WORKFLOW_VERSION_COLUMN}\s*=\s*1",
+    re.IGNORECASE,
+)
+_WORKFLOW_VERSION_V2_IN = re.compile(
+    rf"{_WORKFLOW_VERSION_COLUMN}\s+IN\s*\(\s*1\s*,\s*2\s*\)",
+    re.IGNORECASE,
+)
+_WORKFLOW_VERSION_V2_ANY = re.compile(
+    rf"{_WORKFLOW_VERSION_COLUMN}\s*=\s*ANY\s*\(\s*ARRAY\s*"
+    rf"\[\s*1\s*,\s*2\s*\](?:::\s*integer\[\])?\s*\)",
+    re.IGNORECASE,
+)
+
+
+def _workflow_schema_version(sqltext) -> int | None:
+    candidate = _strip_outer_parentheses(str(sqltext or ""))
+    if _WORKFLOW_VERSION_V1.fullmatch(candidate) is not None:
+        return 1
+    if (
+        _WORKFLOW_VERSION_V2_IN.fullmatch(candidate) is not None
+        or _WORKFLOW_VERSION_V2_ANY.fullmatch(candidate) is not None
+    ):
+        return 2
+    return None
+
+
 CHECKS = {
     SCHEMA_VERSION_CHECK_NAME: "schema_version = 1",
     REVISION_CHECK_NAME: "revision >= 1",
@@ -265,13 +316,29 @@ def _ensure_checks(
     table_ref: str,
     schema: str | None,
 ) -> bool:
+    constraints = inspector.get_check_constraints(
+        TABLE_NAME,
+        schema=schema,
+    )
     existing = {
         item.get("name"): item
-        for item in inspector.get_check_constraints(
-            TABLE_NAME,
-            schema=schema,
-        )
+        for item in constraints
     }
+    schema_constraints = [
+        item
+        for item in constraints
+        if "schema_version" in str(item.get("sqltext") or "").lower()
+    ]
+    owned_schema_constraint = existing.get(SCHEMA_VERSION_CHECK_NAME)
+    if owned_schema_constraint is None:
+        if schema_constraints:
+            raise RuntimeError(
+                "Existing workflow schema-version constraint is incompatible."
+            )
+    elif any(item is not owned_schema_constraint for item in schema_constraints):
+        raise RuntimeError(
+            "Existing workflow schema-version constraint is incompatible."
+        )
     changed = False
     for name, expression in CHECKS.items():
         constraint = existing.get(name)
