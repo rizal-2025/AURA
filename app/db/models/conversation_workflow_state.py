@@ -33,7 +33,7 @@ class ConversationWorkflowState(Base):
             name="uq_conversation_workflow_states_owner_session",
         ),
         CheckConstraint(
-            "schema_version = 1",
+            "schema_version IN (1, 2)",
             name="ck_conversation_workflow_states_schema_version",
         ),
         CheckConstraint(

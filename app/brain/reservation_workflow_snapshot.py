@@ -17,9 +17,14 @@ from app.core.input_validation import (
     validate_reservation_field,
 )
 from app.core.memory_errors import ConversationMemoryValidationError
+from app.services.reservation.public_reference import (
+    InvalidPublicReservationReferenceError,
+    canonicalize_public_reference,
+)
 
 
 WORKFLOW_SCHEMA_VERSION = 1
+WORKFLOW_SCHEMA_VERSION_V2 = 2
 WORKFLOW_PAYLOAD_MAX_BYTES = 4096
 MAX_RESERVATION_IDENTIFIER = (2**63) - 1
 EDITABLE_FIELDS = frozenset({"name", "people", "date", "time"})
@@ -29,6 +34,12 @@ UPDATE_STAGES = frozenset(
 )
 CANCEL_STAGES = frozenset(
     {"select_reservation_id", "confirm_cancellation"}
+)
+UPDATE_STAGES_V2 = frozenset(
+    {"select_reservation_reference", "select_field", "input_value"}
+)
+CANCEL_STAGES_V2 = frozenset(
+    {"select_reservation_reference", "confirm_cancellation"}
 )
 
 _CREATE_KEYS = frozenset(
@@ -49,6 +60,16 @@ _UPDATE_KEYS = frozenset(
 )
 _CANCEL_KEYS = frozenset(
     {"cancel_reservation_stage", "cancel_reservation_id"}
+)
+_UPDATE_KEYS_V2 = frozenset(
+    {
+        "update_reservation_stage",
+        "reservation_reference",
+        "editing_field",
+    }
+)
+_CANCEL_KEYS_V2 = frozenset(
+    {"cancel_reservation_stage", "cancel_reservation_reference"}
 )
 _BLOCKER_KEYS = frozenset({RESERVATION_PERSISTENCE_STATE})
 
@@ -108,6 +129,25 @@ def _validate_identifier(value: object, *, optional: bool) -> int | None:
     ):
         raise _validation_error()
     return value
+
+
+def _validate_reference(
+    value: object,
+    *,
+    optional: bool,
+    canonicalize_trusted_input: bool,
+) -> str | None:
+    if value is None and optional:
+        return None
+    if type(value) is not str:
+        raise _validation_error()
+    try:
+        canonical = canonicalize_public_reference(value)
+    except InvalidPublicReservationReferenceError:
+        raise _validation_error() from None
+    if not canonicalize_trusted_input and value != canonical:
+        raise _validation_error()
+    return canonical
 
 
 def _validate_editing_field(value: object, *, optional: bool = True) -> str | None:
@@ -243,12 +283,102 @@ def _validated_cancel(payload: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-def validate_persisted_workflow_snapshot(
+def _validated_update_v2(
+    payload: Mapping[str, Any],
+    *,
+    canonicalize_trusted_input: bool,
+) -> dict[str, Any]:
+    if set(payload) != _UPDATE_KEYS_V2:
+        raise _validation_error()
+    stage = payload.get("update_reservation_stage")
+    if type(stage) is not str or stage not in UPDATE_STAGES_V2:
+        raise _validation_error()
+    reservation_reference = _validate_reference(
+        payload.get("reservation_reference"),
+        optional=stage == "select_reservation_reference",
+        canonicalize_trusted_input=canonicalize_trusted_input,
+    )
+    editing_field = _validate_editing_field(payload.get("editing_field"))
+    if stage == "select_reservation_reference":
+        if reservation_reference is not None or editing_field is not None:
+            raise _validation_error()
+    elif stage == "select_field":
+        if reservation_reference is None or editing_field is not None:
+            raise _validation_error()
+    elif reservation_reference is None or editing_field is None:
+        raise _validation_error()
+    return {
+        "update_reservation_stage": stage,
+        "reservation_reference": reservation_reference,
+        "editing_field": editing_field,
+    }
+
+
+def _validated_cancel_v2(
+    payload: Mapping[str, Any],
+    *,
+    canonicalize_trusted_input: bool,
+) -> dict[str, Any]:
+    if set(payload) != _CANCEL_KEYS_V2:
+        raise _validation_error()
+    stage = payload.get("cancel_reservation_stage")
+    if type(stage) is not str or stage not in CANCEL_STAGES_V2:
+        raise _validation_error()
+    reservation_reference = _validate_reference(
+        payload.get("cancel_reservation_reference"),
+        optional=stage == "select_reservation_reference",
+        canonicalize_trusted_input=canonicalize_trusted_input,
+    )
+    if stage == "select_reservation_reference" and reservation_reference is not None:
+        raise _validation_error()
+    if stage == "confirm_cancellation" and reservation_reference is None:
+        raise _validation_error()
+    return {
+        "cancel_reservation_stage": stage,
+        "cancel_reservation_reference": reservation_reference,
+    }
+
+
+def _decode_v2(
     payload: object,
     *,
     schema_version: object,
+    canonicalize_trusted_input: bool,
 ) -> ReservationWorkflowSnapshot:
-    """Reject every payload outside the four canonical workflow shapes."""
+    if type(schema_version) is not int or schema_version != WORKFLOW_SCHEMA_VERSION_V2:
+        raise _validation_error()
+    if type(payload) is not dict or not payload:
+        raise _validation_error()
+    _validate_payload_size(payload)
+
+    keys = set(payload)
+    if RESERVATION_PERSISTENCE_STATE in keys:
+        validated = _validated_blocker(payload)
+    elif "update_reservation_stage" in keys:
+        validated = _validated_update_v2(
+            payload,
+            canonicalize_trusted_input=canonicalize_trusted_input,
+        )
+    elif "cancel_reservation_stage" in keys:
+        validated = _validated_cancel_v2(
+            payload,
+            canonicalize_trusted_input=canonicalize_trusted_input,
+        )
+    elif "intent" in keys:
+        validated = _validated_create(payload)
+    else:
+        raise _validation_error()
+
+    _validate_payload_size(validated)
+    return ReservationWorkflowSnapshot(validated)
+
+
+def decode_workflow_snapshot_v1(
+    payload: object,
+    *,
+    schema_version: object = WORKFLOW_SCHEMA_VERSION,
+) -> ReservationWorkflowSnapshot:
+    """Decode one immutable legacy snapshot without rewriting its payload."""
 
     if type(schema_version) is not int or schema_version != WORKFLOW_SCHEMA_VERSION:
         raise _validation_error()
@@ -270,6 +400,43 @@ def validate_persisted_workflow_snapshot(
 
     _validate_payload_size(validated)
     return ReservationWorkflowSnapshot(validated)
+
+
+def decode_workflow_snapshot_v2(
+    payload: object,
+    *,
+    schema_version: object = WORKFLOW_SCHEMA_VERSION_V2,
+) -> ReservationWorkflowSnapshot:
+    """Decode a stored v2 snapshot, requiring already-canonical references."""
+
+    return _decode_v2(
+        payload,
+        schema_version=schema_version,
+        canonicalize_trusted_input=False,
+    )
+
+
+def build_workflow_snapshot_v2(payload: object) -> ReservationWorkflowSnapshot:
+    """Build v2 at a trusted boundary and canonicalize a valid reference."""
+
+    return _decode_v2(
+        payload,
+        schema_version=WORKFLOW_SCHEMA_VERSION_V2,
+        canonicalize_trusted_input=True,
+    )
+
+
+def validate_persisted_workflow_snapshot(
+    payload: object,
+    *,
+    schema_version: object,
+) -> ReservationWorkflowSnapshot:
+    """Compatibility entry point used by the active schema-v1 writer."""
+
+    return decode_workflow_snapshot_v1(
+        payload,
+        schema_version=schema_version,
+    )
 
 
 def capture_reservation_workflow_snapshot(
