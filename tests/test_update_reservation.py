@@ -5,10 +5,21 @@ from unittest.mock import MagicMock, patch
 
 from app.agents.orchestrator import AgentOrchestrator
 from app.agents.update_reservation_agent import UpdateReservationAgent
+from app.agents.result import ReservationOperationType
 from app.brain.classifier import IntentClassifier
 from app.brain.memory_manager import MemoryManager
+from app.brain.reservation_workflow_snapshot import (
+    capture_reservation_workflow_snapshot_v2,
+)
 from app.db.models.reservation import Reservation
 from app.db.repositories.reservation_repository import ReservationRepository
+
+
+SEEDED_UPDATE_RESERVATION_ID = (2**30) + 104_773
+
+
+def reference_for(index: int) -> str:
+    return f"RSV_{index:032x}"
 
 
 class FakeReservationService:
@@ -18,6 +29,7 @@ class FakeReservationService:
         self.reservations = {
             3: SimpleNamespace(
                 id=3,
+                reference=reference_for(3),
                 name="Customer Lain",
                 people=6,
                 date="2026-07-22",
@@ -27,6 +39,7 @@ class FakeReservationService:
             ),
             2: SimpleNamespace(
                 id=2,
+                reference=reference_for(2),
                 name="Rizal",
                 people=4,
                 date="2026-07-20",
@@ -36,6 +49,7 @@ class FakeReservationService:
             ),
             1: SimpleNamespace(
                 id=1,
+                reference=reference_for(1),
                 name="Budi",
                 people=2,
                 date="2026-07-21",
@@ -54,25 +68,36 @@ class FakeReservationService:
         ]
         return sorted(reservations, key=lambda item: item.id, reverse=True)[:limit]
 
-    def get_reservation_by_id(self, db, reservation_id, owner_customer_id):
-        reservation = self.reservations.get(reservation_id)
+    def get_reservation_by_reference(self, db, public_reference, owner_customer_id):
+        reservation = next(
+            (
+                item
+                for item in self.reservations.values()
+                if item.reference == public_reference
+            ),
+            None,
+        )
         if reservation is None or reservation.owner_customer_id != owner_customer_id:
             return None
         return reservation
 
-    def update_reservation_field(
+    def update_reservation_field_by_reference(
         self,
         db,
-        reservation_id,
+        public_reference,
         field_name,
         new_value,
         owner_customer_id,
     ):
-        reservation = self.get_reservation_by_id(db, reservation_id, owner_customer_id)
+        reservation = self.get_reservation_by_reference(
+            db,
+            public_reference,
+            owner_customer_id,
+        )
         if reservation is None:
             return None
         setattr(reservation, field_name, new_value)
-        self.update_calls.append((reservation_id, field_name, new_value, owner_customer_id))
+        self.update_calls.append((public_reference, field_name, new_value, owner_customer_id))
         return reservation
 
 
@@ -118,9 +143,9 @@ class TestUpdateReservation(unittest.TestCase):
             )
         )
 
-    def _start_and_select_reservation(self, reservation_id="2"):
+    def _start_and_select_reservation(self, reservation_reference=None):
         self._send("ubah reservasi saya")
-        return self._send(reservation_id)
+        return self._send(reservation_reference or reference_for(2))
 
     def test_successful_update(self):
         self._start_and_select_reservation()
@@ -132,25 +157,108 @@ class TestUpdateReservation(unittest.TestCase):
         self.assertEqual(self.service.reservations[2].name, "Andi")
         self.assertEqual(
             self.service.update_calls[-1],
-            (2, "name", "Andi", self.service.OWNER_ID),
+            (reference_for(2), "name", "Andi", self.service.OWNER_ID),
         )
         self.assertEqual(result["status"], "updated")
         self.assertIn("Reservasi berhasil diperbarui", result["response"])
+        self.assertEqual(
+            result["reservation_operation"].operation,
+            ReservationOperationType.UPDATED,
+        )
+        self.assertEqual(
+            result["reservation_operation"].reference,
+            reference_for(2),
+        )
         self.assertIsNone(session["update_reservation_stage"])
         self.assertIsNone(session["editing_field"])
 
-    def test_invalid_reservation_id(self):
+    def test_seeded_id_is_absent_across_actual_update_flow(self):
+        seeded_reference = reference_for(SEEDED_UPDATE_RESERVATION_ID)
+        self.service.reservations[SEEDED_UPDATE_RESERVATION_ID] = SimpleNamespace(
+            id=SEEDED_UPDATE_RESERVATION_ID,
+            reference=seeded_reference,
+            name="Rizal",
+            people=4,
+            date="2026-07-20",
+            time="19:00",
+            status="pending",
+            owner_customer_id=self.service.OWNER_ID,
+        )
+
+        self._send("ubah reservasi saya")
+        selection = self._send(f"(referensi reservasi: {seeded_reference})")
+        field_prompt = self._send("people")
+        snapshot = capture_reservation_workflow_snapshot_v2(
+            self.memory,
+            self.session_id,
+        ).materialize()
+        success = self._send("7")
+        operation = success["reservation_operation"]
+        memory_state = self.memory.get_session(self.session_id)
+        boundary_text = "\n".join(
+            (
+                selection["response"],
+                field_prompt["response"],
+                success["response"],
+                repr(operation),
+                str(vars(operation)),
+                str(memory_state),
+                str(snapshot),
+            )
+        )
+
+        self.assertNotIn(str(SEEDED_UPDATE_RESERVATION_ID), boundary_text)
+        self.assertIn(seeded_reference, selection["response"])
+        self.assertIn(seeded_reference, success["response"])
+        self.assertEqual(operation.operation, ReservationOperationType.UPDATED)
+        self.assertEqual(operation.reference, seeded_reference)
+        self.assertEqual(
+            snapshot["reservation_reference"],
+            seeded_reference,
+        )
+        self.assertNotIn("reservation_id", snapshot)
+        self.assertNotIn("reservation_id", memory_state)
+
+    def test_numeric_reservation_selector_is_rejected(self):
         self._send("ubah reservasi saya")
 
         result = self._send("999")
 
         session = self.memory.get_session(self.session_id)
-        self.assertIn("ID reservasi tidak ditemukan", result["response"])
+        self.assertIn("format RSV_", result["response"])
         self.assertEqual(
             session["update_reservation_stage"],
-            UpdateReservationAgent.SELECT_RESERVATION_ID,
+            UpdateReservationAgent.SELECT_RESERVATION_REFERENCE,
         )
         self.assertEqual(self.service.update_calls, [])
+
+    def test_reference_selection_handles_mixed_case_missing_malformed_and_ambiguous(self):
+        self._send("ubah reservasi saya")
+        mixed = self._send(reference_for(2).replace("RSV_", "rSv_"))
+        self.assertIn("Reservasi dipilih", mixed["response"])
+        self.assertEqual(
+            self.memory.get_session(self.session_id)["reservation_reference"],
+            reference_for(2),
+        )
+
+        for index, (message, expected) in enumerate(
+            (
+                ("referensinya belum ada", "Gunakan referensi reservasi"),
+                ("RSV_not-valid", "Gunakan referensi reservasi"),
+                (
+                    f"{reference_for(1)} dan {reference_for(2)}",
+                    "Kirim tepat satu referensi reservasi.",
+                ),
+            )
+        ):
+            with self.subTest(message=message):
+                session_id = f"unsafe-reference-{index}"
+                self.session_id = session_id
+                self._send("ubah reservasi saya")
+                result = self._send(message)
+                self.assertIn(expected, result["response"])
+                self.assertNotIn(message, result["response"])
+                self.assertEqual(self.service.update_calls, [])
 
     def test_invalid_field(self):
         self._start_and_select_reservation()
@@ -174,7 +282,7 @@ class TestUpdateReservation(unittest.TestCase):
         self.assertEqual(self.service.reservations[2].people, 7)
         self.assertEqual(
             self.service.update_calls[-1],
-            (2, "people", 7, self.service.OWNER_ID),
+            (reference_for(2), "people", 7, self.service.OWNER_ID),
         )
         self.assertIn("Jumlah Orang: 7", result["response"])
 
@@ -192,7 +300,7 @@ class TestUpdateReservation(unittest.TestCase):
         self.assertEqual(self.service.reservations[2].people, 9)
         self.assertEqual(
             self.service.update_calls[-1],
-            (2, "people", 9, self.service.OWNER_ID),
+            (reference_for(2), "people", 9, self.service.OWNER_ID),
         )
         self.assertEqual(result["status"], "updated")
 
@@ -219,7 +327,8 @@ class TestUpdateReservation(unittest.TestCase):
                     "Jumlah orang harus berupa angka positif. "
                     "Silakan masukkan jumlah orang yang valid.",
                 )
-                self.assertEqual(session["reservation_id"], 2)
+                self.assertEqual(session["reservation_reference"], reference_for(2))
+                self.assertNotIn("reservation_id", session)
                 self.assertEqual(
                     session["update_reservation_stage"],
                     UpdateReservationAgent.INPUT_VALUE,
@@ -237,7 +346,7 @@ class TestUpdateReservation(unittest.TestCase):
         session = self.memory.get_session(self.session_id)
 
         self.assertEqual(result["status"], "awaiting_update")
-        self.assertEqual(session["reservation_id"], 2)
+        self.assertEqual(session["reservation_reference"], reference_for(2))
         self.assertEqual(
             session["update_reservation_stage"],
             UpdateReservationAgent.INPUT_VALUE,
@@ -257,23 +366,23 @@ class TestUpdateReservation(unittest.TestCase):
         self.assertEqual(self.service.reservations[2].people, 7)
         self.assertEqual(
             self.service.update_calls,
-            [(2, "people", 7, self.service.OWNER_ID)],
+            [(reference_for(2), "people", 7, self.service.OWNER_ID)],
         )
-        self.assertEqual(session["reservation_id"], 2)
+        self.assertIsNone(session["reservation_reference"])
         self.assertIsNone(session["update_reservation_stage"])
         self.assertIsNone(session["editing_field"])
 
-    def test_reservation_id_persists_during_update_flow(self):
+    def test_reservation_reference_persists_during_update_flow(self):
         self._start_and_select_reservation()
         session = self.memory.get_session(self.session_id)
-        self.assertEqual(session["reservation_id"], 2)
+        self.assertEqual(session["reservation_reference"], reference_for(2))
         self.assertEqual(
             session["update_reservation_stage"],
             UpdateReservationAgent.SELECT_FIELD,
         )
 
         self._send("jumlah orang")
-        self.assertEqual(session["reservation_id"], 2)
+        self.assertEqual(session["reservation_reference"], reference_for(2))
         self.assertEqual(
             session["update_reservation_stage"],
             UpdateReservationAgent.INPUT_VALUE,
@@ -281,7 +390,7 @@ class TestUpdateReservation(unittest.TestCase):
         self.assertEqual(session["editing_field"], "people")
 
         self._send("abc")
-        self.assertEqual(session["reservation_id"], 2)
+        self.assertEqual(session["reservation_reference"], reference_for(2))
         self.assertEqual(
             session["update_reservation_stage"],
             UpdateReservationAgent.INPUT_VALUE,
@@ -291,10 +400,10 @@ class TestUpdateReservation(unittest.TestCase):
     def test_natural_selection_phrases_choose_existing_reservation(self):
         for index, message in enumerate(
             (
-                "yang nomor dua",
-                "reservasi nomor 2",
-                "booking yang kedua",
-                "pesanan saya yang nomor dua",
+                reference_for(2),
+                f"referensi reservasi: {reference_for(2)}",
+                f"reservasi {reference_for(2)}",
+                f"gunakan referensi {reference_for(2)}",
             )
         ):
             with self.subTest(message=message):
@@ -323,7 +432,7 @@ class TestUpdateReservation(unittest.TestCase):
                 )
 
                 session = memory.get_session(session_id)
-                self.assertEqual(session["reservation_id"], 2)
+                self.assertEqual(session["reservation_reference"], reference_for(2))
                 self.assertEqual(
                     session["update_reservation_stage"],
                     UpdateReservationAgent.SELECT_FIELD,
@@ -364,7 +473,7 @@ class TestUpdateReservation(unittest.TestCase):
             asyncio.run(
                 orchestrator.handle(
                     self.session_id,
-                    "2",
+                    reference_for(2),
                     self.db,
                     owner_customer_id=self.service.OWNER_ID,
                 )
@@ -386,7 +495,7 @@ class TestUpdateReservation(unittest.TestCase):
         self.assertEqual(self.service.reservations[2].date, "2026-07-25")
         self.assertEqual(
             self.service.update_calls[-1],
-            (2, "date", "2026-07-25", self.service.OWNER_ID),
+            (reference_for(2), "date", "2026-07-25", self.service.OWNER_ID),
         )
         self.assertIn("Tanggal: 2026-07-25", result["response"])
 
@@ -399,13 +508,14 @@ class TestUpdateReservation(unittest.TestCase):
         self.assertEqual(self.service.reservations[2].time, "20:00")
         self.assertEqual(
             self.service.update_calls[-1],
-            (2, "time", "20:00", self.service.OWNER_ID),
+            (reference_for(2), "time", "20:00", self.service.OWNER_ID),
         )
         self.assertIn("Jam: 20:00", result["response"])
 
     def test_repository_updates_allowed_field_and_rejects_invalid_field(self):
         reservation = SimpleNamespace(
             id=2,
+            reference=reference_for(2),
             name="Rizal",
             people=4,
             date="2026-07-20",
@@ -417,9 +527,9 @@ class TestUpdateReservation(unittest.TestCase):
         db.execute.return_value = FakeAtomicResult(reservation)
         repository = ReservationRepository()
 
-        updated = repository.update_reservation_field(
+        updated = repository.update_reservation_field_by_public_reference(
             db,
-            2,
+            reference_for(2),
             "people",
             7,
             self.service.OWNER_ID,
@@ -430,12 +540,12 @@ class TestUpdateReservation(unittest.TestCase):
         db.rollback.assert_not_called()
         db.refresh.assert_not_called()
         statement = db.execute.call_args.args[0]
-        self.assertIn("reservations.id", str(statement))
+        self.assertIn("public_reference", str(statement))
         self.assertIn("owner_customer_id", str(statement))
         with self.assertRaises(ValueError):
-            repository.update_reservation_field(
+            repository.update_reservation_field_by_public_reference(
                 db,
-                2,
+                reference_for(2),
                 "table",
                 "A1",
                 self.service.OWNER_ID,
@@ -446,9 +556,9 @@ class TestUpdateReservation(unittest.TestCase):
         db.execute.return_value = FakeAtomicResult(None)
         repository = ReservationRepository()
 
-        updated = repository.update_reservation_field(
+        updated = repository.update_reservation_field_by_public_reference(
             db,
-            3,
+            reference_for(3),
             "people",
             7,
             self.service.OWNER_ID,
@@ -457,19 +567,19 @@ class TestUpdateReservation(unittest.TestCase):
         self.assertIsNone(updated)
         db.commit.assert_not_called()
         statement = db.execute.call_args.args[0]
-        self.assertIn("reservations.id", str(statement))
+        self.assertIn("public_reference", str(statement))
         self.assertIn("owner_customer_id", str(statement))
 
     def test_user_cannot_update_another_customers_reservation(self):
         self._send("ubah reservasi saya")
 
-        result = self._send("3")
+        result = self._send(reference_for(3))
         session = self.memory.get_session(self.session_id)
 
-        self.assertIn("ID reservasi tidak ditemukan", result["response"])
+        self.assertEqual(result["response"], "Referensi reservasi tidak ditemukan.")
         self.assertEqual(
             session["update_reservation_stage"],
-            UpdateReservationAgent.SELECT_RESERVATION_ID,
+            UpdateReservationAgent.SELECT_RESERVATION_REFERENCE,
         )
         self.assertEqual(self.service.reservations[3].people, 6)
         self.assertEqual(self.service.update_calls, [])
@@ -496,7 +606,7 @@ class TestUpdateReservation(unittest.TestCase):
                     received_message,
                     received_owner_customer_id,
                 )
-                return {"status": "awaiting_update", "response": "Pilih ID reservasi"}
+                return {"status": "awaiting_update", "response": "Pilih referensi reservasi"}
 
         handler = DummyUpdateReservationAgent()
         orchestrator.intent_classifier = DummyClassifier()
@@ -512,7 +622,7 @@ class TestUpdateReservation(unittest.TestCase):
             )
         )
 
-        self.assertEqual(response, "Pilih ID reservasi")
+        self.assertEqual(response, "Pilih referensi reservasi")
         self.assertEqual(
             handler.args,
             (db, "update-new-session", "ubah booking saya", owner_customer_id),

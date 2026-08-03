@@ -2,7 +2,7 @@ from copy import deepcopy
 import json
 from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import ANY, MagicMock, patch
 from uuid import uuid4
 
 from app.brain.memory_manager import MemoryManager
@@ -29,6 +29,7 @@ from app.db.models.conversation_workflow_state import (
 )
 from app.services.conversation_workflow_state_service import (
     ConversationWorkflowStateService,
+    WorkflowRestoreOutcome,
     WorkflowV1ConversionOutcome,
 )
 
@@ -396,6 +397,26 @@ class _WorkflowRepository:
         self.for_update = kwargs.get("for_update")
         return self.row
 
+    def create(
+        self,
+        _db,
+        *,
+        owner_customer_id,
+        session_reference_hash,
+        schema_version,
+        payload,
+        is_active,
+    ):
+        self.row = SimpleNamespace(
+            owner_customer_id=owner_customer_id,
+            session_reference_hash=session_reference_hash,
+            schema_version=schema_version,
+            payload=deepcopy(payload),
+            is_active=is_active,
+            revision=1,
+        )
+        return self.row
+
     @staticmethod
     def replace(row, *, schema_version, payload, is_active):
         row.schema_version = schema_version
@@ -410,7 +431,12 @@ class _ReservationRepository:
         self.fail = fail
         self.calls = []
 
-    def get_by_id(self, _db, reservation_id, owner_customer_id):
+    def get_by_id_for_workflow_v1_conversion(
+        self,
+        _db,
+        reservation_id,
+        owner_customer_id,
+    ):
         self.calls.append((reservation_id, owner_customer_id))
         if self.fail:
             raise RuntimeError("private database failure")
@@ -734,7 +760,7 @@ class WorkflowV1ConversionTests(unittest.TestCase):
                     self._convert(service, _TransactionDB())
                 self.assertEqual(vars(row), before)
 
-    def test_active_v1_writer_revalidates_before_repository_write(self):
+    def test_active_writer_persists_strict_v2_snapshot(self):
         row = None
         service, workflow, _reservation = self._service(row)
         v2_snapshot = build_workflow_snapshot_v2(
@@ -743,14 +769,15 @@ class WorkflowV1ConversionTests(unittest.TestCase):
                 "cancel_reservation_reference": None,
             }
         )
-        with self.assertRaises(ConversationMemoryValidationError):
-            service._write_snapshot(
-                _TransactionDB(),
-                owner_customer_id=self.owner,
-                memory_key=self.memory_key,
-                snapshot=v2_snapshot,
-            )
-        self.assertIsNone(workflow.for_update)
+        service._write_snapshot(
+            _TransactionDB(),
+            owner_customer_id=self.owner,
+            memory_key=self.memory_key,
+            snapshot=v2_snapshot,
+        )
+        self.assertTrue(workflow.for_update)
+        self.assertEqual(workflow.row.schema_version, WORKFLOW_SCHEMA_VERSION_V2)
+        self.assertNotIn("reservation_id", workflow.row.payload)
 
     def test_database_failure_rolls_back_and_preserves_v1_row(self):
         row = self._row(
@@ -768,7 +795,7 @@ class WorkflowV1ConversionTests(unittest.TestCase):
         self.assertEqual(vars(row), before)
         self.assertEqual(db.rollbacks, 1)
 
-    def test_active_restore_remains_v1_only_during_phase_a(self):
+    def test_active_restore_materializes_v2_reference_state(self):
         row = self._row(
             {
                 "cancel_reservation_stage": "confirm_cancellation",
@@ -777,12 +804,202 @@ class WorkflowV1ConversionTests(unittest.TestCase):
             version=WORKFLOW_SCHEMA_VERSION_V2,
         )
         service, _workflow, _reservation = self._service(row)
+        service.restore(
+            _TransactionDB(),
+            owner_customer_id=self.owner,
+            memory_key=self.memory_key,
+        )
+        state = service.memory_manager.get_session(self.memory_key)
+        self.assertEqual(state["cancel_reservation_reference"], REFERENCE)
+        self.assertEqual(
+            state["cancel_reservation_stage"],
+            "confirm_cancellation",
+        )
+        self.assertNotIn("cancel_reservation_id", state)
+
+    def test_restore_converts_v1_once_reloads_and_materializes_only_v2(self):
+        service, _workflow, _reservation = self._service(None)
+        v1 = {
+            "schema_version": 1,
+            "payload": {
+                "update_reservation_stage": "select_field",
+                "reservation_id": 7,
+                "editing_field": None,
+            },
+            "is_active": True,
+            "revision": 4,
+        }
+        v2 = {
+            "schema_version": 2,
+            "payload": {
+                "update_reservation_stage": "select_field",
+                "reservation_reference": REFERENCE,
+                "editing_field": None,
+            },
+            "is_active": True,
+            "revision": 5,
+        }
+        service._read_stored_state = MagicMock(side_effect=[v1, v2])
+        service.convert_v1_state_to_v2 = MagicMock(
+            return_value=WorkflowV1ConversionOutcome.CONVERTED
+        )
+
+        outcome = service.restore(
+            _TransactionDB(),
+            owner_customer_id=self.owner,
+            memory_key=self.memory_key,
+        )
+
+        self.assertIs(outcome, WorkflowRestoreOutcome.RESTORED)
+        service.convert_v1_state_to_v2.assert_called_once_with(
+            ANY,
+            owner_customer_id=self.owner,
+            memory_key=self.memory_key,
+            expected_revision=4,
+        )
+        self.assertEqual(service._read_stored_state.call_count, 2)
+        state = service.memory_manager.get_session(self.memory_key)
+        self.assertEqual(state["reservation_reference"], REFERENCE)
+        self.assertNotIn("reservation_id", state)
+
+    def test_restore_unavailable_materializes_tombstone_with_typed_outcome(self):
+        service, _workflow, _reservation = self._service(None)
+        v1 = {
+            "schema_version": 1,
+            "payload": {
+                "cancel_reservation_stage": "confirm_cancellation",
+                "cancel_reservation_id": 7,
+            },
+            "is_active": True,
+            "revision": 2,
+        }
+        tombstone = {
+            "schema_version": 2,
+            "payload": {},
+            "is_active": False,
+            "revision": 3,
+        }
+        service._read_stored_state = MagicMock(
+            side_effect=[v1, tombstone]
+        )
+        service.convert_v1_state_to_v2 = MagicMock(
+            return_value=WorkflowV1ConversionOutcome.UNAVAILABLE
+        )
+
+        outcome = service.restore(
+            _TransactionDB(),
+            owner_customer_id=self.owner,
+            memory_key=self.memory_key,
+        )
+
+        self.assertIs(outcome, WorkflowRestoreOutcome.LEGACY_UNAVAILABLE)
+        state = service.memory_manager.get_session(self.memory_key)
+        self.assertIsNone(state["cancel_reservation_reference"])
+        self.assertNotIn("cancel_reservation_id", state)
+
+    def test_restore_retries_one_revision_conflict_then_succeeds(self):
+        service, _workflow, _reservation = self._service(None)
+        v1_revision_4 = {
+            "schema_version": 1,
+            "payload": _create_payload(),
+            "is_active": True,
+            "revision": 4,
+        }
+        v1_revision_5 = {**v1_revision_4, "revision": 5}
+        v2_revision_6 = {
+            "schema_version": 2,
+            "payload": _create_payload(),
+            "is_active": True,
+            "revision": 6,
+        }
+        service._read_stored_state = MagicMock(
+            side_effect=[v1_revision_4, v1_revision_5, v2_revision_6]
+        )
+        service.convert_v1_state_to_v2 = MagicMock(
+            side_effect=[
+                WorkflowV1ConversionOutcome.REVISION_CONFLICT,
+                WorkflowV1ConversionOutcome.CONVERTED,
+            ]
+        )
+
+        outcome = service.restore(
+            _TransactionDB(),
+            owner_customer_id=self.owner,
+            memory_key=self.memory_key,
+        )
+
+        self.assertIs(outcome, WorkflowRestoreOutcome.RESTORED)
+        self.assertEqual(service.convert_v1_state_to_v2.call_count, 2)
+        revisions = [
+            call.kwargs["expected_revision"]
+            for call in service.convert_v1_state_to_v2.call_args_list
+        ]
+        self.assertEqual(revisions, [4, 5])
+
+    def test_restore_second_revision_conflict_fails_without_memory_mutation(self):
+        service, _workflow, _reservation = self._service(None)
+        initial_state = service.memory_manager.get_session(self.memory_key)
+        initial_state["intent"] = "general"
+        before = deepcopy(initial_state)
+        v1_revision_4 = {
+            "schema_version": 1,
+            "payload": _create_payload(),
+            "is_active": True,
+            "revision": 4,
+        }
+        v1_revision_5 = {**v1_revision_4, "revision": 5}
+        service._read_stored_state = MagicMock(
+            side_effect=[v1_revision_4, v1_revision_5]
+        )
+        service.convert_v1_state_to_v2 = MagicMock(
+            side_effect=[
+                WorkflowV1ConversionOutcome.REVISION_CONFLICT,
+                WorkflowV1ConversionOutcome.REVISION_CONFLICT,
+            ]
+        )
+
         with self.assertRaises(ConversationWorkflowRecoveryError):
             service.restore(
                 _TransactionDB(),
                 owner_customer_id=self.owner,
                 memory_key=self.memory_key,
             )
+
+        self.assertEqual(service.convert_v1_state_to_v2.call_count, 2)
+        self.assertEqual(
+            service.memory_manager.get_session(self.memory_key),
+            before,
+        )
+
+    def test_corrupt_v2_restore_fails_without_memory_mutation(self):
+        service, _workflow, _reservation = self._service(None)
+        state = service.memory_manager.get_session(self.memory_key)
+        state["intent"] = "general"
+        before = deepcopy(state)
+        service._read_stored_state = MagicMock(
+            return_value={
+                "schema_version": 2,
+                "payload": {
+                    "update_reservation_stage": "select_field",
+                    "reservation_reference": "unsafe",
+                    "editing_field": None,
+                },
+                "is_active": True,
+                "revision": 3,
+            }
+        )
+
+        with self.assertRaises(ConversationWorkflowRecoveryError):
+            service.restore(
+                _TransactionDB(),
+                owner_customer_id=self.owner,
+                memory_key=self.memory_key,
+            )
+
+        self.assertEqual(
+            service.memory_manager.get_session(self.memory_key),
+            before,
+        )
 
     def test_model_accepts_exact_versions_one_and_two(self):
         constraint = next(

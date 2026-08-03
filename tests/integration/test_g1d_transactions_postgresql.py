@@ -36,6 +36,9 @@ from app.services.handoff.notification_outbox_service import NotificationOutboxS
 from app.services.handoff.owner_ticket_service import OwnerTicketService
 from app.services.handoff.ticket_service import TicketService
 from app.services.reservation.service import ReservationService
+from app.services.reservation.public_reference import (
+    PublicReservationReferenceUnavailableError,
+)
 
 
 def _identity(url):
@@ -133,15 +136,15 @@ class TestG1DTransactionsPostgreSQL(unittest.TestCase):
         self.assertEqual(self.count(Reservation), 1)
 
         class FailingUpdateRepository(ReservationRepository):
-            def update_reservation_field(self, *args, **kwargs):
-                super().update_reservation_field(*args, **kwargs)
+            def update_reservation_field_by_public_reference(self, *args, **kwargs):
+                super().update_reservation_field_by_public_reference(*args, **kwargs)
                 raise RuntimeError("controlled pre-commit failure")
 
         with self.Session() as db:
             with self.assertRaises(PersistenceOperationError):
-                ReservationService(FailingUpdateRepository()).update_reservation_field(
+                ReservationService(FailingUpdateRepository()).update_reservation_field_by_reference(
                     db,
-                    created.id,
+                    created.reference,
                     "people",
                     8,
                     owner_customer_id=self.owner,
@@ -150,15 +153,15 @@ class TestG1DTransactionsPostgreSQL(unittest.TestCase):
             self.assertEqual(db.get(Reservation, created.id).people, 4)
 
         class FailingCancelRepository(ReservationRepository):
-            def cancel_reservation(self, *args, **kwargs):
-                super().cancel_reservation(*args, **kwargs)
+            def cancel_reservation_by_public_reference(self, *args, **kwargs):
+                super().cancel_reservation_by_public_reference(*args, **kwargs)
                 raise RuntimeError("controlled pre-commit failure")
 
         with self.Session() as db:
             with self.assertRaises(PersistenceOperationError):
-                ReservationService(FailingCancelRepository()).cancel_reservation(
+                ReservationService(FailingCancelRepository()).cancel_reservation_by_reference(
                     db,
-                    created.id,
+                    created.reference,
                     owner_customer_id=self.owner,
                 )
         with self.Session() as db:
@@ -172,18 +175,18 @@ class TestG1DTransactionsPostgreSQL(unittest.TestCase):
                 owner_customer_id=self.owner,
             )
         with self.Session() as db:
-            updated = ReservationService().update_reservation_field(
+            updated = ReservationService().update_reservation_field_by_reference(
                 db,
-                created.id,
+                created.reference,
                 "people",
                 8,
                 owner_customer_id=self.owner,
             )
         self.assertEqual(updated.people, 8)
         with self.Session() as db:
-            cancelled = ReservationService().cancel_reservation(
+            cancelled = ReservationService().cancel_reservation_by_reference(
                 db,
-                created.id,
+                created.reference,
                 owner_customer_id=self.owner,
             )
         self.assertEqual(cancelled.status, "cancelled")
@@ -207,15 +210,12 @@ class TestG1DTransactionsPostgreSQL(unittest.TestCase):
             reservation_id = row.id
 
         with self.Session() as db:
-            listed = ReservationService().list_recent_reservations(
-                db,
-                owner_customer_id=self.owner,
-            )
-        self.assertEqual(len(listed), 1)
-        self.assertEqual(listed[0].id, reservation_id)
-        self.assertEqual(listed[0].people, 25)
-        self.assertEqual(listed[0].date, "01/08/2026")
-        self.assertEqual(listed[0].time, "7pm")
+            with self.assertRaises(PublicReservationReferenceUnavailableError):
+                ReservationService().list_recent_reservations(
+                    db,
+                    owner_customer_id=self.owner,
+                )
+        self.assertGreater(reservation_id, 0)
 
     def test_forced_create_failure_leaves_no_reservation_and_session_is_usable(self):
         class FailingCreateRepository(ReservationRepository):

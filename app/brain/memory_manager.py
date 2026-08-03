@@ -60,11 +60,14 @@ RESERVATION_WORKFLOW_MEMORY_KEYS = frozenset(
         "editing_field",
         "asked_fields",
         "update_reservation_stage",
-        "reservation_id",
+        "reservation_reference",
         "cancel_reservation_stage",
-        "cancel_reservation_id",
+        "cancel_reservation_reference",
         "reservation_persistence_state",
     }
+)
+_LEGACY_NUMERIC_WORKFLOW_MEMORY_KEYS = frozenset(
+    {"reservation_id", "cancel_reservation_id"}
 )
 
 
@@ -220,6 +223,8 @@ class MemoryManager:
             "time": None,
             "completed": False,
             "editing_field": None,
+            "reservation_reference": None,
+            "cancel_reservation_reference": None,
         }
 
     def create_session(self, memory_key: str) -> dict[str, Any]:
@@ -323,7 +328,10 @@ class MemoryManager:
         preserved = {
             key: value
             for key, value in current.items()
-            if key not in RESERVATION_WORKFLOW_MEMORY_KEYS
+            if key not in (
+                RESERVATION_WORKFLOW_MEMORY_KEYS
+                | _LEGACY_NUMERIC_WORKFLOW_MEMORY_KEYS
+            )
         }
         preserved.update(self._default_conversation_state())
         preserved.update(validated)

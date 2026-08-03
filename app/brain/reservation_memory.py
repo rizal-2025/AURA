@@ -10,6 +10,10 @@ from app.core.memory_errors import (
     PostCommitMemoryPublicationError,
 )
 from app.services.reservation.dto import PersistedReservationDTO
+from app.services.reservation.public_reference import (
+    InvalidPublicReservationReferenceError,
+    canonicalize_public_reference,
+)
 
 
 RESERVATION_PERSISTENCE_STATE = "reservation_persistence_state"
@@ -103,6 +107,14 @@ def publish_create_success(
 ) -> None:
     if type(persisted_reservation) is not PersistedReservationDTO:
         raise ConversationMemoryValidationError()
+    try:
+        reference = canonicalize_public_reference(
+            persisted_reservation.reference
+        )
+    except InvalidPublicReservationReferenceError:
+        raise ConversationMemoryValidationError() from None
+    if reference != persisted_reservation.reference:
+        raise ConversationMemoryValidationError()
     state = snapshot.materialize()
     state.update(
         {
@@ -113,7 +125,7 @@ def publish_create_success(
             "completed": True,
             "awaiting_confirmation": False,
             "editing_field": None,
-            "reservation_id": persisted_reservation.id,
+            "reservation_reference": reference,
         }
     )
     state.pop(RESERVATION_PERSISTENCE_STATE, None)
@@ -128,6 +140,7 @@ def publish_update_success(
 ) -> None:
     state = snapshot.materialize()
     state["update_reservation_stage"] = None
+    state["reservation_reference"] = None
     state["editing_field"] = None
     state.pop(RESERVATION_PERSISTENCE_STATE, None)
     memory_manager.replace_conversation(memory_key, state)
@@ -141,7 +154,7 @@ def publish_cancel_success(
 ) -> None:
     state = snapshot.materialize()
     state["cancel_reservation_stage"] = None
-    state["cancel_reservation_id"] = None
+    state["cancel_reservation_reference"] = None
     state.pop(RESERVATION_PERSISTENCE_STATE, None)
     memory_manager.replace_conversation(memory_key, state)
     memory_manager.clear_reservation_mutation_guard(memory_key)
@@ -171,10 +184,11 @@ def publish_reservation_persistence_blocker(
         state["editing_field"] = None
     elif operation == "update":
         state["update_reservation_stage"] = None
+        state["reservation_reference"] = None
         state["editing_field"] = None
     else:
         state["cancel_reservation_stage"] = None
-        state["cancel_reservation_id"] = None
+        state["cancel_reservation_reference"] = None
 
     state[RESERVATION_PERSISTENCE_STATE] = {
         "status": status,

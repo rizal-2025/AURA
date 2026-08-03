@@ -12,8 +12,13 @@ from app.brain.indonesian_nlu import (
 )
 from app.brain.memory_manager import MemoryManager
 from app.brain.reservation_entity_extractor import (
+    REFERENCE_AMBIGUITY_GUIDANCE,
+    REFERENCE_DATA_UNAVAILABLE_RESPONSE,
+    REFERENCE_INPUT_GUIDANCE,
+    REFERENCE_NOT_FOUND_RESPONSE,
+    PublicReferenceParseStatus,
     normalize_natural_reservation_name,
-    parse_reservation_id,
+    parse_public_reservation_reference,
 )
 from app.brain.reservation_memory import (
     COMMITTED_OPERATION_FORMAT_FALLBACK_RESPONSE,
@@ -36,13 +41,18 @@ from app.core.transaction_errors import (
     TransactionSessionUnusableError,
 )
 from app.services.reservation.service import ReservationService
+from app.services.reservation.public_reference import (
+    PublicReservationReferenceUnavailableError,
+    require_canonical_public_reference,
+)
+from app.agents.result import ReservationOperationResult, ReservationOperationType
 from app.utils.datetime_parser import DatetimeParser
 
 
 class UpdateReservationAgent:
     """Guide a user through updating an existing reservation."""
 
-    SELECT_RESERVATION_ID = "select_reservation_id"
+    SELECT_RESERVATION_REFERENCE = "select_reservation_reference"
     SELECT_FIELD = "select_field"
     INPUT_VALUE = "input_value"
     EDITABLE_FIELDS = ("name", "people", "date", "time")
@@ -100,7 +110,7 @@ class UpdateReservationAgent:
         if stage is None:
             return self._start_update(db, session, owner_customer_id)
 
-        if stage == self.SELECT_RESERVATION_ID:
+        if stage == self.SELECT_RESERVATION_REFERENCE:
             return self._select_reservation(db, session, user_message, owner_customer_id)
 
         if stage == self.SELECT_FIELD:
@@ -145,11 +155,18 @@ class UpdateReservationAgent:
         session: dict[str, Any],
         owner_customer_id,
     ) -> dict[str, Any]:
-        reservations = self.reservation_service.list_recent_reservations(
-            db,
-            owner_customer_id=owner_customer_id,
-            limit=5,
-        )
+        try:
+            reservations = self.reservation_service.list_recent_reservations(
+                db,
+                owner_customer_id=owner_customer_id,
+                limit=5,
+            )
+        except PublicReservationReferenceUnavailableError:
+            self._clear_update_state(session)
+            return {
+                "status": "reference_unavailable",
+                "response": REFERENCE_DATA_UNAVAILABLE_RESPONSE,
+            }
         recent_reservations = reservations[:5]
 
         self._clear_update_state(session)
@@ -159,7 +176,7 @@ class UpdateReservationAgent:
                 "response": "Belum ada reservasi yang dapat diubah.",
             }
 
-        session["update_reservation_stage"] = self.SELECT_RESERVATION_ID
+        session["update_reservation_stage"] = self.SELECT_RESERVATION_REFERENCE
         records = "\n\n".join(
             self._format_reservation(reservation)
             for reservation in recent_reservations
@@ -168,7 +185,7 @@ class UpdateReservationAgent:
             "status": "awaiting_update",
             "response": (
                 f"Daftar reservasi terbaru:\n\n{records}\n\n"
-                "Pilih ID reservasi yang ingin diubah."
+                "Pilih referensi reservasi yang ingin diubah."
             ),
         }
 
@@ -179,29 +196,36 @@ class UpdateReservationAgent:
         user_message: str,
         owner_customer_id,
     ) -> dict[str, Any]:
-        reservation_id = self._parse_reservation_id(user_message)
-        if reservation_id is None:
+        parsed = parse_public_reservation_reference(user_message)
+        if parsed.status is PublicReferenceParseStatus.AMBIGUOUS:
             return {
                 "status": "awaiting_update",
-                "response": "Masukkan ID reservasi yang valid.",
+                "response": REFERENCE_AMBIGUITY_GUIDANCE,
                 "invalid_input": True,
             }
+        if parsed.status is not PublicReferenceParseStatus.VALID:
+            return {
+                "status": "awaiting_update",
+                "response": REFERENCE_INPUT_GUIDANCE,
+                "invalid_input": True,
+            }
+        reservation_reference = parsed.reference
 
-        reservation = self.reservation_service.get_reservation_by_id(
+        reservation = self.reservation_service.get_reservation_by_reference(
             db,
-            reservation_id,
+            reservation_reference,
             owner_customer_id=owner_customer_id,
         )
         if reservation is None:
             return {
                 "status": "awaiting_update",
-                "response": "ID reservasi tidak ditemukan. Pilih ID yang tersedia.",
+                "response": REFERENCE_NOT_FOUND_RESPONSE,
                 "invalid_input": True,
             }
 
         session.update(
             {
-                "reservation_id": reservation_id,
+                "reservation_reference": reservation_reference,
                 "editing_field": None,
                 "update_reservation_stage": self.SELECT_FIELD,
             }
@@ -242,10 +266,19 @@ class UpdateReservationAgent:
         user_message: str,
         owner_customer_id,
     ) -> dict[str, Any]:
-        reservation_id = session.get("reservation_id")
+        reservation_reference = session.get("reservation_reference")
         field_name = session.get("editing_field")
 
-        if not isinstance(reservation_id, int) or field_name not in self.EDITABLE_FIELDS:
+        try:
+            reservation_reference = require_canonical_public_reference(
+                reservation_reference
+            )
+        except PublicReservationReferenceUnavailableError:
+            reservation_reference = None
+        if (
+            reservation_reference is None
+            or field_name not in self.EDITABLE_FIELDS
+        ):
             self._clear_update_state(session)
             return {
                 "status": "awaiting_update",
@@ -269,13 +302,21 @@ class UpdateReservationAgent:
                 operation="update",
             )
         try:
-            updated_reservation = self.reservation_service.update_reservation_field(
-                db,
-                reservation_id,
-                field_name,
-                new_value,
-                owner_customer_id=owner_customer_id,
+            updated_reservation = (
+                self.reservation_service.update_reservation_field_by_reference(
+                    db,
+                    reservation_reference,
+                    field_name,
+                    new_value,
+                    owner_customer_id=owner_customer_id,
+                )
             )
+        except PublicReservationReferenceUnavailableError:
+            self.memory_manager.replace_conversation(session_id, snapshot)
+            return {
+                "status": "reference_unavailable",
+                "response": REFERENCE_DATA_UNAVAILABLE_RESPONSE,
+            }
         except PersistenceOutcomeUnknownError:
             publish_reservation_persistence_blocker(
                 self.memory_manager,
@@ -317,7 +358,7 @@ class UpdateReservationAgent:
                 )
             return {
                 "status": "awaiting_update",
-                "response": "ID reservasi tidak ditemukan. Mulai lagi dengan 'ubah reservasi saya'.",
+                "response": REFERENCE_NOT_FOUND_RESPONSE,
             }
 
         publication_failed = False
@@ -346,15 +387,16 @@ class UpdateReservationAgent:
         return {
             "status": "updated",
             "response": response,
+            "reservation_operation": ReservationOperationResult(
+                ReservationOperationType.UPDATED,
+                reservation_reference,
+            ),
         }
 
     def _clear_update_state(self, session: dict[str, Any]) -> None:
         session["update_reservation_stage"] = None
-        session["reservation_id"] = None
+        session["reservation_reference"] = None
         session["editing_field"] = None
-
-    def _parse_reservation_id(self, user_message: str) -> int | None:
-        return parse_reservation_id(user_message)
 
     def _resolve_field(self, user_message: str) -> str | None:
         return parse_target_field(user_message)
@@ -432,7 +474,7 @@ class UpdateReservationAgent:
 
     def _format_reservation(self, reservation: Any) -> str:
         return (
-            f"ID: {reservation.id}\n"
+            f"Referensi reservasi: {reservation.reference}\n"
             f"Nama: {reservation.name}\n"
             f"Jumlah Orang: {reservation.people}\n"
             f"Tanggal: {reservation.date}\n"

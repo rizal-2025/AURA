@@ -4,7 +4,14 @@ from sqlalchemy.orm import Session
 
 from app.brain.indonesian_nlu import parse_confirmation
 from app.brain.memory_manager import MemoryManager
-from app.brain.reservation_entity_extractor import parse_reservation_id
+from app.brain.reservation_entity_extractor import (
+    REFERENCE_AMBIGUITY_GUIDANCE,
+    REFERENCE_DATA_UNAVAILABLE_RESPONSE,
+    REFERENCE_INPUT_GUIDANCE,
+    REFERENCE_NOT_FOUND_RESPONSE,
+    PublicReferenceParseStatus,
+    parse_public_reservation_reference,
+)
 from app.brain.reservation_memory import (
     COMMITTED_OPERATION_FORMAT_FALLBACK_RESPONSE,
     OUTCOME_UNKNOWN,
@@ -22,12 +29,17 @@ from app.core.transaction_errors import (
     TransactionSessionUnusableError,
 )
 from app.services.reservation.service import ReservationService
+from app.services.reservation.public_reference import (
+    PublicReservationReferenceUnavailableError,
+    require_canonical_public_reference,
+)
+from app.agents.result import ReservationOperationResult, ReservationOperationType
 
 
 class CancelReservationAgent:
     """Guide a user through cancelling an existing reservation."""
 
-    SELECT_RESERVATION_ID = "select_reservation_id"
+    SELECT_RESERVATION_REFERENCE = "select_reservation_reference"
     CONFIRM_CANCELLATION = "confirm_cancellation"
 
     def __init__(
@@ -74,7 +86,7 @@ class CancelReservationAgent:
         if stage is None:
             return self._start_cancellation(db, session, owner_customer_id)
 
-        if stage == self.SELECT_RESERVATION_ID:
+        if stage == self.SELECT_RESERVATION_REFERENCE:
             return self._select_reservation(db, session, user_message, owner_customer_id)
 
         if stage == self.CONFIRM_CANCELLATION:
@@ -95,11 +107,18 @@ class CancelReservationAgent:
         session: dict[str, Any],
         owner_customer_id,
     ) -> dict[str, Any]:
-        reservations = self.reservation_service.list_recent_reservations(
-            db,
-            owner_customer_id=owner_customer_id,
-            limit=5,
-        )
+        try:
+            reservations = self.reservation_service.list_recent_reservations(
+                db,
+                owner_customer_id=owner_customer_id,
+                limit=5,
+            )
+        except PublicReservationReferenceUnavailableError:
+            self._clear_cancellation_state(session)
+            return {
+                "status": "reference_unavailable",
+                "response": REFERENCE_DATA_UNAVAILABLE_RESPONSE,
+            }
         recent_reservations = reservations[:5]
 
         self._clear_cancellation_state(session)
@@ -109,7 +128,7 @@ class CancelReservationAgent:
                 "response": "Belum ada reservasi yang dapat dibatalkan.",
             }
 
-        session["cancel_reservation_stage"] = self.SELECT_RESERVATION_ID
+        session["cancel_reservation_stage"] = self.SELECT_RESERVATION_REFERENCE
         records = "\n\n".join(
             self._format_reservation(reservation)
             for reservation in recent_reservations
@@ -118,7 +137,7 @@ class CancelReservationAgent:
             "status": "awaiting_cancellation",
             "response": (
                 f"Daftar reservasi terbaru:\n\n{records}\n\n"
-                "Pilih ID reservasi yang ingin dibatalkan."
+                "Pilih referensi reservasi yang ingin dibatalkan."
             ),
         }
 
@@ -129,36 +148,43 @@ class CancelReservationAgent:
         user_message: str,
         owner_customer_id,
     ) -> dict[str, Any]:
-        reservation_id = self._parse_reservation_id(user_message)
-        if reservation_id is None:
+        parsed = parse_public_reservation_reference(user_message)
+        if parsed.status is PublicReferenceParseStatus.AMBIGUOUS:
             return {
                 "status": "awaiting_cancellation",
-                "response": "Masukkan ID reservasi yang valid.",
+                "response": REFERENCE_AMBIGUITY_GUIDANCE,
                 "invalid_input": True,
             }
+        if parsed.status is not PublicReferenceParseStatus.VALID:
+            return {
+                "status": "awaiting_cancellation",
+                "response": REFERENCE_INPUT_GUIDANCE,
+                "invalid_input": True,
+            }
+        reservation_reference = parsed.reference
 
-        reservation = self.reservation_service.get_reservation_by_id(
+        reservation = self.reservation_service.get_reservation_by_reference(
             db,
-            reservation_id,
+            reservation_reference,
             owner_customer_id=owner_customer_id,
         )
         if reservation is None:
             return {
                 "status": "awaiting_cancellation",
-                "response": "ID reservasi tidak ditemukan. Pilih ID yang tersedia.",
+                "response": REFERENCE_NOT_FOUND_RESPONSE,
                 "invalid_input": True,
             }
 
         if self._is_cancelled(reservation):
-            session["cancel_reservation_id"] = None
+            session["cancel_reservation_reference"] = None
             return {
                 "status": "awaiting_cancellation",
-                "response": "Reservasi ini sudah dibatalkan. Pilih ID reservasi lain.",
+                "response": "Reservasi ini sudah dibatalkan. Pilih referensi reservasi lain.",
             }
 
         session.update(
             {
-                "cancel_reservation_id": reservation_id,
+                "cancel_reservation_reference": reservation_reference,
                 "cancel_reservation_stage": self.CONFIRM_CANCELLATION,
             }
         )
@@ -178,8 +204,13 @@ class CancelReservationAgent:
         user_message: str,
         owner_customer_id,
     ) -> dict[str, Any]:
-        reservation_id = session.get("cancel_reservation_id")
-        if not isinstance(reservation_id, int):
+        try:
+            reservation_reference = require_canonical_public_reference(
+                session.get("cancel_reservation_reference")
+            )
+        except PublicReservationReferenceUnavailableError:
+            reservation_reference = None
+        if reservation_reference is None:
             self._clear_cancellation_state(session)
             return {
                 "status": "awaiting_cancellation",
@@ -209,23 +240,33 @@ class CancelReservationAgent:
             )
         snapshot = self.memory_manager.snapshot_conversation(session_id)
         try:
-            cancelled_reservation = self.reservation_service.cancel_reservation(
-                db,
-                reservation_id,
-                owner_customer_id=owner_customer_id,
+            cancelled_reservation = (
+                self.reservation_service.cancel_reservation_by_reference(
+                    db,
+                    reservation_reference,
+                    owner_customer_id=owner_customer_id,
+                )
             )
             if cancelled_reservation is None:
-                # cancel_reservation owns and fully ends the atomic mutation
+                # The cancel operation owns and fully ends the atomic mutation
                 # transaction. This ownership-filtered reconciliation is a new,
                 # separate read transaction used only to preserve the safe
                 # already-cancelled versus unavailable response distinction.
-                current_reservation = self.reservation_service.get_reservation_by_id(
-                    db,
-                    reservation_id,
-                    owner_customer_id=owner_customer_id,
+                current_reservation = (
+                    self.reservation_service.get_reservation_by_reference(
+                        db,
+                        reservation_reference,
+                        owner_customer_id=owner_customer_id,
+                    )
                 )
             else:
                 current_reservation = None
+        except PublicReservationReferenceUnavailableError:
+            self.memory_manager.replace_conversation(session_id, snapshot)
+            return {
+                "status": "reference_unavailable",
+                "response": REFERENCE_DATA_UNAVAILABLE_RESPONSE,
+            }
         except PersistenceOutcomeUnknownError:
             publish_reservation_persistence_blocker(
                 self.memory_manager,
@@ -268,7 +309,7 @@ class CancelReservationAgent:
             if current_reservation is not None and self._is_cancelled(current_reservation):
                 response = "Reservasi ini sudah dibatalkan. Tidak ada perubahan tambahan."
             else:
-                response = "ID reservasi tidak ditemukan. Tidak ada perubahan pada reservasi."
+                response = REFERENCE_NOT_FOUND_RESPONSE
             return {
                 "status": "awaiting_cancellation",
                 "response": response,
@@ -284,21 +325,22 @@ class CancelReservationAgent:
         return {
             "status": "cancelled",
             "response": response,
+            "reservation_operation": ReservationOperationResult(
+                ReservationOperationType.CANCELLED,
+                reservation_reference,
+            ),
         }
 
     def _clear_cancellation_state(self, session: dict[str, Any]) -> None:
         session["cancel_reservation_stage"] = None
-        session["cancel_reservation_id"] = None
-
-    def _parse_reservation_id(self, user_message: str) -> int | None:
-        return parse_reservation_id(user_message)
+        session["cancel_reservation_reference"] = None
 
     def _is_cancelled(self, reservation: Any) -> bool:
         return str(getattr(reservation, "status", "")).lower() == "cancelled"
 
     def _format_reservation(self, reservation: Any) -> str:
         return (
-            f"ID: {reservation.id}\n"
+            f"Referensi reservasi: {reservation.reference}\n"
             f"Nama: {reservation.name}\n"
             f"Jumlah Orang: {reservation.people}\n"
             f"Tanggal: {reservation.date}\n"

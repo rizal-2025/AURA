@@ -9,6 +9,19 @@ from app.agents.view_reservation_agent import ViewReservationAgent
 from app.brain.classifier import IntentClassifier
 from app.db.models.reservation import Reservation
 from app.db.repositories.reservation_repository import ReservationRepository
+from app.services.reservation.public_reference import (
+    PublicReservationReferenceUnavailableError,
+)
+
+
+SEEDED_VIEW_RESERVATION_IDS = (
+    (2**30) + 104_759,
+    (2**30) + 104_761,
+)
+
+
+def reference_for(index: int) -> str:
+    return f"RSV_{index:032x}"
 
 
 class FakeQuery:
@@ -55,6 +68,7 @@ class TestViewReservation(unittest.TestCase):
         reservations = [
             SimpleNamespace(
                 id=reservation_id,
+                reference=reference_for(reservation_id),
                 name=f"User {reservation_id}",
                 people=reservation_id,
                 date="2026-07-20",
@@ -77,15 +91,51 @@ class TestViewReservation(unittest.TestCase):
             limit=5,
         )
         self.assertEqual(result["status"], "viewed")
-        self.assertIn("ID: 6", result["response"])
-        self.assertIn("ID: 2", result["response"])
-        self.assertNotIn("ID: 1", result["response"])
-        self.assertLess(result["response"].index("ID: 6"), result["response"].index("ID: 2"))
+        self.assertIn(reference_for(6), result["response"])
+        self.assertIn(reference_for(2), result["response"])
+        self.assertNotIn(reference_for(1), result["response"])
+        self.assertNotIn("ID:", result["response"])
+        self.assertLess(
+            result["response"].index(reference_for(6)),
+            result["response"].index(reference_for(2)),
+        )
         self.assertIn("Nama: User 6", result["response"])
         self.assertIn("Jumlah Orang: 6", result["response"])
         self.assertIn("Tanggal: 2026-07-20", result["response"])
         self.assertIn("Jam: 19:00", result["response"])
         self.assertIn("Status: pending", result["response"])
+
+    def test_view_reply_omits_exact_seeded_ids_for_distinct_references(self):
+        reservations = [
+            SimpleNamespace(
+                id=reservation_id,
+                reference=reference_for(reservation_id),
+                name="Nama Sama",
+                people=4,
+                date="2026-07-20",
+                time="19:00",
+                status="pending",
+            )
+            for reservation_id in reversed(SEEDED_VIEW_RESERVATION_IDS)
+        ]
+        service = MagicMock()
+        service.list_recent_reservations.return_value = reservations
+
+        result = asyncio.run(
+            ViewReservationAgent(reservation_service=service).run(
+                MagicMock(),
+                "seeded-view-session",
+                uuid4(),
+            )
+        )
+
+        for reservation_id in SEEDED_VIEW_RESERVATION_IDS:
+            self.assertNotIn(str(reservation_id), result["response"])
+            self.assertIn(reference_for(reservation_id), result["response"])
+        self.assertLess(
+            result["response"].index(reference_for(SEEDED_VIEW_RESERVATION_IDS[1])),
+            result["response"].index(reference_for(SEEDED_VIEW_RESERVATION_IDS[0])),
+        )
 
     def test_view_agent_returns_empty_message_when_no_reservations_exist(self):
         service = MagicMock()
@@ -95,6 +145,25 @@ class TestViewReservation(unittest.TestCase):
         result = asyncio.run(agent.run(MagicMock(), "memory-session", uuid4()))
 
         self.assertEqual(result, {"status": "viewed", "response": "Belum ada reservasi."})
+
+    def test_view_agent_fails_whole_response_for_unsafe_stored_reference(self):
+        service = MagicMock()
+        service.list_recent_reservations.side_effect = (
+            PublicReservationReferenceUnavailableError()
+        )
+        result = asyncio.run(
+            ViewReservationAgent(reservation_service=service).run(
+                MagicMock(),
+                "memory-session",
+                uuid4(),
+            )
+        )
+
+        self.assertEqual(result["status"], "reference_unavailable")
+        self.assertEqual(
+            result["response"],
+            "Data reservasi belum dapat ditampilkan dengan aman. Silakan coba lagi nanti.",
+        )
 
     def test_orchestrator_routes_view_request_without_changing_active_reservation_intent(self):
         orchestrator = AgentOrchestrator()
@@ -166,6 +235,7 @@ class TestViewReservation(unittest.TestCase):
         reservations = [
             SimpleNamespace(
                 id=9,
+                reference=reference_for(9),
                 name="Customer B",
                 people=2,
                 date="2026-07-20",
@@ -175,6 +245,7 @@ class TestViewReservation(unittest.TestCase):
             ),
             SimpleNamespace(
                 id=8,
+                reference=reference_for(8),
                 name="Legacy",
                 people=3,
                 date="2026-07-20",
@@ -184,6 +255,7 @@ class TestViewReservation(unittest.TestCase):
             ),
             SimpleNamespace(
                 id=7,
+                reference=reference_for(7),
                 name="Customer A 2",
                 people=4,
                 date="2026-07-20",
@@ -193,6 +265,7 @@ class TestViewReservation(unittest.TestCase):
             ),
             SimpleNamespace(
                 id=6,
+                reference=reference_for(6),
                 name="Customer A 1",
                 people=5,
                 date="2026-07-20",
@@ -216,8 +289,8 @@ class TestViewReservation(unittest.TestCase):
             ).run(MagicMock(), "memory-session", "customer-a")
         )
 
-        self.assertIn("ID: 7", result["response"])
-        self.assertIn("ID: 6", result["response"])
+        self.assertIn(reference_for(7), result["response"])
+        self.assertIn(reference_for(6), result["response"])
         self.assertNotIn("Customer B", result["response"])
         self.assertNotIn("Legacy", result["response"])
 

@@ -13,6 +13,8 @@ from unittest.mock import patch
 from uuid import uuid4
 import httpx
 
+from app.agents.orchestrator import AgentOrchestrator
+from app.core.conversation_memory import build_authenticated_memory_key
 from app.core.config import Settings
 from app.core.conversation_lock_manager import ConversationBusyError
 from app.core.logger import RedactingFormatter, configure_safe_logging, logger
@@ -39,10 +41,13 @@ from app.integrations.telegram.identity_service import (
 )
 from app.db.repositories.telegram_identity_repository import TelegramIdentityRepository
 from app.services.authenticated_chat_service import AuthenticatedChatService
+from app.services.reservation.dto import PersistedReservationDTO
 
 
 IDENTITY_SECRET = "telegram-identity-secret-that-is-long-enough"
 VALID_TOKEN = "123456789:abcdefghijklmnopqrstuvwxyzABCDE"
+SEEDED_TELEGRAM_RESERVATION_ID = (2**30) + 104_803
+TELEGRAM_REFERENCE = "RSV_" + "d2" * 16
 
 
 class FakeDb:
@@ -272,6 +277,84 @@ class TelegramHandlerTests(unittest.TestCase):
         self.assertEqual(call["message"], "lihat reservasi saya")
         self.assertEqual(call["customer"], self.identity.customers[1001])
         self.assertRegex(call["session_reference"], r"^[0-9a-f]{64}$")
+
+    def test_seeded_reservation_reply_is_safe_at_telegram_transport(self):
+        user_id = 1001
+        chat_id = 2001
+        customer = SimpleNamespace(id=uuid4(), is_active=True)
+        identity = FakeIdentityService()
+        identity.customers[user_id] = customer
+        session_reference = derive_telegram_session_reference(
+            IDENTITY_SECRET,
+            user_id,
+            chat_id,
+        )
+        memory_key = build_authenticated_memory_key(
+            customer.id,
+            session_reference,
+        )
+        orchestrator = AgentOrchestrator()
+        orchestrator.memory_manager.update_session(
+            memory_key,
+            {
+                "intent": "reservation",
+                "name": "Rizal",
+                "people": 4,
+                "date": "2026-08-01",
+                "time": "19:00",
+                "completed": False,
+                "awaiting_confirmation": True,
+                "editing_field": None,
+                "asked_fields": ["name", "people", "date", "time"],
+            },
+        )
+        persisted = PersistedReservationDTO(
+            id=SEEDED_TELEGRAM_RESERVATION_ID,
+            name="Rizal",
+            people=4,
+            date="2026-08-01",
+            time="19:00",
+            status="pending",
+            reference=TELEGRAM_REFERENCE,
+        )
+        reservation_agent = orchestrator.workflow._agents["reservation"]
+        db = FakeDb()
+        handlers = TelegramCustomerHandlers(
+            identity_secret=IDENTITY_SECRET,
+            session_factory=lambda: db,
+            identity_service=identity,
+            chat_service=AuthenticatedChatService(agent=orchestrator),
+        )
+        update = private_update(
+            user_id=user_id,
+            chat_id=chat_id,
+            text="Ya",
+        )
+
+        with patch.object(
+            orchestrator.handoff_service,
+            "restore_active_handoff",
+            return_value=None,
+        ), patch.object(
+            reservation_agent.reservation_service,
+            "create_reservation",
+            return_value=persisted,
+        ) as create_reservation:
+            asyncio.run(handlers.text_message(update, None))
+
+        outbound_text = "".join(
+            chunk for chunk, _kwargs in update.effective_message.replies
+        )
+        self.assertNotIn(
+            str(SEEDED_TELEGRAM_RESERVATION_ID),
+            outbound_text,
+        )
+        self.assertIn(TELEGRAM_REFERENCE, outbound_text)
+        self.assertEqual(
+            "".join(split_telegram_reply(outbound_text)),
+            outbound_text,
+        )
+        create_reservation.assert_called_once()
 
     def test_busy_customer_message_returns_safe_reply(self):
         class BusyChatService(FakeChatService):

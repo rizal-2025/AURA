@@ -97,6 +97,7 @@ def reservation_value(identifier=17, *, people=4, status="pending"):
         date="2026-08-01",
         time="19:00",
         status=status,
+        public_reference="RSV_17171717171717171717171717171717",
     )
 
 
@@ -108,6 +109,7 @@ def reservation_dto(identifier=17, *, people=4, status="pending"):
         date="2026-08-01",
         time="19:00",
         status=status,
+        reference="RSV_17171717171717171717171717171717",
     )
 
 
@@ -236,15 +238,23 @@ class ReservationTransactionTests(unittest.TestCase):
                 repository = ReservationRepository()
                 with patch.object(
                     repository,
-                    "get_by_id",
+                    "get_by_public_reference",
                     side_effect=AssertionError("post-commit query is forbidden"),
                 ):
                     if operation == "update":
-                        result = repository.update_reservation_field(
-                            db, 17, "people", 5, uuid4()
+                        result = repository.update_reservation_field_by_public_reference(
+                            db,
+                            "RSV_17171717171717171717171717171717",
+                            "people",
+                            5,
+                            uuid4(),
                         )
                     else:
-                        result = repository.cancel_reservation(db, 17, uuid4())
+                        result = repository.cancel_reservation_by_public_reference(
+                            db,
+                            "RSV_17171717171717171717171717171717",
+                            uuid4(),
+                        )
                 self.assertEqual(result.id, 17)
                 db.commit.assert_not_called()
                 db.rollback.assert_not_called()
@@ -277,14 +287,14 @@ class ReservationTransactionTests(unittest.TestCase):
         service = ReservationService(repository=repository)
         db = SpySession()
         with self.assertRaises(Exception):
-            service.update_reservation_field(
+            service.update_reservation_field_by_reference(
                 db,
-                17,
+                "RSV_17171717171717171717171717171717",
                 "people",
                 0,
                 owner_customer_id=uuid4(),
             )
-        repository.update_reservation_field.assert_not_called()
+        repository.update_reservation_field_by_public_reference.assert_not_called()
         self.assertEqual(db.commits, 0)
         self.assertEqual(db.rollbacks, 0)
 
@@ -308,7 +318,7 @@ class ReservationTransactionTests(unittest.TestCase):
 
 
 class ChatReservationTransactionTests(unittest.TestCase):
-    def test_conversational_create_uses_ingress_session_and_persisted_id(self):
+    def test_conversational_create_uses_ingress_session_and_public_reference(self):
         memory = MemoryManager()
         agent = ReservationAgent(memory_manager=memory)
         owner = uuid4()
@@ -334,8 +344,15 @@ class ChatReservationTransactionTests(unittest.TestCase):
                 db=db,
             )
         )
-        self.assertIn("321", result["response"])
-        self.assertEqual(memory.get_session("owner:session")["reservation_id"], 321)
+        self.assertIn(
+            "RSV_17171717171717171717171717171717",
+            result["response"],
+        )
+        self.assertNotIn("321", result["response"])
+        self.assertEqual(
+            memory.get_session("owner:session")["reservation_reference"],
+            "RSV_17171717171717171717171717171717",
+        )
         self.assertIs(
             agent.reservation_service.create_reservation.call_args.args[0],
             db,

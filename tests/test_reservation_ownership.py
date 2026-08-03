@@ -27,6 +27,7 @@ class InMemoryOwnedReservationService:
                 time="18:00",
                 status="pending",
                 owner_customer_id=None,
+                reference="RSV_44444444444444444444444444444444",
             ),
             3: SimpleNamespace(
                 id=3,
@@ -36,6 +37,7 @@ class InMemoryOwnedReservationService:
                 time="19:00",
                 status="pending",
                 owner_customer_id="customer-b",
+                reference="RSV_33333333333333333333333333333333",
             ),
             2: SimpleNamespace(
                 id=2,
@@ -45,6 +47,7 @@ class InMemoryOwnedReservationService:
                 time="20:00",
                 status="pending",
                 owner_customer_id="customer-a",
+                reference="RSV_22222222222222222222222222222222",
             ),
         }
         self.update_calls = []
@@ -60,25 +63,30 @@ class InMemoryOwnedReservationService:
             reverse=True,
         )[:limit]
 
-    def get_reservation_by_id(self, db, reservation_id, owner_customer_id):
-        reservation = self.reservations.get(reservation_id)
-        if reservation is None or reservation.owner_customer_id != owner_customer_id:
-            return None
-        return reservation
+    def get_reservation_by_reference(self, db, reference, owner_customer_id):
+        return next(
+            (
+                reservation
+                for reservation in self.reservations.values()
+                if reservation.reference == reference
+                and reservation.owner_customer_id == owner_customer_id
+            ),
+            None,
+        )
 
-    def update_reservation_field(
+    def update_reservation_field_by_reference(
         self,
         db,
-        reservation_id,
+        reference,
         field_name,
         new_value,
         owner_customer_id,
     ):
-        reservation = self.get_reservation_by_id(db, reservation_id, owner_customer_id)
+        reservation = self.get_reservation_by_reference(db, reference, owner_customer_id)
         if reservation is None:
             return None
         setattr(reservation, field_name, new_value)
-        self.update_calls.append((reservation_id, owner_customer_id))
+        self.update_calls.append((reference, owner_customer_id))
         return reservation
 
 
@@ -127,15 +135,21 @@ class TestReservationOwnership(unittest.TestCase):
 
         for operation in (
             lambda: repository.list_recent(db, owner_customer_id=None),
-            lambda: repository.get_by_id(db, 4, owner_customer_id=None),
-            lambda: repository.update_reservation_field(
+            lambda: repository.get_by_id_for_workflow_v1_conversion(
+                db, 4, owner_customer_id=None
+            ),
+            lambda: repository.update_reservation_field_by_public_reference(
                 db,
-                4,
+                "RSV_44444444444444444444444444444444",
                 "people",
                 5,
                 owner_customer_id=None,
             ),
-            lambda: repository.cancel_reservation(db, 4, owner_customer_id=None),
+            lambda: repository.cancel_reservation_by_public_reference(
+                db,
+                "RSV_44444444444444444444444444444444",
+                owner_customer_id=None,
+            ),
             lambda: repository.create(db, data, owner_customer_id=None),
         ):
             with self.subTest(operation=operation):
@@ -160,11 +174,23 @@ class TestReservationOwnership(unittest.TestCase):
 
         for operation in (
             lambda: service.list_recent_reservations(db, owner_customer_id=None),
-            lambda: service.get_reservation_by_id(db, 4, owner_customer_id=None),
-            lambda: service.update_reservation_field(
-                db, 4, "people", 5, owner_customer_id=None
+            lambda: service.get_reservation_by_reference(
+                db,
+                "RSV_44444444444444444444444444444444",
+                owner_customer_id=None,
             ),
-            lambda: service.cancel_reservation(db, 4, owner_customer_id=None),
+            lambda: service.update_reservation_field_by_reference(
+                db,
+                "RSV_44444444444444444444444444444444",
+                "people",
+                5,
+                owner_customer_id=None,
+            ),
+            lambda: service.cancel_reservation_by_reference(
+                db,
+                "RSV_44444444444444444444444444444444",
+                owner_customer_id=None,
+            ),
             lambda: service.create_reservation(db, data, owner_customer_id=None),
         ):
             with self.subTest(operation=operation):
@@ -281,13 +307,35 @@ class TestReservationOwnership(unittest.TestCase):
         self.assertIn("Budi", customer_b_list["response"])
         self.assertNotIn("Rizal", customer_b_list["response"])
 
-        selected = asyncio.run(agent.run(db, "session-a", "2", "customer-a"))
-        foreign_selection = asyncio.run(agent.run(db, "session-b", "2", "customer-b"))
+        selected = asyncio.run(
+            agent.run(
+                db,
+                "session-a",
+                "RSV_22222222222222222222222222222222",
+                "customer-a",
+            )
+        )
+        foreign_selection = asyncio.run(
+            agent.run(
+                db,
+                "session-b",
+                "RSV_22222222222222222222222222222222",
+                "customer-b",
+            )
+        )
 
         self.assertIn("Reservasi dipilih", selected["response"])
-        self.assertIn("ID reservasi tidak ditemukan", foreign_selection["response"])
-        self.assertEqual(memory.get_session("session-a")["reservation_id"], 2)
-        self.assertIsNone(memory.get_session("session-b").get("reservation_id"))
+        self.assertEqual(
+            foreign_selection["response"],
+            "Referensi reservasi tidak ditemukan.",
+        )
+        self.assertEqual(
+            memory.get_session("session-a")["reservation_reference"],
+            "RSV_22222222222222222222222222222222",
+        )
+        self.assertIsNone(
+            memory.get_session("session-b").get("reservation_reference")
+        )
 
     def test_legacy_null_record_is_not_exposed_to_view(self):
         service = InMemoryOwnedReservationService()

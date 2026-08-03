@@ -11,11 +11,10 @@ from app.brain.reservation_workflow_snapshot import (
     WORKFLOW_SCHEMA_VERSION_V2,
     ReservationWorkflowSnapshot,
     build_workflow_snapshot_v2,
-    capture_reservation_workflow_snapshot,
+    capture_reservation_workflow_snapshot_v2,
     decode_workflow_snapshot_v1,
     decode_workflow_snapshot_v2,
-    mutation_blocker_snapshot,
-    validate_persisted_workflow_snapshot,
+    mutation_blocker_snapshot_v2,
 )
 from app.core.memory_errors import (
     ConversationMemoryError,
@@ -45,6 +44,12 @@ class WorkflowV1ConversionOutcome(str, Enum):
     ALREADY_V2 = "already_v2"
     UNAVAILABLE = "unavailable"
     REVISION_CONFLICT = "revision_conflict"
+
+
+class WorkflowRestoreOutcome(str, Enum):
+    RESTORED = "restored"
+    EMPTY = "empty"
+    LEGACY_UNAVAILABLE = "legacy_unavailable"
 
 
 class _WorkflowConversionRecoverySignal(PersistenceOperationError):
@@ -86,7 +91,13 @@ class ConversationWorkflowStateService:
     def hash_session_reference(memory_key: str) -> str:
         return TicketService.hash_session_reference(memory_key)
 
-    def restore(self, db, *, owner_customer_id, memory_key: str) -> None:
+    def _read_stored_state(
+        self,
+        db,
+        *,
+        owner_customer_id,
+        memory_key: str,
+    ) -> dict | None:
         require_owner_customer_id(owner_customer_id)
         session_hash = self.hash_session_reference(memory_key)
         try:
@@ -96,16 +107,18 @@ class ConversationWorkflowStateService:
                     owner_customer_id=owner_customer_id,
                     session_reference_hash=session_hash,
                 )
-                if row is None:
-                    stored = None
-                else:
-                    stored = {
+                stored = (
+                    None
+                    if row is None
+                    else {
                         "schema_version": row.schema_version,
                         "payload": deepcopy(row.payload),
                         "is_active": row.is_active,
                         "revision": row.revision,
                     }
+                )
                 unit.commit()
+            return stored
         except (
             PersistenceOperationError,
             PersistenceOutcomeUnknownError,
@@ -115,37 +128,102 @@ class ConversationWorkflowStateService:
         except Exception:
             raise ConversationWorkflowRecoveryError() from None
 
+    @staticmethod
+    def _validate_stored_envelope(stored: dict) -> None:
+        if (
+            type(stored) is not dict
+            or set(stored)
+            != {"schema_version", "payload", "is_active", "revision"}
+            or type(stored["revision"]) is not int
+            or stored["revision"] < 1
+            or type(stored["is_active"]) is not bool
+            or type(stored["schema_version"]) is not int
+        ):
+            raise ConversationWorkflowRecoveryError()
+
+    def restore(
+        self,
+        db,
+        *,
+        owner_customer_id,
+        memory_key: str,
+    ) -> WorkflowRestoreOutcome:
+        stored = self._read_stored_state(
+            db,
+            owner_customer_id=owner_customer_id,
+            memory_key=memory_key,
+        )
+        legacy_unavailable = False
         try:
             if stored is None:
-                self.memory_manager.replace_reservation_workflow_state(
-                    memory_key,
-                    {},
-                )
-                self.memory_manager.set_workflow_persistence_revision(
-                    memory_key,
-                    0,
-                )
-                return
-
-            if (
-                type(stored["revision"]) is not int
-                or stored["revision"] < 1
-                or type(stored["is_active"]) is not bool
-                or type(stored["schema_version"]) is not int
-                or stored["schema_version"] != WORKFLOW_SCHEMA_VERSION
-            ):
-                raise ConversationWorkflowRecoveryError()
-
-            if stored["is_active"]:
-                snapshot = validate_persisted_workflow_snapshot(
-                    stored["payload"],
-                    schema_version=stored["schema_version"],
-                )
-                restored_state = snapshot.materialize()
-            else:
-                if type(stored["payload"]) is not dict or stored["payload"]:
-                    raise ConversationWorkflowRecoveryError()
                 restored_state = {}
+                revision = 0
+            else:
+                self._validate_stored_envelope(stored)
+                if stored["schema_version"] == WORKFLOW_SCHEMA_VERSION:
+                    conversion = self.convert_v1_state_to_v2(
+                        db,
+                        owner_customer_id=owner_customer_id,
+                        memory_key=memory_key,
+                        expected_revision=stored["revision"],
+                    )
+                    if conversion is WorkflowV1ConversionOutcome.REVISION_CONFLICT:
+                        stored = self._read_stored_state(
+                            db,
+                            owner_customer_id=owner_customer_id,
+                            memory_key=memory_key,
+                        )
+                        if stored is None:
+                            legacy_unavailable = True
+                        else:
+                            self._validate_stored_envelope(stored)
+                            if stored["schema_version"] == WORKFLOW_SCHEMA_VERSION:
+                                conversion = self.convert_v1_state_to_v2(
+                                    db,
+                                    owner_customer_id=owner_customer_id,
+                                    memory_key=memory_key,
+                                    expected_revision=stored["revision"],
+                                )
+                                if (
+                                    conversion
+                                    is WorkflowV1ConversionOutcome.REVISION_CONFLICT
+                                ):
+                                    raise ConversationWorkflowRecoveryError()
+                            elif (
+                                stored["schema_version"]
+                                != WORKFLOW_SCHEMA_VERSION_V2
+                            ):
+                                raise ConversationWorkflowRecoveryError()
+                    legacy_unavailable = (
+                        legacy_unavailable
+                        or conversion is WorkflowV1ConversionOutcome.UNAVAILABLE
+                    )
+                    stored = self._read_stored_state(
+                        db,
+                        owner_customer_id=owner_customer_id,
+                        memory_key=memory_key,
+                    )
+                    if stored is None:
+                        restored_state = {}
+                        revision = 0
+                        legacy_unavailable = True
+                    else:
+                        self._validate_stored_envelope(stored)
+
+                if stored is not None:
+                    if stored["schema_version"] != WORKFLOW_SCHEMA_VERSION_V2:
+                        raise ConversationWorkflowRecoveryError()
+                    revision = stored["revision"]
+                    if stored["is_active"]:
+                        snapshot = decode_workflow_snapshot_v2(
+                            stored["payload"],
+                            schema_version=stored["schema_version"],
+                        )
+                        restored_state = snapshot.materialize()
+                    else:
+                        if type(stored["payload"]) is not dict or stored["payload"]:
+                            raise ConversationWorkflowRecoveryError()
+                        restored_state = {}
 
             self.memory_manager.replace_reservation_workflow_state(
                 memory_key,
@@ -153,9 +231,22 @@ class ConversationWorkflowStateService:
             )
             self.memory_manager.set_workflow_persistence_revision(
                 memory_key,
-                stored["revision"],
+                revision,
+            )
+            if legacy_unavailable:
+                return WorkflowRestoreOutcome.LEGACY_UNAVAILABLE
+            return (
+                WorkflowRestoreOutcome.RESTORED
+                if restored_state
+                else WorkflowRestoreOutcome.EMPTY
             )
         except ConversationWorkflowRecoveryError:
+            raise
+        except (
+            PersistenceOperationError,
+            PersistenceOutcomeUnknownError,
+            TransactionSessionUnusableError,
+        ):
             raise
         except ConversationMemoryError:
             raise ConversationWorkflowRecoveryError() from None
@@ -164,7 +255,7 @@ class ConversationWorkflowStateService:
 
     def publish(self, db, *, owner_customer_id, memory_key: str) -> None:
         try:
-            snapshot = capture_reservation_workflow_snapshot(
+            snapshot = capture_reservation_workflow_snapshot_v2(
                 self.memory_manager,
                 memory_key,
             )
@@ -187,11 +278,7 @@ class ConversationWorkflowStateService:
         memory_key: str,
         expected_revision: int,
     ) -> WorkflowV1ConversionOutcome:
-        """Convert one locked legacy row without exposing v2 to old runtime.
-
-        This is an explicit Phase-B integration primitive. ``restore`` and
-        ``publish`` deliberately remain schema-v1-only during Phase A.
-        """
+        """Convert one locked legacy row without exposing numeric runtime state."""
 
         require_owner_customer_id(owner_customer_id)
         if type(expected_revision) is not int or expected_revision < 1:
@@ -368,7 +455,7 @@ class ConversationWorkflowStateService:
         owner_customer_id,
         reservation_id: int,
     ) -> str | None:
-        row = self.reservation_repository.get_by_id(
+        row = self.reservation_repository.get_by_id_for_workflow_v1_conversion(
             db,
             reservation_id,
             owner_customer_id,
@@ -400,7 +487,7 @@ class ConversationWorkflowStateService:
             # first, which initializes this scope before mutation processing.
             return
         try:
-            current = capture_reservation_workflow_snapshot(
+            current = capture_reservation_workflow_snapshot_v2(
                 self.memory_manager,
                 memory_key,
             )
@@ -423,7 +510,7 @@ class ConversationWorkflowStateService:
                 db,
                 owner_customer_id=owner_customer_id,
                 memory_key=memory_key,
-                snapshot=mutation_blocker_snapshot(operation),
+                snapshot=mutation_blocker_snapshot_v2(operation),
             )
         except ConversationWorkflowPublicationError:
             raise
@@ -446,9 +533,9 @@ class ConversationWorkflowStateService:
         if snapshot is None:
             payload = {}
         else:
-            payload = validate_persisted_workflow_snapshot(
+            payload = decode_workflow_snapshot_v2(
                 snapshot.materialize(),
-                schema_version=WORKFLOW_SCHEMA_VERSION,
+                schema_version=WORKFLOW_SCHEMA_VERSION_V2,
             ).materialize()
         is_active = snapshot is not None
 
@@ -469,7 +556,7 @@ class ConversationWorkflowStateService:
                         db,
                         owner_customer_id=owner_customer_id,
                         session_reference_hash=session_hash,
-                        schema_version=WORKFLOW_SCHEMA_VERSION,
+                        schema_version=WORKFLOW_SCHEMA_VERSION_V2,
                         payload=payload,
                         is_active=True,
                     )
@@ -482,7 +569,7 @@ class ConversationWorkflowStateService:
                     raise PersistenceOperationError()
                 self.repository.replace(
                     row,
-                    schema_version=WORKFLOW_SCHEMA_VERSION,
+                    schema_version=WORKFLOW_SCHEMA_VERSION_V2,
                     payload=payload,
                     is_active=is_active,
                 )

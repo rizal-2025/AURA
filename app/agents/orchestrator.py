@@ -4,6 +4,7 @@ from app.agents.workflow import AgentWorkflow
 from app.agents.cancel_reservation_agent import CancelReservationAgent
 from app.agents.update_reservation_agent import UpdateReservationAgent
 from app.agents.view_reservation_agent import ViewReservationAgent
+from app.agents.result import AgentTurnResult, ReservationOperationResult
 from app.brain.classifier import IntentClassifier
 from app.brain.memory_manager import MemoryManager
 from app.brain.planner import Planner
@@ -52,7 +53,41 @@ class AgentOrchestrator:
         )
         self.handoff_service = HandoffService(self.memory_manager)
 
+    async def handle_turn(
+        self,
+        session_id: str,
+        message: str,
+        db,
+        owner_customer_id=None,
+    ) -> AgentTurnResult:
+        result = await self._handle_raw(
+            session_id,
+            message,
+            db,
+            owner_customer_id,
+        )
+        if type(result) is AgentTurnResult:
+            return result
+        return AgentTurnResult(reply=result)
+
     async def handle(
+        self,
+        session_id: str,
+        message: str,
+        db,
+        owner_customer_id=None,
+    ) -> str:
+        """Compatibility text adapter; authenticated code uses handle_turn."""
+
+        result = await self.handle_turn(
+            session_id,
+            message,
+            db,
+            owner_customer_id,
+        )
+        return result.reply
+
+    async def _handle_raw(
         self,
         session_id: str,
         message: str,
@@ -376,8 +411,6 @@ class AgentOrchestrator:
                 db=db,
             )
 
-            response_text = workflow_result.get("response", "")
-
             if intent == "reservation":
                 if workflow_result.get("invalid_input"):
                     attempt_count = self.handoff_service.record_invalid_input(
@@ -404,7 +437,7 @@ class AgentOrchestrator:
                     },
                 )
 
-            return response_text
+            return self._turn_result_from_agent_payload(workflow_result)
 
         try:
             return await self.ai.chat(message)
@@ -466,15 +499,20 @@ class AgentOrchestrator:
             == "cancel_reservation"
         )
 
-    async def _view_reservations(self, db, session_id: str, owner_customer_id) -> str:
+    async def _view_reservations(
+        self,
+        db,
+        session_id: str,
+        owner_customer_id,
+    ) -> AgentTurnResult:
         if not self._has_authenticated_owner(owner_customer_id):
-            return self._authorization_error_response()
+            return AgentTurnResult(reply=self._authorization_error_response())
         result = await self.view_reservation_agent.run(
             db,
             session_id,
             owner_customer_id,
         )
-        return result.get("response", "")
+        return self._turn_result_from_agent_payload(result)
 
     async def _update_reservation(
         self,
@@ -482,9 +520,9 @@ class AgentOrchestrator:
         session_id: str,
         message: str,
         owner_customer_id,
-    ) -> str:
+    ) -> AgentTurnResult:
         if not self._has_authenticated_owner(owner_customer_id):
-            return self._authorization_error_response()
+            return AgentTurnResult(reply=self._authorization_error_response())
         result = await self.update_reservation_agent.run(
             db,
             session_id,
@@ -509,7 +547,7 @@ class AgentOrchestrator:
             session.get("update_reservation_stage"),
             session.get("editing_field"),
         )
-        return result.get("response", "")
+        return self._turn_result_from_agent_payload(result)
 
     async def _cancel_reservation(
         self,
@@ -517,9 +555,9 @@ class AgentOrchestrator:
         session_id: str,
         message: str,
         owner_customer_id,
-    ) -> str:
+    ) -> AgentTurnResult:
         if not self._has_authenticated_owner(owner_customer_id):
-            return self._authorization_error_response()
+            return AgentTurnResult(reply=self._authorization_error_response())
         result = await self.cancel_reservation_agent.run(
             db,
             session_id,
@@ -543,7 +581,18 @@ class AgentOrchestrator:
             result.get("status"),
             session.get("cancel_reservation_stage"),
         )
-        return result.get("response", "")
+        return self._turn_result_from_agent_payload(result)
+
+    @staticmethod
+    def _turn_result_from_agent_payload(result: dict) -> AgentTurnResult:
+        reply = result.get("response", "")
+        operation = result.get("reservation_operation")
+        if operation is not None and type(operation) is not ReservationOperationResult:
+            raise ValueError("INVALID_RESERVATION_OPERATION")
+        return AgentTurnResult(
+            reply=reply,
+            reservation_operation=operation,
+        )
 
     @staticmethod
     def _has_authenticated_owner(owner_customer_id) -> bool:

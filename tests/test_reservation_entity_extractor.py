@@ -4,8 +4,9 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from app.brain.reservation_entity_extractor import (
+    PublicReferenceParseStatus,
     ReservationEntityExtractor,
-    parse_reservation_id,
+    parse_public_reservation_reference,
 )
 from app.agents.reservation_agent import ReservationAgent
 
@@ -48,20 +49,155 @@ class TestReservationEntityExtractor(unittest.TestCase):
 
         self.assertEqual(result, {})
 
-    def test_natural_reservation_selection_is_bounded(self):
+    def test_public_reference_selection_is_bounded_and_canonical(self):
+        canonical = "RSV_" + "ab" * 16
+        mixed = "rSv_" + "Ab" * 16
+        for message in (
+            mixed,
+            f"referensi reservasi: {mixed}",
+            f"reservasi {mixed}",
+            f"pilih {mixed}",
+            f"gunakan referensi {mixed}.",
+        ):
+            with self.subTest(message=message):
+                parsed = parse_public_reservation_reference(message)
+                self.assertIs(parsed.status, PublicReferenceParseStatus.VALID)
+                self.assertEqual(parsed.reference, canonical)
+
+    def test_public_reference_accepts_one_matching_outer_pair_for_each_wrapper(self):
+        canonical = "RSV_" + "ab" * 16
+        mixed = "rSv_" + "Ab" * 16
+        wrappers = (
+            mixed,
+            f"referensi reservasi: {mixed}",
+            f"reservasi {mixed}",
+            f"pilih {mixed}",
+            f"gunakan referensi {mixed}",
+        )
+        pairs = (
+            ("(", ")"),
+            ("[", "]"),
+            ('"', '"'),
+            ("'", "'"),
+            ("\u201c", "\u201d"),
+            ("\u2018", "\u2019"),
+        )
+
+        for wrapper in wrappers:
+            for opener, closer in pairs:
+                for terminal in ("", ".", "!", "?", ",", ";"):
+                    message = f" {opener} {wrapper}{terminal} {closer} "
+                    with self.subTest(
+                        wrapper=wrapper,
+                        pair=opener + closer,
+                        terminal=terminal,
+                    ):
+                        parsed = parse_public_reservation_reference(message)
+                        self.assertIs(parsed.status, PublicReferenceParseStatus.VALID)
+                        self.assertEqual(parsed.reference, canonical)
+
+    def test_public_reference_rejects_mismatched_nested_and_partial_outer_pairs(self):
+        valid = "RSV_" + "ab" * 16
+        malformed = (
+            f"({valid}]",
+            f"[{valid})",
+            f"\u201c{valid}\u2019",
+            f"\u2018{valid}\u201d",
+            f"({valid}",
+            f"{valid})",
+            f"[{valid}",
+            f"{valid}]",
+            f'"{valid}',
+            f'{valid}"',
+            f"'{valid}",
+            f"{valid}'",
+            f"(({valid}))",
+            f"[[{valid}]]",
+            f'""{valid}""',
+            f"''{valid}''",
+            f"([{valid}])",
+            f"prefix ({valid})",
+            f"({valid}) suffix",
+            f"({valid}) dan lanjut",
+            f"({valid[:-1]}.{valid[-1]})",
+        )
+
+        for message in malformed:
+            with self.subTest(message=message):
+                parsed = parse_public_reservation_reference(message)
+                self.assertIs(parsed.status, PublicReferenceParseStatus.MALFORMED)
+                self.assertIsNone(parsed.reference)
+
+    def test_public_reference_rejects_adjacent_word_and_control_boundaries(self):
+        valid = "RSV_" + "ab" * 16
+        malformed = (
+            f"A{valid}",
+            f"{valid}Z",
+            f"7{valid}",
+            f"{valid}8",
+            f"_{valid}",
+            f"{valid}_",
+            f"\u00e9{valid}",
+            f"{valid}\u00e9",
+            f"\u0661{valid}",
+            f"{valid}\u0661",
+            f"\t{valid}",
+            f"{valid}\t",
+            f"\r{valid}",
+            f"{valid}\n",
+            f"{valid}\r\n",
+            f"reservasi\t{valid}",
+            f"gunakan\nreferensi {valid}",
+            f"({valid}\n)",
+        )
+
+        for message in malformed:
+            with self.subTest(message=message):
+                parsed = parse_public_reservation_reference(message)
+                self.assertIs(parsed.status, PublicReferenceParseStatus.MALFORMED)
+
+    def test_public_reference_precedence_is_deterministic(self):
+        first = "RSV_" + "ab" * 16
+        second = "RSV_" + "cd" * 16
+        malformed = "RSV_" + "g" * 32
+        cases = (
+            (f"{first} dan {second}", PublicReferenceParseStatus.AMBIGUOUS),
+            (f"({first}) {second}", PublicReferenceParseStatus.AMBIGUOUS),
+            (f"{first} {malformed}", PublicReferenceParseStatus.MALFORMED),
+            (f"{malformed} {first}", PublicReferenceParseStatus.MALFORMED),
+            (f"{malformed} {malformed}", PublicReferenceParseStatus.MALFORMED),
+            (f"{first} {first}", PublicReferenceParseStatus.AMBIGUOUS),
+            ("123456", PublicReferenceParseStatus.MALFORMED),
+            ("arbitrary-id", PublicReferenceParseStatus.MALFORMED),
+            ("belum punya referensi", PublicReferenceParseStatus.MISSING),
+        )
+
+        for message, status in cases:
+            with self.subTest(message=message):
+                parsed = parse_public_reservation_reference(message)
+                self.assertIs(parsed.status, status)
+                self.assertIsNone(parsed.reference)
+
+    def test_public_reference_parser_rejects_unsafe_selection(self):
+        valid = "RSV_" + "ab" * 16
         cases = {
-            "yang nomor dua": 2,
-            "reservasi nomor 2": 2,
-            "booking yang kedua": 2,
-            "pesanan saya yang nomor tiga": 3,
+            "": PublicReferenceParseStatus.MISSING,
+            "referensi reservasi belum ada": PublicReferenceParseStatus.MISSING,
+            "2": PublicReferenceParseStatus.MALFORMED,
+            "ABC-123": PublicReferenceParseStatus.MALFORMED,
+            "RSV_abc": PublicReferenceParseStatus.MALFORMED,
+            "RSV_" + "g" * 32: PublicReferenceParseStatus.MALFORMED,
+            f"prefix{valid}": PublicReferenceParseStatus.MALFORMED,
+            f"gunakan {valid}": PublicReferenceParseStatus.MALFORMED,
+            f"{valid} dan {valid}": PublicReferenceParseStatus.AMBIGUOUS,
         }
         for message, expected in cases.items():
             with self.subTest(message=message):
-                self.assertEqual(parse_reservation_id(message), expected)
-
-        for message in ("kami bertiga", "meja kedua", "beberapa reservasi"):
-            with self.subTest(message=message):
-                self.assertIsNone(parse_reservation_id(message))
+                parsed = parse_public_reservation_reference(message)
+                self.assertIs(parsed.status, expected)
+                self.assertIsNone(parsed.reference)
+                if message:
+                    self.assertNotIn(message, repr(parsed))
 
     def test_comma_delimited_name_before_people_clause(self):
         extractor = ReservationEntityExtractor()

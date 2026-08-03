@@ -668,7 +668,12 @@ class WorkflowSnapshotV2PostgreSQLTests(unittest.TestCase):
             def __init__(inner_self):
                 inner_self.calls = 0
 
-            def get_by_id(inner_self, _db, _reservation_id, _owner_customer_id):
+            def get_by_id_for_workflow_v1_conversion(
+                inner_self,
+                _db,
+                _reservation_id,
+                _owner_customer_id,
+            ):
                 inner_self.calls += 1
                 return None
 

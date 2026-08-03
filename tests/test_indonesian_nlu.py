@@ -20,7 +20,6 @@ from app.brain.indonesian_nlu import (
     normalize_indonesian_text,
     parse_confirmation,
     parse_people_count,
-    parse_reservation_id,
     parse_target_field,
 )
 from app.brain.memory_manager import MemoryManager
@@ -728,19 +727,6 @@ class UpdateCancelLanguageTests(unittest.TestCase):
         self.assertEqual(agent._parse_new_value("time", "jamnya jadi 8 malam"), "20:00")
         self.assertEqual(agent._parse_new_value("people", "orangnya jadi tiga"), 3)
 
-    def test_natural_reservation_identifiers(self):
-        cases = {
-            "yang nomor 2": 2,
-            "reservasi nomor dua": 2,
-            "booking yang kedua": 2,
-            "pesanan saya yang nomor tiga": 3,
-            "2": 2,
-        }
-        for message, expected in cases.items():
-            with self.subTest(message=message):
-                self.assertEqual(parse_reservation_id(message), expected)
-        self.assertIsNone(parse_reservation_id("kami bertiga"))
-
     def test_cancel_word_rejects_cancellation_confirmation(self):
         self.assertEqual(parse_confirmation("batal"), "reject")
         self.assertIsInstance(CancelReservationAgent(), CancelReservationAgent)
@@ -807,7 +793,6 @@ class StructuredFallbackTests(unittest.TestCase):
             "people": 3,
             "date": "2026-07-30",
             "time": "19:00",
-            "reservation_id": 2,
             "target_field": "time",
             "confirmation": "confirm",
             "confidence": 0.91,
@@ -821,6 +806,8 @@ class StructuredFallbackTests(unittest.TestCase):
 
     def test_unknown_key_and_unknown_enum_fail_closed(self):
         cases = (
+            '{"intent":"update_reservation","confidence":0.9,"reservation_id":2}',
+            '{"intent":"update_reservation","confidence":0.9,"reservation_reference":"RSV_unsafe"}',
             '{"intent":"reservation","confidence":0.9,"sql":"DROP"}',
             '{"intent":"unknown","confidence":0.9}',
             '{"intent":"reservation","confidence":0.9,"target_field":"status"}',

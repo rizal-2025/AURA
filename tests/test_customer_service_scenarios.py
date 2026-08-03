@@ -53,10 +53,12 @@ class ScenarioReservationService:
             1: SimpleNamespace(
                 id=1, name="Customer A", people=4, date="2026-08-01",
                 time="19:00", status="pending", owner_customer_id=customer_a_id,
+                reference="RSV_11111111111111111111111111111111",
             ),
             2: SimpleNamespace(
                 id=2, name="Customer B", people=2, date="2026-08-02",
                 time="20:00", status="pending", owner_customer_id=customer_b_id,
+                reference="RSV_22222222222222222222222222222222",
             ),
         }
 
@@ -67,11 +69,21 @@ class ScenarioReservationService:
             if reservation.owner_customer_id == owner_customer_id
         ][:limit]
 
-    def get_reservation_by_id(self, _db, reservation_id, owner_customer_id):
-        reservation = self.reservations.get(reservation_id)
-        if reservation is None or reservation.owner_customer_id != owner_customer_id:
-            return None
-        return reservation
+    def get_reservation_by_reference(
+        self,
+        _db,
+        public_reference,
+        owner_customer_id,
+    ):
+        return next(
+            (
+                reservation
+                for reservation in self.reservations.values()
+                if reservation.reference == public_reference
+                and reservation.owner_customer_id == owner_customer_id
+            ),
+            None,
+        )
 
 
 class TestCustomerServiceScenarios(unittest.TestCase):
@@ -216,8 +228,8 @@ class TestCustomerServiceScenarios(unittest.TestCase):
         key_a = build_authenticated_memory_key(self.customer_a.id, "shared-scenario-session")
         key_b = build_authenticated_memory_key(self.customer_b.id, "shared-scenario-session")
         self.assertNotEqual(key_a, key_b)
-        self.assertEqual(result_a.state["update_reservation_stage"], "select_reservation_id")
-        self.assertEqual(result_b.state["update_reservation_stage"], "select_reservation_id")
+        self.assertEqual(result_a.state["update_reservation_stage"], "select_reservation_reference")
+        self.assertEqual(result_b.state["update_reservation_stage"], "select_reservation_reference")
         self.assertIn("Customer B", result_b.replies[-1])
         self.assertNotIn("shared-scenario-session", chat_agent.memory_manager._sessions)
 
@@ -313,7 +325,12 @@ class TestCustomerServiceScenarios(unittest.TestCase):
         invalid_scope_scenario = {
             "authenticated_customer": "customer_a",
             "session_id": "handoff-invalid-scope",
-            "customer_messages": ["ubah reservasi saya", "abc", "abc", "1", "bukan field"],
+            "customer_messages": [
+                "ubah reservasi saya",
+                "abc",
+                "RSV_11111111111111111111111111111111",
+                "bukan field",
+            ],
         }
         invalid_result = self.simulator.run(invalid_scope_scenario)
         self.assertFalse(invalid_result.handoff)

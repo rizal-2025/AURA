@@ -23,9 +23,11 @@ from app.brain.reservation_memory import (
     reservation_persistence_blocker_response,
 )
 from app.brain.reservation_entity_extractor import (
+    REFERENCE_DATA_UNAVAILABLE_RESPONSE,
     ReservationEntityExtractor,
     normalize_natural_reservation_name,
 )
+from app.agents.result import ReservationOperationResult, ReservationOperationType
 from app.core.input_validation import (
     InputValidationError,
     validate_reservation_field,
@@ -38,6 +40,10 @@ from app.core.transaction_errors import (
 from app.memory.long_term_memory import LongTermMemoryManager
 from app.schemas.reservation import ReservationCreate
 from app.services.reservation.service import ReservationService
+from app.services.reservation.public_reference import (
+    PublicReservationReferenceUnavailableError,
+    require_canonical_public_reference,
+)
 from app.utils.datetime_parser import DatetimeParser
 
 
@@ -315,6 +321,15 @@ class ReservationAgent:
                     reservation_data,
                     owner_customer_id=owner_customer_id,
                 )
+                reservation_reference = require_canonical_public_reference(
+                    reservation.reference
+                )
+            except PublicReservationReferenceUnavailableError:
+                self.memory_manager.replace_conversation(session_id, snapshot)
+                return {
+                    "status": "reference_unavailable",
+                    "response": REFERENCE_DATA_UNAVAILABLE_RESPONSE,
+                }
             except PersistenceOutcomeUnknownError:
                 publish_reservation_persistence_blocker(
                     self.memory_manager,
@@ -337,7 +352,6 @@ class ReservationAgent:
                 self.memory_manager.replace_conversation(session_id, snapshot)
                 raise
 
-            reservation_id = reservation.id
             publication_failed = False
             try:
                 publish_create_success(
@@ -356,12 +370,16 @@ class ReservationAgent:
                     operation="create",
                 )
             try:
-                response = self._create_success_response(reservation_id)
+                response = self._create_success_response(reservation_reference)
             except Exception:
                 response = COMMITTED_OPERATION_FORMAT_FALLBACK_RESPONSE
             return {
                 "status": "completed",
                 "response": response,
+                "reservation_operation": ReservationOperationResult(
+                    ReservationOperationType.CREATED,
+                    reservation_reference,
+                ),
             }
 
         if intent == REJECT:
@@ -583,9 +601,9 @@ class ReservationAgent:
         return self._question_for_field(field_name)
 
     @staticmethod
-    def _create_success_response(reservation_id: int) -> str:
+    def _create_success_response(reservation_reference: str) -> str:
         return (
             "Reservasi berhasil dibuat.\n\n"
-            f"Nomor reservasi: {reservation_id}\n\n"
+            f"Referensi reservasi: {reservation_reference}\n\n"
             "Sampai jumpa."
         )
