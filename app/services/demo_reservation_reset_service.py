@@ -158,6 +158,7 @@ class DemoReservationResetService:
                     result = DemoReservationListResponse(
                         reservations=tuple(
                             DemoReservationItem(
+                                reservation_reference=row.public_reference,
                                 status=str(row.status).lower(),
                                 reservation_date=row.date,
                                 reservation_time=row.time,

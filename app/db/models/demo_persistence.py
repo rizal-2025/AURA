@@ -26,6 +26,9 @@ DEMO_ENVIRONMENT_SCOPE = "demo"
 DEMO_SESSION_DIGEST_LENGTH = 64
 DEMO_HANDOFF_STATUS = "simulated"
 VALID_DEMO_MESSAGE_ROLES = frozenset({"user", "assistant"})
+VALID_DEMO_RESERVATION_MUTATION_OPERATIONS = frozenset(
+    {"created", "updated", "cancelled"}
+)
 VALID_DEMO_RATE_LIMIT_SCOPES = frozenset({"session", "ip", "global"})
 SAFE_DEMO_HANDOFF_SUMMARIES = {
     "explicit_human_request": "Demo visitor requested simulated human assistance.",
@@ -167,6 +170,28 @@ class DemoChatMessage(Base):
             "role IN ('user', 'assistant')",
             name="ck_demo_chat_messages_role",
         ),
+        CheckConstraint(
+            "reservation_mutation_operation IS NULL OR "
+            "reservation_mutation_operation IN "
+            "('created', 'updated', 'cancelled')",
+            name="ck_demo_chat_messages_reservation_mutation_operation",
+        ),
+        CheckConstraint(
+            "(reservation_mutation_operation IS NULL AND "
+            "reservation_mutation_reference IS NULL) OR "
+            "(reservation_mutation_operation IS NOT NULL AND "
+            "reservation_mutation_reference IS NOT NULL)",
+            name="ck_demo_chat_messages_reservation_mutation_pair",
+        ),
+        CheckConstraint(
+            "reservation_mutation_operation IS NULL OR role = 'assistant'",
+            name="ck_demo_chat_messages_reservation_mutation_assistant_role",
+        ),
+        CheckConstraint(
+            "reservation_mutation_reference IS NULL OR "
+            "reservation_mutation_reference ~ '^RSV_[0-9a-f]{32}$'",
+            name="ck_demo_chat_messages_reservation_mutation_reference",
+        ).ddl_if(dialect="postgresql"),
         Index(
             "ix_demo_chat_messages_session_created",
             "demo_session_id",
@@ -216,6 +241,14 @@ class DemoChatMessage(Base):
     )
     request_id: Mapped[UUID | None] = mapped_column(
         Uuid(as_uuid=True),
+        nullable=True,
+    )
+    reservation_mutation_operation: Mapped[str | None] = mapped_column(
+        String(16),
+        nullable=True,
+    )
+    reservation_mutation_reference: Mapped[str | None] = mapped_column(
+        String(36),
         nullable=True,
     )
 

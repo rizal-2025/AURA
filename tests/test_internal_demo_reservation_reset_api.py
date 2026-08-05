@@ -60,6 +60,7 @@ class _StubReservationResetService:
         return DemoReservationListResponse(
             reservations=(
                 DemoReservationItem(
+                    reservation_reference="RSV_11111111111111111111111111111111",
                     status="pending",
                     reservation_date="2026-08-03",
                     reservation_time="19:00",
@@ -122,8 +123,11 @@ class InternalDemoReservationResetAPITests(unittest.TestCase):
             response.json(),
             {
                 "reservations": [
-                    {
-                        "status": "pending",
+                {
+                    "reservationReference": (
+                        "RSV_11111111111111111111111111111111"
+                    ),
+                    "status": "pending",
                         "reservationDate": "2026-08-03",
                         "reservationTime": "19:00:00",
                         "partySize": 4,
@@ -398,6 +402,7 @@ class InternalDemoReservationResetAPITests(unittest.TestCase):
     def test_response_schema_forbids_internal_fields_and_statuses(self):
         with self.assertRaises(ValidationError):
             DemoReservationItem(
+                reservation_reference="RSV_11111111111111111111111111111111",
                 status="confirmed",
                 reservation_date="2026-08-03",
                 reservation_time="19:00",
@@ -415,6 +420,7 @@ class InternalDemoReservationResetAPITests(unittest.TestCase):
                 ValidationError
             ):
                 DemoReservationItem(
+                    reservation_reference="RSV_11111111111111111111111111111111",
                     status="pending",
                     reservation_date="2026-08-03",
                     reservation_time="19:00",

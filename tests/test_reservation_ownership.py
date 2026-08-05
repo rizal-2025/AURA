@@ -13,6 +13,7 @@ from app.core.ownership import MissingOwnerCustomerError
 from app.db.models.reservation import Reservation
 from app.db.repositories.reservation_repository import ReservationRepository
 from app.schemas.reservation import ReservationCreate
+from app.services.reservation.dto import PersistedReservationDTO
 from app.services.reservation.service import ReservationService
 
 
@@ -265,7 +266,15 @@ class TestReservationOwnership(unittest.TestCase):
             time="19:00",
         )
         db = MagicMock()
-        created_reservation = MagicMock()
+        created_reservation = PersistedReservationDTO(
+            id=73,
+            name="Rizal",
+            people=4,
+            date="2026-07-22",
+            time="19:00",
+            status="pending",
+            reference="RSV_" + ("c" * 32),
+        )
         owner_customer_id = uuid4()
 
         with patch(
@@ -278,7 +287,8 @@ class TestReservationOwnership(unittest.TestCase):
                 current_customer=SimpleNamespace(id=owner_customer_id),
             )
 
-        self.assertIs(result, created_reservation)
+        self.assertEqual(result.reference, created_reservation.reference)
+        self.assertNotIn("id", result.model_dump())
         create_reservation.assert_called_once_with(
             db,
             data,

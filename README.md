@@ -2,6 +2,25 @@
 
 AURA adalah API FastAPI untuk reservasi restoran berbasis percakapan. V1.5 memakai identitas pelanggan guest yang divalidasi server untuk menjaga ownership reservasi.
 
+## Public reservation reference - Phase C
+
+API reservasi langsung kini hanya memublikasikan opaque `reference`; primary
+key database tidak menjadi bagian request, response, atau OpenAPI. Endpoint
+owner-scoped mencakup create, list, detail, update satu business field, dan
+cancel berbasis reference. Input mixed-case dicanonicalize sebelum query,
+sedangkan stored reference yang tidak kanonis gagal tertutup.
+
+Demo reservation list memakai `reservationReference`. Successful demo chat
+mutation memakai pasangan typed `operation` dan `reservationReference` yang
+berasal hanya dari `AgentTurnResult`, lalu disimpan atomik bersama durable
+assistant completion. Replay request yang sudah selesai membaca reply dan
+mutation dari row tersebut tanpa menjalankan core kembali. Row legacy tanpa
+metadata tetap menghasilkan mutation `null`; reply text tidak diparsing.
+
+Phase C belum membuat history/replay legacy content aman untuk konsumsi publik.
+Phase D history/replay dan Phase E safe-content audit tetap wajib sebelum Chat
+BFF dapat dibuka.
+
 ## Konfigurasi lokal
 
 Salin `.env.example` menjadi `.env`, lalu isi nilai lokal yang aman. Variabel minimum:

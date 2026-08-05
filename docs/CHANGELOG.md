@@ -2,6 +2,33 @@
 
 Semua perubahan penting pada AURA dicatat di dokumen ini. Repository belum memiliki tag rilis, sehingga entri berikut mengikuti riwayat commit proyek.
 
+## 2026-08-03 - Public Reference Adoption Phase C
+
+### Added
+
+- Direct reservation list/detail/update/cancel owner-scoped berbasis opaque
+  public reference, explicit response mapper, dan regression test OpenAPI.
+- Reference-only demo reservation DTO serta typed structured mutation dengan
+  public enum terpisah dari internal operation enum.
+- Dua nullable mutation metadata column pada durable assistant completion,
+  strict application codec, dan migration PostgreSQL additive-konvergen dengan
+  constraint enum, null-pair, assistant-only, serta canonical reference.
+- Unit dan guarded PostgreSQL coverage untuk public lifecycle, stored-reference
+  failure, migration convergence, replay, atomicity, dan duplicate concurrency.
+
+### Changed
+
+- Demo chat memakai `AuthenticatedChatService.process_turn()` untuk request baru
+  dan memetakan mutation hanya dari `AgentTurnResult.reservation_operation`.
+- Successful response serta duplicate replay dibentuk dari assistant completion
+  yang sudah persisted; legacy completion dengan null metadata tetap mutation
+  null dan tidak diinfer dari reply atau reservation table.
+
+### Limitations
+
+- History DTO dan legacy content tetap tidak berubah. Phase D history/replay dan
+  Phase E safe-content audit masih diperlukan; Chat BFF tetap blocked.
+
 ## 2026-07-26 - G1D-A2.3 Safe Indonesian NLU
 
 ### Added

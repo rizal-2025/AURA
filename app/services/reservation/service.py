@@ -77,6 +77,27 @@ class ReservationService:
             unit.commit()
         return result
 
+    def list_owner_reservations(
+        self,
+        db: Session,
+        owner_customer_id,
+        limit: int = 50,
+    ) -> tuple[tuple[PersistedReservationDTO, ...], int]:
+        require_owner_customer_id(owner_customer_id)
+        with UnitOfWork(db) as unit:
+            rows = self.repository.list_for_owner(
+                db,
+                owner_customer_id=owner_customer_id,
+                limit=limit,
+            )
+            count = self.repository.count_for_owner(
+                db,
+                owner_customer_id=owner_customer_id,
+            )
+            result = tuple(self._dto(row) for row in rows)
+            unit.commit()
+        return result, count
+
     def get_reservation_by_reference(
         self,
         db: Session,

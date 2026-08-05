@@ -12,6 +12,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 
 from app.agents.orchestrator import AgentOrchestrator
+from app.agents.result import AgentTurnResult
 from app.brain.memory_manager import MemoryManager
 from app.core.conversation_lock_manager import (
     ConversationBusyError,
@@ -47,6 +48,10 @@ from app.services.demo_chat_errors import (
     DemoChatProviderTimeoutError,
     DemoChatRequestConflictError,
     DemoChatServiceUnavailableError,
+)
+from app.services.demo_reservation_mutation import (
+    decode_persisted_reservation_mutation,
+    encode_reservation_operation,
 )
 from app.services.demo_session_service import (
     DemoSessionRequiredError,
@@ -486,6 +491,10 @@ class DemoChatService:
             raise DemoChatRequestConflictError()
         user = user_rows[0]
         assistant = assistant_rows[0]
+        reservation_mutation = decode_persisted_reservation_mutation(
+            assistant.reservation_mutation_operation,
+            assistant.reservation_mutation_reference,
+        )
         with UnitOfWork(db) as unit:
             handoff = self.handoffs.get_latest_between(
                 db,
@@ -500,7 +509,7 @@ class DemoChatService:
                     content=assistant.content,
                     created_at=assistant.created_at,
                 ),
-                reservation_mutation=None,
+                reservation_mutation=reservation_mutation,
                 handoff=(
                     DemoChatHandoff(
                         reference=handoff.reference,
@@ -562,7 +571,7 @@ class DemoChatService:
 
         core = self._build_core(demo_session_id)
         try:
-            reply = await core.process(
+            turn_result = await core.process_turn(
                 db=db,
                 customer=customer,
                 session_reference=f"demo-session-{demo_session_id}",
@@ -579,8 +588,12 @@ class DemoChatService:
             raise
         except Exception:
             raise DemoChatProviderError() from None
-        if not isinstance(reply, str) or not reply.strip():
+        if type(turn_result) is not AgentTurnResult:
             raise DemoChatServiceUnavailableError()
+        reply = turn_result.reply
+        mutation = encode_reservation_operation(
+            turn_result.reservation_operation
+        )
 
         with UnitOfWork(db) as unit:
             self.messages.append_request_message(
@@ -590,6 +603,8 @@ class DemoChatService:
                 content=reply,
                 request_id=request_id,
                 created_at=self._now(),
+                reservation_mutation_operation=mutation.operation,
+                reservation_mutation_reference=mutation.reference,
             )
             unit.commit()
         rows = self._request_rows(db, demo_session_id, request_id)

@@ -10,9 +10,35 @@ Dokumen ini menjelaskan kemampuan yang tersedia pada baseline AURA saat ini. Bag
 | `GET /health` | Health check sederhana dengan status layanan. |
 | `POST /auth/guest` | Membuat pelanggan guest di server dan mengembalikan bearer access token beserta waktu kedaluwarsanya. |
 | `POST /chat` | Menerima bearer token, `session_id` untuk memori percakapan, dan pesan pengguna. |
-| `POST /reservation/` | Membuat reservasi langsung untuk pelanggan yang terautentikasi bearer token. |
+| `POST /reservation/` | Membuat reservasi dan mengembalikan opaque public reference. |
+| `GET /reservation/` | Daftar reference-only milik bearer customer aktif. |
+| `GET /reservation/{reference}` | Detail owner-scoped berdasarkan public reference. |
+| `PATCH /reservation/{reference}` | Mengubah tepat satu business field berdasarkan public reference. |
+| `POST /reservation/{reference}/cancel` | Membatalkan reservasi owner-scoped tanpa physical delete. |
 
 FastAPI juga menyediakan spesifikasi OpenAPI dan antarmuka dokumentasi interaktif bawaan.
+
+## Public reference contract - Phase C
+
+- **Direct API reference-only:** seluruh response reservasi memakai `reference`
+  kanonis dan mapper allowlist eksplisit; numeric database ID tidak masuk
+  public DTO atau OpenAPI.
+- **Ownership atomik:** list/detail/update/cancel selalu memperoleh owner dari
+  authentication context dan memakai predicate owner + reference.
+- **Demo DTO:** daftar demo memakai alias `reservationReference`, tetap
+  session-scoped, dan satu stored reference tidak aman menggagalkan seluruh
+  response secara generik.
+- **Structured mutation:** response demo chat memuat nullable mutation dengan
+  tepat `operation` dan `reservationReference`, dipetakan hanya dari typed
+  `AgentTurnResult` tanpa parsing reply.
+- **Durable replay:** metadata mutation tersimpan pada assistant completion row
+  dan duplicate completed request membaca pasangan persisted yang sama tanpa
+  mengulang core atau mutation bisnis.
+- **Migration additive:** dua column nullable dan empat check constraint
+  PostgreSQL menjaga enum, null-pair, assistant-only, dan canonical reference;
+  row lama tetap valid sebagai null pair.
+- **Batas tahap:** history DTO/content belum berubah dan belum dinyatakan
+  public-safe. Phase D dan Phase E tetap memblokir Chat BFF.
 
 ## Serialisasi percakapan - V2.0 G1C
 

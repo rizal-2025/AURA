@@ -113,6 +113,7 @@ class DemoReservationResetServiceTests(unittest.TestCase):
         self.session_b = self._session(TOKEN_B)
         self.owner_a = self.db.get(Customer, self.session_a.owner_customer_id)
         self.owner_b = self.db.get(Customer, self.session_b.owner_customer_id)
+        self.reservation_counter = 0
 
     def tearDown(self):
         self.db.close()
@@ -145,6 +146,7 @@ class DemoReservationResetServiceTests(unittest.TestCase):
         time="19:00",
         status="pending",
     ):
+        self.reservation_counter += 1
         row = Reservation(
             name="Demo",
             people=4,
@@ -152,6 +154,7 @@ class DemoReservationResetServiceTests(unittest.TestCase):
             time=time,
             owner_customer_id=owner.id,
             status=status,
+            public_reference=f"RSV_{self.reservation_counter:032x}",
         )
         self.db.add(row)
         self.db.flush()
