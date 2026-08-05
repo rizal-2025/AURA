@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 import re
 from uuid import UUID
 
-from sqlalchemy import case, delete, func, or_, select, text
+from sqlalchemy import and_, case, delete, func, or_, select, text
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import aliased
@@ -14,6 +14,7 @@ from app.core.ownership import require_owner_customer_id
 from app.db.models.demo_persistence import (
     DEMO_ENVIRONMENT_SCOPE,
     DEMO_HANDOFF_STATUS,
+    DEMO_SAFE_CONTENT_VERSION,
     DemoChatMessage,
     DemoHandoffEvent,
     DemoRateLimitBucket,
@@ -62,6 +63,7 @@ class PersistedDemoChatMessage:
     created_at: datetime
     reservation_mutation_operation: str | None
     reservation_mutation_reference: str | None
+    content_safety_version: str | None
 
 
 def _validated_demo_mutation_pair(
@@ -86,6 +88,18 @@ def _validated_demo_mutation_pair(
             "Invalid demo reservation mutation metadata."
         ) from None
     return operation, canonical_reference
+
+
+def _validated_content_safety_version(
+    *,
+    role: str,
+    value: str | None,
+) -> str | None:
+    if value is None:
+        return None
+    if role != "assistant" or value != DEMO_SAFE_CONTENT_VERSION:
+        raise ValueError("Invalid demo content-safety provenance.")
+    return value
 
 
 class DemoSessionRepository:
@@ -306,6 +320,22 @@ class DemoChatMessageRepository:
     @staticmethod
     def _public_history_filter():
         companion = aliased(DemoChatMessage)
+        current_is_safe = or_(
+            DemoChatMessage.role == "user",
+            and_(
+                DemoChatMessage.role == "assistant",
+                DemoChatMessage.content_safety_version
+                == DEMO_SAFE_CONTENT_VERSION,
+            ),
+        )
+        companion_is_safe = or_(
+            companion.role == "user",
+            and_(
+                companion.role == "assistant",
+                companion.content_safety_version
+                == DEMO_SAFE_CONTENT_VERSION,
+            ),
+        )
         completed_pair = (
             select(companion.id)
             .where(
@@ -313,12 +343,16 @@ class DemoChatMessageRepository:
                 == DemoChatMessage.demo_session_id,
                 companion.request_id == DemoChatMessage.request_id,
                 companion.role != DemoChatMessage.role,
+                companion_is_safe,
             )
             .exists()
         )
-        return or_(
-            DemoChatMessage.request_id.is_(None),
-            completed_pair,
+        return and_(
+            current_is_safe,
+            or_(
+                DemoChatMessage.request_id.is_(None),
+                completed_pair,
+            ),
         )
 
     def append(
@@ -329,6 +363,7 @@ class DemoChatMessageRepository:
         role: str,
         content: str,
         created_at: datetime | None = None,
+        content_safety_version: str | None = None,
     ) -> DemoChatMessage:
         session_id = _require_internal_session_id(demo_session_id)
         timestamp = validate_utc_datetime(
@@ -339,6 +374,10 @@ class DemoChatMessageRepository:
             role=role,
             content=content,
             created_at=timestamp,
+            content_safety_version=_validated_content_safety_version(
+                role=role,
+                value=content_safety_version,
+            ),
         )
         db.add(row)
         db.flush()
@@ -355,6 +394,7 @@ class DemoChatMessageRepository:
         created_at: datetime | None = None,
         reservation_mutation_operation: str | None = None,
         reservation_mutation_reference: str | None = None,
+        content_safety_version: str | None = None,
     ) -> PersistedDemoChatMessage:
         session_id = _require_internal_session_id(demo_session_id)
         if role not in {"user", "assistant"}:
@@ -371,6 +411,10 @@ class DemoChatMessageRepository:
             operation=reservation_mutation_operation,
             reference=reservation_mutation_reference,
         )
+        safety_version = _validated_content_safety_version(
+            role=role,
+            value=content_safety_version,
+        )
         row = db.execute(
             text(
                 """
@@ -381,6 +425,7 @@ class DemoChatMessageRepository:
                     request_id,
                     reservation_mutation_operation,
                     reservation_mutation_reference,
+                    content_safety_version,
                     created_at
                 )
                 VALUES (
@@ -390,6 +435,7 @@ class DemoChatMessageRepository:
                     :request_id,
                     :reservation_mutation_operation,
                     :reservation_mutation_reference,
+                    :content_safety_version,
                     :created_at
                 )
                 RETURNING
@@ -400,6 +446,7 @@ class DemoChatMessageRepository:
                     request_id,
                     reservation_mutation_operation,
                     reservation_mutation_reference,
+                    content_safety_version,
                     created_at
                 """
             ),
@@ -410,6 +457,7 @@ class DemoChatMessageRepository:
                 "request_id": str(request_id),
                 "reservation_mutation_operation": mutation_operation,
                 "reservation_mutation_reference": mutation_reference,
+                "content_safety_version": safety_version,
                 "created_at": timestamp,
             },
         ).mappings().one()
@@ -436,6 +484,7 @@ class DemoChatMessageRepository:
                     request_id,
                     reservation_mutation_operation,
                     reservation_mutation_reference,
+                    content_safety_version,
                     created_at
                 FROM demo_chat_messages
                 WHERE demo_session_id = :demo_session_id
@@ -468,7 +517,30 @@ class DemoChatMessageRepository:
             reservation_mutation_reference=row[
                 "reservation_mutation_reference"
             ],
+            content_safety_version=row["content_safety_version"],
         )
+
+    def has_unsafe_assistant_content(
+        self,
+        db,
+        *,
+        demo_session_id: int,
+    ) -> bool:
+        session_id = _require_internal_session_id(demo_session_id)
+        unsafe_row_exists = (
+            select(DemoChatMessage.id)
+            .where(
+                DemoChatMessage.demo_session_id == session_id,
+                DemoChatMessage.role == "assistant",
+                or_(
+                    DemoChatMessage.content_safety_version.is_(None),
+                    DemoChatMessage.content_safety_version
+                    != DEMO_SAFE_CONTENT_VERSION,
+                ),
+            )
+            .exists()
+        )
+        return bool(db.scalar(select(unsafe_row_exists)))
 
     def list_latest(
         self,

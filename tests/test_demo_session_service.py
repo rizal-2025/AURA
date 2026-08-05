@@ -13,6 +13,7 @@ from sqlalchemy.orm import sessionmaker
 from app.core.transaction_errors import PersistenceOperationError
 from app.db.models.customer import Customer
 from app.db.models.demo_persistence import (
+    DEMO_SAFE_CONTENT_VERSION,
     DemoChatMessage,
     DemoHandoffEvent,
     DemoSession,
@@ -30,6 +31,7 @@ from app.services.demo_session_service import (
     digest_demo_session_token,
     generate_demo_session_token,
 )
+from app.services.demo_chat_errors import DemoHistoryResetRequiredError
 
 
 TOKEN_A = "A" * 43
@@ -347,6 +349,11 @@ class DemoSessionServiceTests(unittest.TestCase):
                 role="user" if number % 2 == 0 else "assistant",
                 content=f"message-{number:02d}",
                 created_at=self.now + timedelta(seconds=number),
+                content_safety_version=(
+                    DEMO_SAFE_CONTENT_VERSION
+                    if number % 2 == 1
+                    else None
+                ),
             )
         self.messages.append_request_message(
             self.db,
@@ -365,7 +372,7 @@ class DemoSessionServiceTests(unittest.TestCase):
         self.assertEqual(result.messages[-1].content, "message-54")
         self.assertEqual(result.session.message_count, 55)
 
-    def test_current_hides_incomplete_marker_but_keeps_legacy_and_pair(self):
+    def test_current_blocks_legacy_assistant_content_without_provenance(self):
         row, _owner = self.seed_session()
         self.messages.append(
             self.db,
@@ -401,12 +408,8 @@ class DemoSessionServiceTests(unittest.TestCase):
         )
         self.db.commit()
 
-        result = self.service().get_current_session(self.db, TOKEN_A)
-        self.assertEqual(
-            [message.content for message in result.messages],
-            ["legacy", "completed-user", "completed-assistant"],
-        )
-        self.assertEqual(result.session.message_count, 3)
+        with self.assertRaises(DemoHistoryResetRequiredError):
+            self.service().get_current_session(self.db, TOKEN_A)
 
     def test_incomplete_marker_in_one_session_does_not_affect_another(self):
         first, _owner = self.seed_session(TOKEN_A)

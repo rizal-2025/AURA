@@ -66,6 +66,13 @@ from migrations.add_demo_chat_reservation_mutation import (
     _constraint_is_compatible as mutation_constraint_is_compatible,
     migrate as migrate_reservation_mutation,
 )
+from migrations.add_demo_chat_content_safety import (
+    CONTENT_SAFETY_CONSTRAINT,
+    CONTENT_SAFETY_EXPRESSION,
+    DemoChatContentSafetyMigrationError,
+    _constraint_is_compatible as content_safety_constraint_is_compatible,
+    migrate as migrate_content_safety,
+)
 from tests.integration.disposable_schema import DisposableSchemaResources
 
 
@@ -265,6 +272,10 @@ class DemoPersistencePostgreSQLTests(unittest.TestCase):
             cls.engine,
             schema=cls.schema,
         )
+        cls.initial_content_safety_migration_changed = migrate_content_safety(
+            cls.engine,
+            schema=cls.schema,
+        )
 
     @classmethod
     def _table(cls, name: str) -> str:
@@ -400,6 +411,11 @@ class DemoPersistencePostgreSQLTests(unittest.TestCase):
         self.assertTrue(migrate_request_id(engine, schema=schema))
         return schema, engine
 
+    def _prepare_pre_phase_d_schema(self):
+        schema, engine = self._prepare_pre_phase_c_schema()
+        self.assertTrue(migrate_reservation_mutation(engine, schema=schema))
+        return schema, engine
+
     @classmethod
     def _phase_c_signature(cls, engine, schema):
         inspector = inspect(engine)
@@ -464,6 +480,7 @@ class DemoPersistencePostgreSQLTests(unittest.TestCase):
         self.assertTrue(self.initial_migration_changed)
         self.assertTrue(self.initial_request_migration_changed)
         self.assertTrue(self.initial_mutation_migration_changed)
+        self.assertTrue(self.initial_content_safety_migration_changed)
         self.assertFalse(migrate(self.engine, schema=self.schema))
         self.assertFalse(
             migrate_request_id(self.engine, schema=self.schema)
@@ -471,12 +488,108 @@ class DemoPersistencePostgreSQLTests(unittest.TestCase):
         self.assertFalse(
             migrate_reservation_mutation(self.engine, schema=self.schema)
         )
+        self.assertFalse(
+            migrate_content_safety(self.engine, schema=self.schema)
+        )
         inspector = inspect(self.engine)
         for table_name in DEMO_TABLES:
             with self.subTest(table_name=table_name):
                 self.assertTrue(
                     inspector.has_table(table_name, schema=self.schema)
                 )
+
+    def test_01b_phase_d_migration_preserves_legacy_rows_without_backfill(self):
+        schema, engine = self._prepare_pre_phase_d_schema()
+        Session = sessionmaker(bind=engine, expire_on_commit=False)
+        now = datetime.now(timezone.utc)
+        with Session() as db:
+            session, _owner = self._session(db, 8_293, now=now)
+            db.commit()
+            session_id = session.id
+        table = self._schema_table(schema, "demo_chat_messages")
+        with engine.begin() as connection:
+            legacy_id = connection.scalar(
+                text(
+                    f"INSERT INTO {table} "
+                    "(demo_session_id, role, content, created_at) VALUES "
+                    "(:session_id, 'assistant', 'legacy-safe-unknown', :created_at) "
+                    "RETURNING id"
+                ),
+                {"session_id": session_id, "created_at": now},
+            )
+
+        self.assertTrue(migrate_content_safety(engine, schema=schema))
+        self.assertFalse(migrate_content_safety(engine, schema=schema))
+        self.assertFalse(migrate(engine, schema=schema))
+        with engine.connect() as connection:
+            preserved = connection.execute(
+                text(
+                    f"SELECT content, content_safety_version FROM {table} "
+                    "WHERE id = :message_id"
+                ),
+                {"message_id": legacy_id},
+            ).one()
+        self.assertEqual(tuple(preserved), ("legacy-safe-unknown", None))
+
+    def test_01c_phase_d_migration_rejects_wrong_column_shape(self):
+        schema, engine = self._prepare_pre_phase_d_schema()
+        table = self._schema_table(schema, "demo_chat_messages")
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    f"ALTER TABLE {table} ADD COLUMN "
+                    "content_safety_version VARCHAR(31) NULL"
+                )
+            )
+
+        with self.assertRaises(DemoChatContentSafetyMigrationError) as captured:
+            migrate_content_safety(engine, schema=schema)
+        self.assertEqual(
+            str(captured.exception),
+            "Demo chat content-safety migration failed safely.",
+        )
+
+    def test_01d_phase_d_migration_rejects_weak_competing_constraint(self):
+        schema, engine = self._prepare_pre_phase_d_schema()
+        table = self._schema_table(schema, "demo_chat_messages")
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    f"ALTER TABLE {table} "
+                    "ADD COLUMN content_safety_version VARCHAR(32) NULL, "
+                    "ADD CONSTRAINT ck_demo_chat_messages_content_safety_weak "
+                    "CHECK (content_safety_version IS NULL OR TRUE)"
+                )
+            )
+
+        with self.assertRaises(DemoChatContentSafetyMigrationError):
+            migrate_content_safety(engine, schema=schema)
+        inspector = inspect(engine)
+        self.assertNotIn(
+            CONTENT_SAFETY_CONSTRAINT,
+            {
+                item.get("name")
+                for item in inspector.get_check_constraints(
+                    "demo_chat_messages", schema=schema
+                )
+            },
+        )
+
+    def test_01e_phase_d_migration_rejects_not_valid_exact_constraint(self):
+        schema, engine = self._prepare_pre_phase_d_schema()
+        table = self._schema_table(schema, "demo_chat_messages")
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    f"ALTER TABLE {table} "
+                    "ADD COLUMN content_safety_version VARCHAR(32) NULL, "
+                    f"ADD CONSTRAINT {CONTENT_SAFETY_CONSTRAINT} "
+                    f"CHECK ({CONTENT_SAFETY_EXPRESSION}) NOT VALID"
+                )
+            )
+
+        with self.assertRaises(DemoChatContentSafetyMigrationError):
+            migrate_content_safety(engine, schema=schema)
 
     def test_02_constraints_and_indexes_are_available(self):
         inspector = inspect(self.engine)
@@ -1015,6 +1128,10 @@ class DemoPersistencePostgreSQLTests(unittest.TestCase):
                             for name, expression in MUTATION_CONSTRAINTS.items()
                         }
                     )
+                    expected_checks[CONTENT_SAFETY_CONSTRAINT] = (
+                        CONTENT_SAFETY_EXPRESSION,
+                        ("content_safety_version", "aura_demo_safe_v1"),
+                    )
                 model_checks = {
                     constraint.name: constraint.sqltext
                     for constraint in table.constraints
@@ -1050,6 +1167,18 @@ class DemoPersistencePostgreSQLTests(unittest.TestCase):
                             mutation_constraint_is_compatible(
                                 name,
                                 migrated_checks[name],
+                            )
+                        )
+                        continue
+                    if name == CONTENT_SAFETY_CONSTRAINT:
+                        self.assertTrue(
+                            content_safety_constraint_is_compatible(
+                                str(model_checks[name])
+                            )
+                        )
+                        self.assertTrue(
+                            content_safety_constraint_is_compatible(
+                                migrated_checks[name]
                             )
                         )
                         continue

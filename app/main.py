@@ -32,6 +32,7 @@ from app.services.demo_chat_errors import (
     DemoChatProviderTimeoutError,
     DemoChatRequestConflictError,
     DemoChatServiceUnavailableError,
+    DemoHistoryResetRequiredError,
 )
 from app.services.demo_rate_limit_service import DemoRateLimitExceededError
 from app.services.reservation.errors import (
@@ -84,6 +85,7 @@ def create_app(application_settings=None) -> FastAPI:
             demo_session_exception_handler,
         )
     for demo_chat_error in (
+        DemoHistoryResetRequiredError,
         DemoChatRequestConflictError,
         DemoChatProviderError,
         DemoChatServiceUnavailableError,

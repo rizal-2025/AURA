@@ -61,6 +61,7 @@ from app.services.conversation_workflow_state_service import (
 from app.services.demo_chat_errors import (
     DemoChatRequestConflictError,
     DemoChatServiceUnavailableError,
+    DemoHistoryResetRequiredError,
 )
 from app.services.demo_chat_service import (
     DemoChatService,
@@ -84,6 +85,7 @@ from migrations.add_demo_chat_request_id import migrate as migrate_request_id
 from migrations.add_demo_chat_reservation_mutation import (
     migrate as migrate_reservation_mutation,
 )
+from migrations.add_demo_chat_content_safety import migrate as migrate_content_safety
 from migrations.add_demo_persistence import migrate as migrate_demo
 from tests.integration.disposable_schema import DisposableSchemaResources
 
@@ -216,6 +218,8 @@ class DemoReservationResetPostgreSQLTests(unittest.TestCase):
             raise RuntimeError("Request ID migration did not apply.")
         if not migrate_reservation_mutation(cls.engine, schema=cls.schema):
             raise RuntimeError("Reservation mutation migration did not apply.")
+        if not migrate_content_safety(cls.engine, schema=cls.schema):
+            raise RuntimeError("Content safety migration did not apply.")
         cls.Session = sessionmaker(
             bind=cls.engine,
             autoflush=False,
@@ -688,6 +692,7 @@ class DemoReservationResetPostgreSQLTests(unittest.TestCase):
                 ),
                 0,
             )
+
             self.assertEqual(
                 db.scalar(
                     select(func.count())
@@ -753,6 +758,31 @@ class DemoReservationResetPostgreSQLTests(unittest.TestCase):
                 raw_session_token=TOKEN_A,
             )
             self.assertEqual(current.count, 0)
+
+    def test_reset_is_the_recovery_path_for_legacy_unmarked_history(self):
+        with self.Session() as db:
+            session = self.session_row(db, TOKEN_A)
+            db.add(
+                DemoChatMessage(
+                    demo_session_id=session.id,
+                    role="assistant",
+                    content="legacy-unmarked-assistant",
+                    created_at=self.now,
+                )
+            )
+            db.commit()
+            session_service = DemoSessionService(clock=lambda: self.now)
+            with self.assertRaises(DemoHistoryResetRequiredError):
+                session_service.get_current_session(db, TOKEN_A)
+
+            reset = asyncio.run(
+                self.service().reset(db, raw_session_token=TOKEN_A)
+            )
+            current = session_service.get_current_session(db, TOKEN_A)
+
+        self.assertEqual(reset.status, "reset")
+        self.assertEqual(current.session.message_count, 0)
+        self.assertEqual(current.messages, ())
 
     def test_real_postgresql_failure_rolls_back_all_partial_deletes(self):
         with self.Session() as db:

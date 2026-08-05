@@ -12,6 +12,7 @@ from app.core.transaction_errors import PersistenceOperationError
 from app.core.unit_of_work import UnitOfWork
 from app.db.models.customer import Customer
 from app.db.models.demo_persistence import (
+    DEMO_SAFE_CONTENT_VERSION,
     DemoChatMessage,
     DemoHandoffEvent,
     DemoRateLimitBucket,
@@ -327,6 +328,7 @@ class DemoPersistenceTests(unittest.TestCase):
                 demo_session_id=session.id,
                 role="assistant",
                 content=str(number),
+                content_safety_version=DEMO_SAFE_CONTENT_VERSION,
                 created_at=self.now + timedelta(seconds=number),
             )
         self.db.commit()

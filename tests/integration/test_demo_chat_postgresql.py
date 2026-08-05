@@ -24,6 +24,7 @@ from app.db.models.conversation_workflow_state import (
 )
 from app.db.models.customer import Customer
 from app.db.models.demo_persistence import (
+    DEMO_SAFE_CONTENT_VERSION,
     DemoChatMessage,
     DemoHandoffEvent,
     DemoSession,
@@ -63,6 +64,8 @@ from migrations.add_demo_chat_request_id import (
 from migrations.add_demo_chat_reservation_mutation import (
     migrate as migrate_reservation_mutation,
 )
+from app.services.demo_chat_errors import DemoHistoryResetRequiredError
+from migrations.add_demo_chat_content_safety import migrate as migrate_content_safety
 from migrations.add_demo_persistence import migrate as migrate_demo
 from tests.integration.disposable_schema import DisposableSchemaResources
 
@@ -277,6 +280,8 @@ class DemoChatPostgreSQLTests(unittest.TestCase):
             raise RuntimeError("Request ID migration did not apply.")
         if not migrate_reservation_mutation(cls.engine, schema=cls.schema):
             raise RuntimeError("Reservation mutation migration did not apply.")
+        if not migrate_content_safety(cls.engine, schema=cls.schema):
+            raise RuntimeError("Content safety migration did not apply.")
         cls.Session = sessionmaker(
             bind=cls.engine,
             autoflush=False,
@@ -682,6 +687,17 @@ class DemoChatPostgreSQLTests(unittest.TestCase):
         self.assertEqual(len(first_calls), 1)
         self.assertEqual(restarted_calls, [])
         self.assertEqual(self.counts()["messages"], 2)
+        with self.Session() as db:
+            rows = DemoChatMessageRepository().list_by_request_id(
+                db,
+                demo_session_id=self.session_row(TOKEN_A).id,
+                request_id=request_id,
+            )
+        self.assertIsNone(rows[0].content_safety_version)
+        self.assertEqual(
+            rows[1].content_safety_version,
+            DEMO_SAFE_CONTENT_VERSION,
+        )
 
     def test_completed_replay_with_different_message_is_conflict(self):
         request_id = uuid4()
@@ -826,6 +842,17 @@ class DemoChatPostgreSQLTests(unittest.TestCase):
             )
         )
         self.assertEqual(self.counts()["messages"], 2)
+        session = self.session_row(TOKEN_A)
+        with self.Session() as db:
+            rows = DemoChatMessageRepository().list_by_request_id(
+                db,
+                demo_session_id=session.id,
+                request_id=request_id,
+            )
+        self.assertEqual(
+            [row.content_safety_version for row in rows],
+            [None, DEMO_SAFE_CONTENT_VERSION],
+        )
 
     def test_different_requests_same_session_are_deterministically_serialized(self):
         entered = threading.Event()
@@ -1565,7 +1592,7 @@ class DemoChatPostgreSQLTests(unittest.TestCase):
             },
         )
 
-    def test_legacy_completion_replays_null_mutation_without_core(self):
+    def test_legacy_completion_requires_reset_without_core(self):
         session = self.session_row(TOKEN_A)
         request_id = uuid4()
         repository = DemoChatMessageRepository()
@@ -1578,7 +1605,7 @@ class DemoChatPostgreSQLTests(unittest.TestCase):
                 request_id=request_id,
                 created_at=self.now,
             )
-            stored = repository.append_request_message(
+            repository.append_request_message(
                 db,
                 demo_session_id=session.id,
                 role="assistant",
@@ -1590,16 +1617,15 @@ class DemoChatPostgreSQLTests(unittest.TestCase):
 
         replay_calls = []
         with self.Session() as db:
-            replay = self.run_process(
-                self.service(replay_calls),
-                db,
-                TOKEN_A,
-                request_id,
-                message="legacy request",
-            )
+            with self.assertRaises(DemoHistoryResetRequiredError):
+                self.run_process(
+                    self.service(replay_calls),
+                    db,
+                    TOKEN_A,
+                    request_id,
+                    message="legacy request",
+                )
         self.assertEqual(replay_calls, [])
-        self.assertEqual(replay.reply.content, stored.content)
-        self.assertIsNone(replay.reservation_mutation)
         self.assertEqual(self.counts()["messages"], 2)
 
     def test_update_and_cancel_use_owner_filter_for_each_demo_session(self):

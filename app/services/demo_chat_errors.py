@@ -18,6 +18,10 @@ class DemoChatRequestConflictError(_SafeDemoChatError):
     code = "REQUEST_CONFLICT"
 
 
+class DemoHistoryResetRequiredError(_SafeDemoChatError):
+    code = "DEMO_HISTORY_RESET_REQUIRED"
+
+
 class DemoChatProviderError(_SafeDemoChatError):
     code = "PROVIDER_ERROR"
 

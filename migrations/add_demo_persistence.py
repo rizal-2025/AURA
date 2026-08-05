@@ -225,6 +225,7 @@ OPTIONAL_ADDITIVE_COLUMNS = {
         "request_id": ("uuid", True),
         "reservation_mutation_operation": ("varchar:16", True),
         "reservation_mutation_reference": ("varchar:36", True),
+        "content_safety_version": ("varchar:32", True),
     },
 }
 
@@ -381,6 +382,15 @@ def _validate_columns(inspector, table_name: str, schema: str | None) -> None:
         )
 
         validate_existing_phase_c_schema(
+            inspector,
+            schema=schema,
+            allow_absent=True,
+        )
+        from migrations.add_demo_chat_content_safety import (
+            validate_existing_phase_d_schema,
+        )
+
+        validate_existing_phase_d_schema(
             inspector,
             schema=schema,
             allow_absent=True,

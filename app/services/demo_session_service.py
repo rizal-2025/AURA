@@ -26,6 +26,7 @@ from app.schemas.demo_session import (
     DemoSessionMessage,
     DemoSessionSummary,
 )
+from app.services.demo_chat_errors import DemoHistoryResetRequiredError
 
 
 DEMO_SESSION_IDLE_TIMEOUT = timedelta(hours=2)
@@ -199,12 +200,19 @@ class DemoSessionService:
     ) -> DemoSessionCurrentResponse:
         now = self._now()
         response = None
+        history_reset_required = False
         with UnitOfWork(db) as unit:
             session = self.resolve_active_session(
                 db,
                 raw_session_token,
                 now=now,
             )
+            if session is not None and self.messages.has_unsafe_assistant_content(
+                db,
+                demo_session_id=session.id,
+            ):
+                history_reset_required = True
+                session = None
             if session is not None:
                 session = self.touch_active_session(
                     db,
@@ -265,6 +273,8 @@ class DemoSessionService:
                     handoff=handoff,
                 )
             unit.commit()
+        if history_reset_required:
+            raise DemoHistoryResetRequiredError()
         if response is None:
             raise DemoSessionRequiredError()
         return response
