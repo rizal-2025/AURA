@@ -1735,8 +1735,11 @@ class DemoChatPostgreSQLTests(unittest.TestCase):
                 )
         counts = self.counts()
         self.assertIsNotNone(response.handoff)
-        self.assertTrue(response.handoff.reference.startswith("DEMO-HO-"))
         self.assertEqual(response.handoff.status, "simulated")
+        self.assertNotIn(
+            "reference",
+            response.handoff.model_dump(mode="json", by_alias=True),
+        )
         self.assertEqual(response, replay)
         self.assertEqual(counts["handoffs"], 1)
         self.assertEqual(counts["tickets"], 0)

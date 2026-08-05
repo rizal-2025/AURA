@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import math
 import secrets
 from typing import Any, Callable
 from uuid import UUID
@@ -68,6 +70,8 @@ _ADVISORY_LOCK_NAMESPACE = 0x41555241
 _SIMULATED_HANDOFF_RESPONSE = (
     "Permintaan bantuan admin telah disimulasikan pada demo ini."
 )
+DEMO_PROVIDER_OVERALL_TIMEOUT_SECONDS = 30.0
+MAX_DEMO_PROVIDER_TIMEOUT_SECONDS = 120.0
 
 
 @dataclass(frozen=True)
@@ -386,7 +390,18 @@ class DemoChatService:
         database_lock: DemoPostgreSQLAdvisoryLock | None = None,
         core_factory=None,
         clock: Callable[[], datetime] | None = None,
+        provider_timeout_seconds: float = (
+            DEMO_PROVIDER_OVERALL_TIMEOUT_SECONDS
+        ),
     ):
+        if (
+            isinstance(provider_timeout_seconds, bool)
+            or not isinstance(provider_timeout_seconds, (int, float))
+            or not math.isfinite(provider_timeout_seconds)
+            or provider_timeout_seconds <= 0
+            or provider_timeout_seconds > MAX_DEMO_PROVIDER_TIMEOUT_SECONDS
+        ):
+            raise ValueError("Invalid demo provider timeout.")
         self.session_service = session_service or demo_session_service
         self.messages = message_repository or DemoChatMessageRepository()
         self.handoffs = handoff_repository or DemoHandoffEventRepository()
@@ -394,6 +409,7 @@ class DemoChatService:
         self.database_lock = database_lock or DemoPostgreSQLAdvisoryLock()
         self.core_factory = core_factory
         self.clock = clock or (lambda: datetime.now(timezone.utc))
+        self.provider_timeout_seconds = float(provider_timeout_seconds)
 
     def _now(self) -> datetime:
         return validate_utc_datetime(self.clock())
@@ -518,7 +534,6 @@ class DemoChatService:
                 reservation_mutation=reservation_mutation,
                 handoff=(
                     DemoChatHandoff(
-                        reference=handoff.reference,
                         status=handoff.status,
                     )
                     if handoff is not None
@@ -577,12 +592,19 @@ class DemoChatService:
 
         core = self._build_core(demo_session_id)
         try:
-            turn_result = await core.process_turn(
-                db=db,
-                customer=customer,
-                session_reference=f"demo-session-{demo_session_id}",
-                message=message,
-            )
+            async with asyncio.timeout(self.provider_timeout_seconds):
+                turn_result = await core.process_turn(
+                    db=db,
+                    customer=customer,
+                    session_reference=f"demo-session-{demo_session_id}",
+                    message=message,
+                )
+                if type(turn_result) is not AgentTurnResult:
+                    raise DemoChatServiceUnavailableError()
+                reply = normalize_chat_message(turn_result.reply)
+                mutation = encode_reservation_operation(
+                    turn_result.reservation_operation
+                )
         except TimeoutError:
             raise DemoChatProviderTimeoutError() from None
         except (
@@ -592,14 +614,10 @@ class DemoChatService:
             TransactionSessionUnusableError,
         ):
             raise
+        except DemoChatServiceUnavailableError:
+            raise
         except Exception:
             raise DemoChatProviderError() from None
-        if type(turn_result) is not AgentTurnResult:
-            raise DemoChatServiceUnavailableError()
-        reply = turn_result.reply
-        mutation = encode_reservation_operation(
-            turn_result.reservation_operation
-        )
 
         with UnitOfWork(db) as unit:
             self.messages.append_request_message(

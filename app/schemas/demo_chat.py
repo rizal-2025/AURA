@@ -59,7 +59,6 @@ class DemoChatReply(_InternalDemoChatDTO):
 
 
 class DemoChatHandoff(_InternalDemoChatDTO):
-    reference: str
     status: Literal["simulated"]
 
 

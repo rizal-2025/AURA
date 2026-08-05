@@ -243,7 +243,6 @@ class DemoSessionService:
                 )
                 handoff = (
                     DemoSessionHandoff(
-                        reference=latest_handoffs[0].reference,
                         status=latest_handoffs[0].status,
                         reason_code=safe_handoff[0],
                         safe_summary=safe_handoff[1],

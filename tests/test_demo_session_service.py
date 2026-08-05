@@ -11,6 +11,7 @@ from sqlalchemy import create_engine, event, func, select, text
 from sqlalchemy.orm import sessionmaker
 
 from app.core.transaction_errors import PersistenceOperationError
+from app.core.logger import redact_sensitive_text
 from app.db.models.customer import Customer
 from app.db.models.demo_persistence import (
     DEMO_SAFE_CONTENT_VERSION,
@@ -479,7 +480,7 @@ class DemoSessionServiceTests(unittest.TestCase):
             reason_code="internal_error",
             created_at=self.now - timedelta(minutes=2),
         )
-        latest = self.handoffs.create_simulated(
+        self.handoffs.create_simulated(
             self.db,
             demo_session_id=row.id,
             reference="DEMO-HO-LATEST",
@@ -488,8 +489,11 @@ class DemoSessionServiceTests(unittest.TestCase):
         )
         self.db.commit()
         result = self.service().get_current_session(self.db, TOKEN_A)
-        self.assertEqual(result.handoff.reference, latest.reference)
         self.assertEqual(result.handoff.status, "simulated")
+        self.assertNotIn(
+            "reference",
+            result.handoff.model_dump(mode="json", by_alias=True),
+        )
 
     def test_empty_current_has_empty_messages_null_handoff_and_safe_fields(self):
         self.seed_session()
@@ -512,6 +516,20 @@ class DemoSessionServiceTests(unittest.TestCase):
             logging.getLogger().info("safe demo lifecycle marker")
             self.create()
         self.assertNotIn(TOKEN_A, "\n".join(captured.output))
+
+    def test_configured_demo_service_token_is_redacted_from_log_text(self):
+        service_token = "demo-bff-synthetic-secret-token-0123456789"
+        with patch.dict(
+            "os.environ",
+            {"DEMO_BFF_SERVICE_TOKEN": service_token},
+            clear=False,
+        ):
+            rendered = redact_sensitive_text(
+                f"unexpected upstream detail: {service_token}"
+            )
+
+        self.assertNotIn(service_token, rendered)
+        self.assertIn("[REDACTED]", rendered)
 
 
 if __name__ == "__main__":

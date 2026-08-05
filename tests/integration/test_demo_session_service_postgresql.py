@@ -473,9 +473,9 @@ class DemoSessionServicePostgreSQLTests(unittest.TestCase):
         self.assertEqual(len(result.messages), 50)
         self.assertEqual(result.session.message_count, 55)
         self.assertEqual(result.messages[0].content, "first-05")
-        self.assertEqual(
-            result.handoff.reference,
-            "DEMO-HO-POSTGRES-FIRST",
+        self.assertNotIn(
+            "reference",
+            result.handoff.model_dump(mode="json", by_alias=True),
         )
 
     def test_legacy_assistant_blocks_only_its_own_session_history(self):
@@ -581,7 +581,6 @@ class DemoSessionServicePostgreSQLTests(unittest.TestCase):
         result = self.service(
             now=self.now + timedelta(minutes=1)
         ).get_current_session(self.db, TOKEN_A)
-        self.assertEqual(result.handoff.reference, first_handoff.reference)
         self.assertEqual(result.handoff.reason_code, "internal_error")
         self.assertEqual(
             result.handoff.safe_summary,
