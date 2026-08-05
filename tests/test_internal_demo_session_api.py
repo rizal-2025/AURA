@@ -25,6 +25,7 @@ from app.schemas.demo_session import (
     DemoSessionMessage,
     DemoSessionSummary,
 )
+from app.services.demo_chat_errors import DemoHistoryResetRequiredError
 from app.services.demo_session_service import DemoSessionRequiredError
 
 
@@ -258,6 +259,26 @@ class InternalDemoSessionAPITests(unittest.TestCase):
         self.assertEqual(response.status_code, 401)
         self.assertEqual(response.json()["code"], "DEMO_SESSION_REQUIRED")
         self.assertNotIn(random_token, response.text)
+
+    def test_legacy_history_returns_safe_reset_required_envelope(self):
+        self.service.current_error = DemoHistoryResetRequiredError()
+        response = self.client.get(
+            "/internal/demo/sessions/current",
+            headers=self.current_headers(),
+        )
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(
+            response.json(),
+            {
+                "detail": (
+                    "Riwayat demo lama harus direset sebelum sesi dapat "
+                    "dilanjutkan."
+                ),
+                "code": "DEMO_HISTORY_RESET_REQUIRED",
+            },
+        )
+        self.assertEqual(response.headers["cache-control"], "no-store")
+        self.assertNotIn(SESSION_TOKEN, response.text)
 
     def test_internal_routes_are_absent_from_openapi(self):
         paths = self.client.get("/openapi.json").json()["paths"]

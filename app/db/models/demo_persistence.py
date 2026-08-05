@@ -26,6 +26,7 @@ DEMO_ENVIRONMENT_SCOPE = "demo"
 DEMO_SESSION_DIGEST_LENGTH = 64
 DEMO_HANDOFF_STATUS = "simulated"
 VALID_DEMO_MESSAGE_ROLES = frozenset({"user", "assistant"})
+DEMO_SAFE_CONTENT_VERSION = "aura_demo_safe_v1"
 VALID_DEMO_RESERVATION_MUTATION_OPERATIONS = frozenset(
     {"created", "updated", "cancelled"}
 )
@@ -192,6 +193,12 @@ class DemoChatMessage(Base):
             "reservation_mutation_reference ~ '^RSV_[0-9a-f]{32}$'",
             name="ck_demo_chat_messages_reservation_mutation_reference",
         ).ddl_if(dialect="postgresql"),
+        CheckConstraint(
+            "content_safety_version IS NULL OR "
+            "(role = 'assistant' AND "
+            "content_safety_version = 'aura_demo_safe_v1')",
+            name="ck_demo_chat_messages_content_safety_version",
+        ),
         Index(
             "ix_demo_chat_messages_session_created",
             "demo_session_id",
@@ -249,6 +256,10 @@ class DemoChatMessage(Base):
     )
     reservation_mutation_reference: Mapped[str | None] = mapped_column(
         String(36),
+        nullable=True,
+    )
+    content_safety_version: Mapped[str | None] = mapped_column(
+        String(32),
         nullable=True,
     )
 

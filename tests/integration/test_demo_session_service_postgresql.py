@@ -14,6 +14,7 @@ from app.core.transaction_errors import PersistenceOperationError
 from app.core.unit_of_work import UnitOfWork
 from app.db.models.customer import Customer
 from app.db.models.demo_persistence import (
+    DEMO_SAFE_CONTENT_VERSION,
     DemoChatMessage,
     DemoHandoffEvent,
     DemoRateLimitBucket,
@@ -35,6 +36,8 @@ from migrations.add_demo_chat_request_id import migrate as migrate_request_id
 from migrations.add_demo_chat_reservation_mutation import (
     migrate as migrate_reservation_mutation,
 )
+from app.services.demo_chat_errors import DemoHistoryResetRequiredError
+from migrations.add_demo_chat_content_safety import migrate as migrate_content_safety
 from tests.integration.disposable_schema import DisposableSchemaResources
 
 
@@ -124,6 +127,7 @@ class DemoSessionServicePostgreSQLTests(unittest.TestCase):
         migrate(cls.engine, schema=cls.schema)
         migrate_request_id(cls.engine, schema=cls.schema)
         migrate_reservation_mutation(cls.engine, schema=cls.schema)
+        migrate_content_safety(cls.engine, schema=cls.schema)
         cls.Session = sessionmaker(
             bind=cls.engine,
             autoflush=False,
@@ -473,6 +477,31 @@ class DemoSessionServicePostgreSQLTests(unittest.TestCase):
             result.handoff.reference,
             "DEMO-HO-POSTGRES-FIRST",
         )
+
+    def test_legacy_assistant_blocks_only_its_own_session_history(self):
+        _response, first = self.create(TOKEN_A)
+        _response, second = self.create(TOKEN_B)
+        self.messages.append(
+            self.db,
+            demo_session_id=first.id,
+            role="assistant",
+            content="legacy-unmarked",
+            created_at=self.now,
+        )
+        self.messages.append(
+            self.db,
+            demo_session_id=second.id,
+            role="assistant",
+            content="new-safe",
+            content_safety_version=DEMO_SAFE_CONTENT_VERSION,
+            created_at=self.now,
+        )
+        self.db.commit()
+
+        safe = self.service().get_current_session(self.db, TOKEN_B)
+        self.assertEqual([item.content for item in safe.messages], ["new-safe"])
+        with self.assertRaises(DemoHistoryResetRequiredError):
+            self.service().get_current_session(self.db, TOKEN_A)
 
     def test_current_rebuilds_valid_handoff_summary_from_allowlist(self):
         _response, row = self.create(TOKEN_A)

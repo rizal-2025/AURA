@@ -18,6 +18,7 @@ from app.brain.memory_manager import MemoryManager
 from app.core.transaction_errors import PersistenceOperationError
 from app.db.models.customer import Customer
 from app.db.models.demo_persistence import (
+    DEMO_SAFE_CONTENT_VERSION,
     SAFE_DEMO_HANDOFF_SUMMARIES,
     DemoChatMessage,
     DemoHandoffEvent,
@@ -36,6 +37,7 @@ from app.services.demo_chat_service import (
     DemoChatServiceUnavailableError,
     DemoSimulatedHandoffService,
 )
+from app.services.demo_chat_errors import DemoHistoryResetRequiredError
 from app.services.demo_session_service import (
     DemoSessionRequiredError,
     DemoSessionService,
@@ -292,6 +294,11 @@ class DemoChatServiceTests(unittest.TestCase):
         self.assertEqual(response.reply.id, rows[1].id)
         self.assertEqual(response.reply.content, rows[1].content)
         self.assertEqual(response.reply.created_at, rows[1].created_at)
+        self.assertIsNone(rows[0].content_safety_version)
+        self.assertEqual(
+            rows[1].content_safety_version,
+            DEMO_SAFE_CONTENT_VERSION,
+        )
         self.assertIsNotNone(rows[0].created_at.tzinfo)
         self.assertIsNotNone(rows[1].created_at.tzinfo)
 
@@ -558,6 +565,10 @@ class DemoChatServiceTests(unittest.TestCase):
             repository.assistant_values["reservation_mutation_reference"],
             reference,
         )
+        self.assertEqual(
+            repository.assistant_values["content_safety_version"],
+            DEMO_SAFE_CONTENT_VERSION,
+        )
 
         self.db.close()
         self.db = self.Session()
@@ -606,6 +617,10 @@ class DemoChatServiceTests(unittest.TestCase):
         self.db = self.Session()
         rows = self.request_rows(self.session_a.id, request_id)
         self.assertEqual([row.role for row in rows], ["user", "assistant"])
+        self.assertEqual(
+            rows[1].content_safety_version,
+            DEMO_SAFE_CONTENT_VERSION,
+        )
         replay_calls = []
         replay = self.process(
             self.service(calls=replay_calls),
@@ -711,7 +726,7 @@ class DemoChatServiceTests(unittest.TestCase):
             },
         )
 
-    def test_legacy_completed_row_replays_without_mutation_inference(self):
+    def test_legacy_completed_row_requires_reset_without_core_or_inference(self):
         request_id = uuid4()
         repository = DemoChatMessageRepository()
         for role, content in (
@@ -728,13 +743,13 @@ class DemoChatServiceTests(unittest.TestCase):
             )
         self.db.commit()
 
-        response = self.process(
-            self.service(),
-            message="Buat reservasi",
-            request_id=request_id,
-        )
+        with self.assertRaises(DemoHistoryResetRequiredError):
+            self.process(
+                self.service(),
+                message="Buat reservasi",
+                request_id=request_id,
+            )
         self.assertEqual(self.calls, [])
-        self.assertIsNone(response.reservation_mutation)
 
 
 class DemoPostgreSQLAdvisoryLockTests(unittest.TestCase):

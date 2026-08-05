@@ -43,6 +43,7 @@ from app.services.demo_chat_errors import (
     DemoChatProviderTimeoutError,
     DemoChatRequestConflictError,
     DemoChatServiceUnavailableError,
+    DemoHistoryResetRequiredError,
 )
 from app.services.demo_rate_limit_service import DemoRateLimitExceededError
 from app.services.reservation.errors import (
@@ -88,6 +89,11 @@ _DEMO_SESSION_DETAILS = {
 }
 
 _DEMO_CHAT_DETAILS = {
+    DemoHistoryResetRequiredError: (
+        409,
+        "DEMO_HISTORY_RESET_REQUIRED",
+        "Riwayat demo lama harus direset sebelum sesi dapat dilanjutkan.",
+    ),
     DemoChatRequestConflictError: (
         409,
         "REQUEST_CONFLICT",

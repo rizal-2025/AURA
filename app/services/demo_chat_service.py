@@ -31,7 +31,10 @@ from app.core.transaction_errors import (
 )
 from app.core.unit_of_work import UnitOfWork
 from app.db.models.customer import Customer
-from app.db.models.demo_persistence import validate_utc_datetime
+from app.db.models.demo_persistence import (
+    DEMO_SAFE_CONTENT_VERSION,
+    validate_utc_datetime,
+)
 from app.db.repositories.demo_persistence_repository import (
     DemoChatMessageRepository,
     DemoHandoffEventRepository,
@@ -48,6 +51,7 @@ from app.services.demo_chat_errors import (
     DemoChatProviderTimeoutError,
     DemoChatRequestConflictError,
     DemoChatServiceUnavailableError,
+    DemoHistoryResetRequiredError,
 )
 from app.services.demo_reservation_mutation import (
     decode_persisted_reservation_mutation,
@@ -491,6 +495,8 @@ class DemoChatService:
             raise DemoChatRequestConflictError()
         user = user_rows[0]
         assistant = assistant_rows[0]
+        if assistant.content_safety_version != DEMO_SAFE_CONTENT_VERSION:
+            raise DemoHistoryResetRequiredError()
         reservation_mutation = decode_persisted_reservation_mutation(
             assistant.reservation_mutation_operation,
             assistant.reservation_mutation_reference,
@@ -605,6 +611,7 @@ class DemoChatService:
                 created_at=self._now(),
                 reservation_mutation_operation=mutation.operation,
                 reservation_mutation_reference=mutation.reference,
+                content_safety_version=DEMO_SAFE_CONTENT_VERSION,
             )
             unit.commit()
         rows = self._request_rows(db, demo_session_id, request_id)

@@ -18,6 +18,7 @@ from app.db.models.conversation_workflow_state import (
 )
 from app.db.models.customer import Customer
 from app.db.models.demo_persistence import (
+    DEMO_SAFE_CONTENT_VERSION,
     DemoChatMessage,
     DemoHandoffEvent,
     DemoRateLimitBucket,
@@ -55,6 +56,7 @@ from migrations.add_demo_chat_request_id import migrate as migrate_request_id
 from migrations.add_demo_chat_reservation_mutation import (
     migrate as migrate_reservation_mutation,
 )
+from migrations.add_demo_chat_content_safety import migrate as migrate_content_safety
 from migrations.add_demo_persistence import migrate as migrate_demo
 from tests.integration.disposable_schema import DisposableSchemaResources
 
@@ -198,6 +200,8 @@ class DemoRateLimitCleanupPostgreSQLTests(unittest.TestCase):
             raise RuntimeError("Request ID migration did not apply.")
         if not migrate_reservation_mutation(cls.engine, schema=cls.schema):
             raise RuntimeError("Reservation mutation migration did not apply.")
+        if not migrate_content_safety(cls.engine, schema=cls.schema):
+            raise RuntimeError("Content safety migration did not apply.")
         cls.Session = sessionmaker(
             bind=cls.engine,
             autoflush=False,
@@ -445,6 +449,7 @@ class DemoRateLimitCleanupPostgreSQLTests(unittest.TestCase):
                         request_id=expired_request,
                         reservation_mutation_operation="created",
                         reservation_mutation_reference="RSV_" + ("a" * 32),
+                        content_safety_version=DEMO_SAFE_CONTENT_VERSION,
                         created_at=self.now,
                     ),
                     DemoChatMessage(
@@ -461,6 +466,7 @@ class DemoRateLimitCleanupPostgreSQLTests(unittest.TestCase):
                         request_id=active_request,
                         reservation_mutation_operation="updated",
                         reservation_mutation_reference="RSV_" + ("b" * 32),
+                        content_safety_version=DEMO_SAFE_CONTENT_VERSION,
                         created_at=self.now,
                     ),
                 )
@@ -515,6 +521,10 @@ class DemoRateLimitCleanupPostgreSQLTests(unittest.TestCase):
                     active_assistant.reservation_mutation_reference,
                 ),
                 ("updated", "RSV_" + ("b" * 32)),
+            )
+            self.assertEqual(
+                active_assistant.content_safety_version,
+                DEMO_SAFE_CONTENT_VERSION,
             )
             self.assertEqual(
                 db.scalar(select(func.count()).select_from(DemoChatMessage)),
