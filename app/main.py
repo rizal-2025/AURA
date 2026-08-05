@@ -1,4 +1,4 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Response, status
 from fastapi.exceptions import RequestValidationError
 from app.core.config import get_application_settings
 from app.core.conversation_lock_manager import ConversationBusyError
@@ -46,6 +46,20 @@ application_settings = get_application_settings()
 from app.api.auth import router as auth_router
 from app.api.chat import router as chat_router
 from app.api.reservation import router as reservation_router
+
+
+def database_is_ready() -> bool:
+    """Probe the configured database without exposing connection details."""
+    try:
+        from sqlalchemy import text
+
+        from app.db.database import engine
+
+        with engine.connect() as connection:
+            connection.execute(text("SELECT 1"))
+    except Exception:
+        return False
+    return True
 
 
 def create_app(application_settings=None) -> FastAPI:
@@ -134,6 +148,13 @@ def create_app(application_settings=None) -> FastAPI:
     @application.get("/health")
     async def health():
         return {"status": "healthy"}
+
+    @application.get("/ready", include_in_schema=False)
+    async def readiness(response: Response):
+        if not database_is_ready():
+            response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+            return {"status": "unavailable"}
+        return {"status": "ready"}
 
     return application
 
