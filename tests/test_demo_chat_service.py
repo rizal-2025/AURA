@@ -103,6 +103,18 @@ class _FakeCore:
         return SimpleNamespace(reply=self.reply, reservation_operation=None)
 
 
+class _NeverCompletingCore:
+    def __init__(self):
+        self.cancelled = False
+
+    async def process_turn(self, **_values):
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            self.cancelled = True
+            raise
+
+
 class _AssistantFailingRepository(DemoChatMessageRepository):
     def append_request_message(self, db, **values):
         if values["role"] == "assistant":
@@ -224,19 +236,24 @@ class DemoChatServiceTests(unittest.TestCase):
         session_service=None,
         calls=None,
         reservation_operation=None,
+        core_factory=None,
+        provider_timeout_seconds=30.0,
     ):
         active_calls = self.calls if calls is None else calls
         return DemoChatService(
             session_service=session_service or self.session_service,
             message_repository=repository,
             database_lock=self.lock,
-            core_factory=lambda _session_id: _FakeCore(
-                active_calls,
-                reply=reply,
-                error=error,
-                reservation_operation=reservation_operation,
+            core_factory=core_factory or (
+                lambda _session_id: _FakeCore(
+                    active_calls,
+                    reply=reply,
+                    error=error,
+                    reservation_operation=reservation_operation,
+                )
             ),
             clock=lambda: self.now,
+            provider_timeout_seconds=provider_timeout_seconds,
         )
 
     def process(
@@ -487,6 +504,39 @@ class DemoChatServiceTests(unittest.TestCase):
         )
         self.assertEqual(current.messages, ())
         self.assertEqual(current.session.message_count, 0)
+
+    def test_overall_timeout_cancels_core_and_releases_database_lock(self):
+        request_id = uuid4()
+        core = _NeverCompletingCore()
+        with self.assertRaises(DemoChatProviderTimeoutError):
+            self.process(
+                self.service(
+                    core_factory=lambda _session_id: core,
+                    provider_timeout_seconds=0.01,
+                ),
+                request_id=request_id,
+            )
+        self.assertTrue(core.cancelled)
+        self.assertEqual(self.lock.acquired, [self.session_a.id])
+        self.assertEqual(self.lock.released, [self.session_a.id])
+        rows = self.request_rows(self.session_a.id, request_id)
+        self.assertEqual([row.role for row in rows], ["user"])
+
+    def test_provider_reply_is_bounded_before_safe_provenance_is_written(self):
+        request_id = uuid4()
+        with self.assertRaises(DemoChatProviderError):
+            self.process(
+                self.service(reply="x" * 4097),
+                request_id=request_id,
+            )
+        rows = self.request_rows(self.session_a.id, request_id)
+        self.assertEqual([row.role for row in rows], ["user"])
+
+    def test_provider_timeout_configuration_is_strictly_bounded(self):
+        for invalid in (True, 0, -1, float("nan"), float("inf"), 121):
+            with self.subTest(invalid=invalid):
+                with self.assertRaises(ValueError):
+                    self.service(provider_timeout_seconds=invalid)
 
     def test_unknown_provider_error_is_safe_and_no_assistant_is_saved(self):
         request_id = uuid4()

@@ -23,6 +23,7 @@ from app.schemas.demo_session import (
     DemoSessionCreateResponse,
     DemoSessionCurrentResponse,
     DemoSessionMessage,
+    DemoSessionHandoff,
     DemoSessionSummary,
 )
 from app.services.demo_chat_errors import DemoHistoryResetRequiredError
@@ -48,6 +49,7 @@ class _StubDemoSessionService:
         self.current_tokens = []
         self.create_error = None
         self.current_error = None
+        self.handoff = None
 
     def summary(self, message_count=0):
         return DemoSessionSummary(
@@ -80,7 +82,7 @@ class _StubDemoSessionService:
                     created_at=self.now,
                 ),
             ),
-            handoff=None,
+            handoff=self.handoff,
         )
 
 
@@ -218,6 +220,31 @@ class InternalDemoSessionAPITests(unittest.TestCase):
         self.assertEqual(payload["messages"][0]["content"], "Pesan contoh.")
         self.assertIsNone(payload["handoff"])
         self.assertEqual(response.headers["cache-control"], "no-store")
+
+    def test_current_handoff_omits_internal_reference(self):
+        self.service.handoff = DemoSessionHandoff(
+            status="simulated",
+            reason_code="explicit_human_request",
+            safe_summary="Demo visitor requested simulated human assistance.",
+            created_at=self.service.now,
+        )
+        response = self.client.get(
+            "/internal/demo/sessions/current",
+            headers=self.current_headers(),
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.json()["handoff"],
+            {
+                "status": "simulated",
+                "reasonCode": "explicit_human_request",
+                "safeSummary": (
+                    "Demo visitor requested simulated human assistance."
+                ),
+                "createdAt": "2026-07-29T04:00:00Z",
+            },
+        )
+        self.assertNotIn("reference", response.text.casefold())
 
     def test_current_without_session_header_returns_safe_401(self):
         response = self.client.get(

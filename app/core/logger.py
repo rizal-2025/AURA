@@ -23,6 +23,7 @@ def redact_sensitive_text(value) -> str:
         "TELEGRAM_OWNER_CHAT_ID",
         "AUTH_JWT_SECRET",
         "OPENAI_API_KEY",
+        "DEMO_BFF_SERVICE_TOKEN",
     ):
         secret = os.getenv(environment_name)
         if secret:

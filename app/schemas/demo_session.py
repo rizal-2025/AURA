@@ -31,7 +31,6 @@ class DemoSessionMessage(_InternalDemoDTO):
 
 
 class DemoSessionHandoff(_InternalDemoDTO):
-    reference: str
     status: Literal["simulated"]
     reason_code: str = Field(serialization_alias="reasonCode")
     safe_summary: str | None = Field(serialization_alias="safeSummary")

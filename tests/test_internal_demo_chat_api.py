@@ -13,7 +13,11 @@ from app.api.internal_demo_dependencies import get_demo_rate_limit_service
 from app.core.config import get_demo_settings
 from app.db.database import get_db
 from app.main import create_app
-from app.schemas.demo_chat import DemoChatReply, DemoChatResponse
+from app.schemas.demo_chat import (
+    DemoChatHandoff,
+    DemoChatReply,
+    DemoChatResponse,
+)
 from app.services.demo_chat_service import (
     DemoChatProviderError,
     DemoChatProviderTimeoutError,
@@ -40,6 +44,7 @@ class _StubDemoChatService:
     def __init__(self):
         self.calls = []
         self.error = None
+        self.handoff = None
 
     async def process(
         self,
@@ -70,7 +75,7 @@ class _StubDemoChatService:
                 ),
             ),
             reservation_mutation=None,
-            handoff=None,
+            handoff=self.handoff,
         )
 
 
@@ -141,6 +146,13 @@ class InternalDemoChatAPITests(unittest.TestCase):
         self.assertEqual(call[1], SESSION_TOKEN)
         self.assertEqual(call[2], "Halo")
         self.assertEqual(call[3], UUID(REQUEST_ID))
+
+    def test_handoff_response_exposes_status_only(self):
+        self.service.handoff = DemoChatHandoff(status="simulated")
+        response = self.post()
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["handoff"], {"status": "simulated"})
+        self.assertNotIn("reference", response.text.casefold())
 
     def test_message_newlines_are_canonicalized_without_trimming(self):
         response = self.post(json=self.body("  satu\r\ndua\r  "))
