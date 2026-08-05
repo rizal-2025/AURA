@@ -16,6 +16,7 @@ from sqlalchemy import create_engine, func, select, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.orm import sessionmaker
 
+from app.agents.result import AgentTurnResult
 from app.agents.reservation_agent import ReservationAgent
 from app.api.internal_demo_chat import get_demo_chat_service
 from app.api.internal_demo_dependencies import (
@@ -80,6 +81,9 @@ from app.services.handoff.notification_outbox_service import (
 )
 from app.services.handoff.service import HandoffService
 from migrations.add_demo_chat_request_id import migrate as migrate_request_id
+from migrations.add_demo_chat_reservation_mutation import (
+    migrate as migrate_reservation_mutation,
+)
 from migrations.add_demo_persistence import migrate as migrate_demo
 from tests.integration.disposable_schema import DisposableSchemaResources
 
@@ -88,6 +92,7 @@ TOKEN_A = "V" * 43
 TOKEN_B = "W" * 43
 TOKEN_C = "X" * 43
 SERVICE_TOKEN = "safe-bff-service-token-for-reset-integration-tests"
+SEEDED_DEMO_LIST_RESERVATION_ID = (2**30) + 205_771
 
 
 def _skip_reason():
@@ -122,9 +127,9 @@ class _ReplyCore:
     def __init__(self):
         self.calls = 0
 
-    async def process(self, **_values):
+    async def process_turn(self, **_values):
         self.calls += 1
-        return "Jawaban aman."
+        return AgentTurnResult(reply="Jawaban aman.")
 
 
 class _BlockingReplyCore(_ReplyCore):
@@ -133,12 +138,12 @@ class _BlockingReplyCore(_ReplyCore):
         self.entered = entered
         self.release = release
 
-    async def process(self, **_values):
+    async def process_turn(self, **_values):
         self.calls += 1
         self.entered.set()
         if not self.release.wait(timeout=5):
             raise RuntimeError("Timed out waiting to release demo chat core.")
-        return "Jawaban aman."
+        return AgentTurnResult(reply="Jawaban aman.")
 
 
 class _PausingAdvisoryLock(DemoPostgreSQLAdvisoryLock):
@@ -209,6 +214,8 @@ class DemoReservationResetPostgreSQLTests(unittest.TestCase):
         migrate_demo(cls.engine, schema=cls.schema)
         if not migrate_request_id(cls.engine, schema=cls.schema):
             raise RuntimeError("Request ID migration did not apply.")
+        if not migrate_reservation_mutation(cls.engine, schema=cls.schema):
+            raise RuntimeError("Reservation mutation migration did not apply.")
         cls.Session = sessionmaker(
             bind=cls.engine,
             autoflush=False,
@@ -460,6 +467,8 @@ class DemoReservationResetPostgreSQLTests(unittest.TestCase):
                     role="assistant",
                     content="reply",
                     request_id=request_id,
+                    reservation_mutation_operation="created",
+                    reservation_mutation_reference=reservation.reference,
                     created_at=self.now,
                 ),
                 DemoChatMessage(
@@ -516,6 +525,14 @@ class DemoReservationResetPostgreSQLTests(unittest.TestCase):
             owner_a = db.get(Customer, session_a.owner_customer_id)
             session_b = self.session_row(db, TOKEN_B)
             owner_b = db.get(Customer, session_b.owner_customer_id)
+            db.execute(
+                text(
+                    "SELECT setval("
+                    "pg_get_serial_sequence('reservations', 'id'), "
+                    ":seeded_id, false)"
+                ),
+                {"seeded_id": SEEDED_DEMO_LIST_RESERVATION_ID},
+            )
             for index in range(55):
                 db.add(
                     Reservation(
@@ -524,6 +541,7 @@ class DemoReservationResetPostgreSQLTests(unittest.TestCase):
                         date=f"2026-08-{(index % 9) + 1:02d}",
                         time=f"{(index % 5) + 10:02d}:00",
                         owner_customer_id=owner_a.id,
+                        public_reference=f"RSV_{index + 1:032x}",
                         status="pending",
                     )
                 )
@@ -533,6 +551,7 @@ class DemoReservationResetPostgreSQLTests(unittest.TestCase):
                 date="2026-01-01",
                 time="09:00",
                 owner_customer_id=owner_b.id,
+                public_reference="RSV_" + ("f" * 32),
                 status="pending",
             )
             db.add(foreign)
@@ -550,6 +569,21 @@ class DemoReservationResetPostgreSQLTests(unittest.TestCase):
 
             self.assertEqual(result.count, 55)
             self.assertEqual(len(result.reservations), 50)
+            serialized = result.model_dump_json(by_alias=True)
+            self.assertNotIn(str(SEEDED_DEMO_LIST_RESERVATION_ID), serialized)
+            for item in result.model_dump(by_alias=True)["reservations"]:
+                self.assertEqual(
+                    set(item),
+                    {
+                        "reservationReference",
+                        "status",
+                        "reservationDate",
+                        "reservationTime",
+                        "partySize",
+                    },
+                )
+                self.assertNotIn("id", item)
+                self.assertNotIn("reservationId", item)
             self.assertNotIn(
                 foreign.date,
                 {row.reservation_date for row in result.reservations},
@@ -621,6 +655,17 @@ class DemoReservationResetPostgreSQLTests(unittest.TestCase):
                 db,
                 TOKEN_A,
             ).absolute_expires_at
+            self.assertEqual(
+                db.scalar(
+                    select(func.count())
+                    .select_from(DemoChatMessage)
+                    .where(
+                        DemoChatMessage.demo_session_id == session_a_id,
+                        DemoChatMessage.reservation_mutation_operation.is_not(None),
+                    )
+                ),
+                1,
+            )
 
             first = asyncio.run(
                 self.service().reset(db, raw_session_token=TOKEN_A)
@@ -646,6 +691,17 @@ class DemoReservationResetPostgreSQLTests(unittest.TestCase):
             self.assertEqual(
                 db.scalar(
                     select(func.count())
+                    .select_from(DemoChatMessage)
+                    .where(
+                        DemoChatMessage.demo_session_id == session_a_id,
+                        DemoChatMessage.reservation_mutation_operation.is_not(None),
+                    )
+                ),
+                0,
+            )
+            self.assertEqual(
+                db.scalar(
+                    select(func.count())
                     .select_from(Reservation)
                     .where(Reservation.owner_customer_id == owner_a_id)
                 ),
@@ -658,6 +714,17 @@ class DemoReservationResetPostgreSQLTests(unittest.TestCase):
                     .where(DemoChatMessage.demo_session_id == session_b_id)
                 ),
                 4,
+            )
+            self.assertEqual(
+                db.scalar(
+                    select(func.count())
+                    .select_from(DemoChatMessage)
+                    .where(
+                        DemoChatMessage.demo_session_id == session_b_id,
+                        DemoChatMessage.reservation_mutation_operation.is_not(None),
+                    )
+                ),
+                1,
             )
             self.assertEqual(
                 db.scalar(

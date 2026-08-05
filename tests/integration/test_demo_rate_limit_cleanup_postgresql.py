@@ -52,6 +52,9 @@ from app.services.demo_session_service import (
     digest_demo_session_token,
 )
 from migrations.add_demo_chat_request_id import migrate as migrate_request_id
+from migrations.add_demo_chat_reservation_mutation import (
+    migrate as migrate_reservation_mutation,
+)
 from migrations.add_demo_persistence import migrate as migrate_demo
 from tests.integration.disposable_schema import DisposableSchemaResources
 
@@ -193,6 +196,8 @@ class DemoRateLimitCleanupPostgreSQLTests(unittest.TestCase):
         migrate_demo(cls.engine, schema=cls.schema)
         if not migrate_request_id(cls.engine, schema=cls.schema):
             raise RuntimeError("Request ID migration did not apply.")
+        if not migrate_reservation_mutation(cls.engine, schema=cls.schema):
+            raise RuntimeError("Reservation mutation migration did not apply.")
         cls.Session = sessionmaker(
             bind=cls.engine,
             autoflush=False,
@@ -417,15 +422,51 @@ class DemoRateLimitCleanupPostgreSQLTests(unittest.TestCase):
     def test_cleanup_deletes_expired_owner_data_and_preserves_active_session(self):
         expired_id = self.expire(TOKEN_A)
         with self.Session() as db:
-            db.add(
-                DemoChatMessage(
-                    demo_session_id=expired_id,
-                    role="user",
-                    content="marker",
-                    created_at=self.now,
+            active = db.scalar(
+                select(DemoSession).where(
+                    DemoSession.token_digest == self.digest(TOKEN_B)
+                )
+            )
+            expired_request = uuid4()
+            active_request = uuid4()
+            db.add_all(
+                (
+                    DemoChatMessage(
+                        demo_session_id=expired_id,
+                        role="user",
+                        content="expired marker",
+                        request_id=expired_request,
+                        created_at=self.now,
+                    ),
+                    DemoChatMessage(
+                        demo_session_id=expired_id,
+                        role="assistant",
+                        content="expired completion",
+                        request_id=expired_request,
+                        reservation_mutation_operation="created",
+                        reservation_mutation_reference="RSV_" + ("a" * 32),
+                        created_at=self.now,
+                    ),
+                    DemoChatMessage(
+                        demo_session_id=active.id,
+                        role="user",
+                        content="active marker",
+                        request_id=active_request,
+                        created_at=self.now,
+                    ),
+                    DemoChatMessage(
+                        demo_session_id=active.id,
+                        role="assistant",
+                        content="active completion",
+                        request_id=active_request,
+                        reservation_mutation_operation="updated",
+                        reservation_mutation_reference="RSV_" + ("b" * 32),
+                        created_at=self.now,
+                    ),
                 )
             )
             db.commit()
+            active_id = active.id
         summary = asyncio.run(
             DemoCleanupService(
                 session_factory=self.Session,
@@ -451,9 +492,33 @@ class DemoRateLimitCleanupPostgreSQLTests(unittest.TestCase):
             )
             self.assertEqual(
                 db.scalar(
-                    select(func.count()).select_from(DemoChatMessage)
+                    select(func.count())
+                    .select_from(DemoChatMessage)
+                    .where(DemoChatMessage.demo_session_id == expired_id)
                 ),
                 0,
+            )
+            active_messages = list(
+                db.scalars(
+                    select(DemoChatMessage)
+                    .where(DemoChatMessage.demo_session_id == active_id)
+                    .order_by(DemoChatMessage.id)
+                )
+            )
+            self.assertEqual(len(active_messages), 2)
+            active_assistant = next(
+                row for row in active_messages if row.role == "assistant"
+            )
+            self.assertEqual(
+                (
+                    active_assistant.reservation_mutation_operation,
+                    active_assistant.reservation_mutation_reference,
+                ),
+                ("updated", "RSV_" + ("b" * 32)),
+            )
+            self.assertEqual(
+                db.scalar(select(func.count()).select_from(DemoChatMessage)),
+                2,
             )
 
     def test_handoff_delete_failure_rolls_back_and_next_session_continues(self):

@@ -248,14 +248,7 @@ class TestSecureReservationCreate(unittest.TestCase):
         self.assertEqual(response.status_code, 401)
 
     def test_direct_reservation_ignores_x_session_id_for_secure_owner(self):
-        created_reservation = SimpleNamespace(
-            id=99,
-            name="Rizal",
-            people=4,
-            date="2026-08-01",
-            time="19:00",
-            status="pending",
-        )
+        created_reservation = persisted(99)
         with patch(
             "app.api.reservation.service.create_reservation",
             return_value=created_reservation,

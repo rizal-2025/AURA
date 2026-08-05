@@ -32,6 +32,9 @@ from app.services.demo_session_service import (
 )
 from migrations.add_demo_persistence import migrate
 from migrations.add_demo_chat_request_id import migrate as migrate_request_id
+from migrations.add_demo_chat_reservation_mutation import (
+    migrate as migrate_reservation_mutation,
+)
 from tests.integration.disposable_schema import DisposableSchemaResources
 
 
@@ -120,6 +123,7 @@ class DemoSessionServicePostgreSQLTests(unittest.TestCase):
         Customer.__table__.create(cls.engine)
         migrate(cls.engine, schema=cls.schema)
         migrate_request_id(cls.engine, schema=cls.schema)
+        migrate_reservation_mutation(cls.engine, schema=cls.schema)
         cls.Session = sessionmaker(
             bind=cls.engine,
             autoflush=False,

@@ -60,6 +60,12 @@ from migrations.add_demo_chat_request_id import (
     REQUEST_ID_INDEXES,
     migrate as migrate_request_id,
 )
+from migrations.add_demo_chat_reservation_mutation import (
+    DemoChatReservationMutationMigrationError,
+    MUTATION_CONSTRAINTS,
+    _constraint_is_compatible as mutation_constraint_is_compatible,
+    migrate as migrate_reservation_mutation,
+)
 from tests.integration.disposable_schema import DisposableSchemaResources
 
 
@@ -255,6 +261,10 @@ class DemoPersistencePostgreSQLTests(unittest.TestCase):
             cls.engine,
             schema=cls.schema,
         )
+        cls.initial_mutation_migration_changed = migrate_reservation_mutation(
+            cls.engine,
+            schema=cls.schema,
+        )
 
     @classmethod
     def _table(cls, name: str) -> str:
@@ -383,12 +393,83 @@ class DemoPersistencePostgreSQLTests(unittest.TestCase):
         )
         return row, owner
 
+    def _prepare_pre_phase_c_schema(self):
+        schema, engine = self._new_disposable_engine()
+        self._create_core_tables(engine)
+        self.assertTrue(migrate(engine, schema=schema))
+        self.assertTrue(migrate_request_id(engine, schema=schema))
+        return schema, engine
+
+    @classmethod
+    def _phase_c_signature(cls, engine, schema):
+        inspector = inspect(engine)
+        columns = {
+            item["name"]: (
+                _type_semantics(item["type"]),
+                bool(item.get("nullable")),
+                item.get("default"),
+                item.get("identity"),
+                item.get("computed"),
+            )
+            for item in inspector.get_columns(
+                "demo_chat_messages",
+                schema=schema,
+            )
+            if item["name"].startswith("reservation_mutation_")
+        }
+        checks = {
+            item.get("name"): item.get("sqltext")
+            for item in inspector.get_check_constraints(
+                "demo_chat_messages",
+                schema=schema,
+            )
+            if "reservation_mutation" in str(item.get("name"))
+        }
+        with engine.connect() as connection:
+            result = connection.execute(
+                text(
+                    """
+                    SELECT constraint_row.conname, constraint_row.convalidated
+                    FROM pg_catalog.pg_constraint AS constraint_row
+                    JOIN pg_catalog.pg_class AS relation
+                      ON relation.oid = constraint_row.conrelid
+                    JOIN pg_catalog.pg_namespace AS namespace
+                      ON namespace.oid = relation.relnamespace
+                    WHERE constraint_row.contype = 'c'
+                      AND relation.relname = 'demo_chat_messages'
+                      AND namespace.nspname = :schema_name
+                      AND constraint_row.conname LIKE
+                          'ck_demo_chat_messages_reservation_mutation%'
+                    """
+                ),
+                {"schema_name": schema},
+            )
+            validated = {row[0]: bool(row[1]) for row in result}
+        return columns, checks, validated
+
+    def _assert_phase_c_rejected_without_rewrite(self, engine, schema):
+        before = self._phase_c_signature(engine, schema)
+        with self.assertRaises(
+            DemoChatReservationMutationMigrationError
+        ) as captured:
+            migrate_reservation_mutation(engine, schema=schema)
+        self.assertEqual(
+            str(captured.exception),
+            "Demo chat reservation mutation migration failed safely.",
+        )
+        self.assertNotIn("alter table", repr(captured.exception).casefold())
+        self.assertEqual(self._phase_c_signature(engine, schema), before)
+
     def test_01_migration_creates_four_tables_and_is_idempotent(self):
         self.assertTrue(self.initial_migration_changed)
         self.assertTrue(self.initial_request_migration_changed)
+        self.assertTrue(self.initial_mutation_migration_changed)
         self.assertFalse(migrate(self.engine, schema=self.schema))
         self.assertFalse(
             migrate_request_id(self.engine, schema=self.schema)
+        )
+        self.assertFalse(
+            migrate_reservation_mutation(self.engine, schema=self.schema)
         )
         inspector = inspect(self.engine)
         for table_name in DEMO_TABLES:
@@ -449,6 +530,367 @@ class DemoPersistencePostgreSQLTests(unittest.TestCase):
                 self.assertTrue({
                     item[0] for item in INDEXES[table_name]
                 }.issubset(index_names))
+
+    def test_02a_mutation_constraints_accept_only_safe_assistant_pairs(self):
+        with self.Session() as db:
+            session, _owner = self._session(db, 8201)
+            db.commit()
+            session_id = session.id
+
+        statement = text(
+            f"INSERT INTO {self._table('demo_chat_messages')} "
+            "(demo_session_id, role, content, request_id, "
+            "reservation_mutation_operation, "
+            "reservation_mutation_reference, created_at) "
+            "VALUES (:session_id, :role, 'safe', :request_id, "
+            ":operation, :reference, :created_at)"
+        )
+        reference = "RSV_" + ("d" * 32)
+        now = datetime.now(timezone.utc)
+        accepted = (
+            ("assistant", None, None),
+            ("assistant", "created", reference),
+        )
+        for role, operation, persisted_reference in accepted:
+            with self.engine.begin() as connection:
+                connection.execute(
+                    statement,
+                    {
+                        "session_id": session_id,
+                        "role": role,
+                        "request_id": str(uuid4()),
+                        "operation": operation,
+                        "reference": persisted_reference,
+                        "created_at": now,
+                    },
+                )
+
+        rejected = (
+            ("user", "created", reference),
+            ("assistant", "created", None),
+            ("assistant", None, reference),
+            ("assistant", "unknown", reference),
+            ("assistant", "created", "RSV_" + ("D" * 32)),
+            ("assistant", "created", "BAD_" + ("d" * 32)),
+        )
+        for role, operation, persisted_reference in rejected:
+            with self.subTest(role=role, operation=operation):
+                with self.assertRaises(IntegrityError):
+                    with self.engine.begin() as connection:
+                        connection.execute(
+                            statement,
+                            {
+                                "session_id": session_id,
+                                "role": role,
+                                "request_id": str(uuid4()),
+                                "operation": operation,
+                                "reference": persisted_reference,
+                                "created_at": now,
+                            },
+                        )
+
+    def test_02b_partial_phase_c_schema_fails_closed_without_second_column(self):
+        schema, engine = self._new_disposable_engine()
+        self._create_core_tables(engine)
+        migrate(engine, schema=schema)
+        migrate_request_id(engine, schema=schema)
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    f"ALTER TABLE {self._schema_table(schema, 'demo_chat_messages')} "
+                    "ADD COLUMN reservation_mutation_operation VARCHAR(16) NULL"
+                )
+            )
+
+        with self.assertRaises(DemoChatReservationMutationMigrationError):
+            migrate_reservation_mutation(engine, schema=schema)
+
+        columns = {
+            item["name"]
+            for item in inspect(engine).get_columns(
+                "demo_chat_messages",
+                schema=schema,
+            )
+        }
+        self.assertIn("reservation_mutation_operation", columns)
+        self.assertNotIn("reservation_mutation_reference", columns)
+
+    def test_02c_competing_phase_c_constraint_is_rejected_without_rewrite(self):
+        schema, engine = self._new_disposable_engine()
+        self._create_core_tables(engine)
+        migrate(engine, schema=schema)
+        migrate_request_id(engine, schema=schema)
+        table = self._schema_table(schema, "demo_chat_messages")
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    f"ALTER TABLE {table} "
+                    "ADD COLUMN reservation_mutation_operation VARCHAR(16) NULL, "
+                    "ADD COLUMN reservation_mutation_reference VARCHAR(36) NULL, "
+                    "ADD CONSTRAINT ck_demo_chat_messages_competing_mutation "
+                    "CHECK (reservation_mutation_operation IS NULL OR "
+                    "reservation_mutation_operation = 'created')"
+                )
+            )
+
+        with self.assertRaises(DemoChatReservationMutationMigrationError):
+            migrate_reservation_mutation(engine, schema=schema)
+
+        check_names = {
+            item.get("name")
+            for item in inspect(engine).get_check_constraints(
+                "demo_chat_messages",
+                schema=schema,
+            )
+        }
+        self.assertIn(
+            "ck_demo_chat_messages_competing_mutation",
+            check_names,
+        )
+        self.assertTrue(set(MUTATION_CONSTRAINTS).isdisjoint(check_names))
+
+    def test_02d_wrong_phase_c_column_length_is_rejected_without_rewrite(self):
+        schema, engine = self._new_disposable_engine()
+        self._create_core_tables(engine)
+        migrate(engine, schema=schema)
+        migrate_request_id(engine, schema=schema)
+        table = self._schema_table(schema, "demo_chat_messages")
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    f"ALTER TABLE {table} "
+                    "ADD COLUMN reservation_mutation_operation VARCHAR(15) NULL, "
+                    "ADD COLUMN reservation_mutation_reference VARCHAR(36) NULL"
+                )
+            )
+
+        with self.assertRaises(DemoChatReservationMutationMigrationError):
+            migrate_reservation_mutation(engine, schema=schema)
+
+        columns = {
+            item["name"]: item
+            for item in inspect(engine).get_columns(
+                "demo_chat_messages",
+                schema=schema,
+            )
+        }
+        self.assertEqual(columns["reservation_mutation_operation"]["type"].length, 15)
+
+    def test_02e_phase_c_column_metadata_must_be_exact(self):
+        cases = {
+            "operation_wrong_type": (
+                "reservation_mutation_operation TEXT NULL",
+                "reservation_mutation_reference VARCHAR(36) NULL",
+            ),
+            "reference_wrong_type": (
+                "reservation_mutation_operation VARCHAR(16) NULL",
+                "reservation_mutation_reference TEXT NULL",
+            ),
+            "reference_wrong_length": (
+                "reservation_mutation_operation VARCHAR(16) NULL",
+                "reservation_mutation_reference VARCHAR(35) NULL",
+            ),
+            "operation_not_null": (
+                "reservation_mutation_operation VARCHAR(16) NOT NULL",
+                "reservation_mutation_reference VARCHAR(36) NULL",
+            ),
+            "reference_not_null": (
+                "reservation_mutation_operation VARCHAR(16) NULL",
+                "reservation_mutation_reference VARCHAR(36) NOT NULL",
+            ),
+            "empty_default": (
+                "reservation_mutation_operation VARCHAR(16) NULL DEFAULT ''",
+                "reservation_mutation_reference VARCHAR(36) NULL",
+            ),
+            "constant_default": (
+                "reservation_mutation_operation VARCHAR(16) NULL DEFAULT 'created'",
+                "reservation_mutation_reference VARCHAR(36) NULL",
+            ),
+            "function_default": (
+                "reservation_mutation_operation VARCHAR(16) NULL "
+                "DEFAULT lower('created')",
+                "reservation_mutation_reference VARCHAR(36) NULL",
+            ),
+            "casted_default": (
+                "reservation_mutation_operation VARCHAR(16) NULL "
+                "DEFAULT 'created'::VARCHAR",
+                "reservation_mutation_reference VARCHAR(36) NULL",
+            ),
+            "explicit_null_default": (
+                "reservation_mutation_operation VARCHAR(16) NULL DEFAULT NULL",
+                "reservation_mutation_reference VARCHAR(36) NULL",
+            ),
+            "generated_reference_default": (
+                "reservation_mutation_operation VARCHAR(16) NULL",
+                "reservation_mutation_reference VARCHAR(36) NULL DEFAULT "
+                "('RSV_' || repeat('a', 32))",
+            ),
+            "identity_metadata": (
+                "reservation_mutation_operation INTEGER GENERATED ALWAYS AS IDENTITY",
+                "reservation_mutation_reference VARCHAR(36) NULL",
+            ),
+            "computed_metadata": (
+                "reservation_mutation_operation VARCHAR(16) NULL",
+                "reservation_mutation_reference VARCHAR(36) GENERATED ALWAYS AS "
+                "('RSV_' || repeat('a', 32)) STORED",
+            ),
+        }
+        for name, definitions in cases.items():
+            with self.subTest(case=name):
+                schema, engine = self._prepare_pre_phase_c_schema()
+                table = self._schema_table(schema, "demo_chat_messages")
+                with engine.begin() as connection:
+                    connection.execute(
+                        text(
+                            f"ALTER TABLE {table} "
+                            f"ADD COLUMN {definitions[0]}, "
+                            f"ADD COLUMN {definitions[1]}"
+                        )
+                    )
+                self._assert_phase_c_rejected_without_rewrite(engine, schema)
+
+    def test_02f_unexpected_related_column_is_rejected(self):
+        schema, engine = self._prepare_pre_phase_c_schema()
+        table = self._schema_table(schema, "demo_chat_messages")
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    f"ALTER TABLE {table} "
+                    "ADD COLUMN reservation_mutation_operation VARCHAR(16) NULL, "
+                    "ADD COLUMN reservation_mutation_reference VARCHAR(36) NULL, "
+                    "ADD COLUMN reservation_mutation_payload JSONB NULL"
+                )
+            )
+        self._assert_phase_c_rejected_without_rewrite(engine, schema)
+
+    def test_02g_malformed_and_unvalidated_phase_c_constraints_fail_closed(self):
+        operation = "reservation_mutation_operation"
+        reference = "reservation_mutation_reference"
+        cases = (
+            ("operation", f"{operation} IS NULL OR {operation} IN ('created', 'updated', 'cancelled', 'deleted')", False),
+            ("operation", f"{operation} IS NULL OR {operation} IN ('created', 'updated')", False),
+            ("operation", f"{operation} IS NULL OR lower({operation}) = 'created'", False),
+            ("operation", f"{operation} IS NULL OR {operation} LIKE '%'", False),
+            ("operation", f"{operation} IS NULL OR TRUE", False),
+            ("operation", f"{reference} IS NULL OR {reference} = 'created'", False),
+            ("pair", f"{operation} IS NULL OR {reference} IS NOT NULL", False),
+            ("pair", f"{operation} IS NULL OR {reference} IS NULL", False),
+            ("pair", f"{operation} IS NULL OR role IS NULL", False),
+            ("pair", "TRUE", False),
+            ("assistant_role", f"{operation} IS NULL OR role IN ('assistant', 'user')", False),
+            ("assistant_role", f"{operation} IS NULL OR role = 'user'", False),
+            ("assistant_role", f"{operation} IS NULL OR lower(role) = 'assistant'", False),
+            ("assistant_role", f"{reference} IS NULL OR role = 'assistant'", False),
+            ("reference", f"{reference} IS NULL OR {reference} ~* '^RSV_[0-9a-f]{{32}}$'", False),
+            ("reference", f"{reference} IS NULL OR {reference} ~ '^BAD_[0-9a-f]{{32}}$'", False),
+            ("reference", f"{reference} IS NULL OR {reference} ~ '^RSV_[0-9a-f]{{31}}$'", False),
+            ("reference", f"{reference} IS NULL OR {reference} ~ '^RSV_[0-9a-z]{{32}}$'", False),
+            ("reference", f"{reference} IS NULL OR {reference} LIKE 'RSV_%'", False),
+            ("reference", f"{reference} IS NULL OR substring({reference}, 1, 4) = 'RSV_'", False),
+            ("reference", f"{operation} IS NULL OR {operation} ~ '^RSV_[0-9a-f]{{32}}$'", False),
+            ("reference", "TRUE", False),
+            ("reference", MUTATION_CONSTRAINTS["ck_demo_chat_messages_reservation_mutation_reference"], True),
+        )
+        for suffix, expression, not_valid in cases:
+            with self.subTest(suffix=suffix, not_valid=not_valid, size=len(expression)):
+                schema, engine = self._prepare_pre_phase_c_schema()
+                table = self._schema_table(schema, "demo_chat_messages")
+                constraint = f"ck_demo_chat_messages_reservation_mutation_{suffix}"
+                validation = " NOT VALID" if not_valid else ""
+                with engine.begin() as connection:
+                    connection.execute(
+                        text(
+                            f"ALTER TABLE {table} "
+                            "ADD COLUMN reservation_mutation_operation VARCHAR(16) NULL, "
+                            "ADD COLUMN reservation_mutation_reference VARCHAR(36) NULL, "
+                            f"ADD CONSTRAINT {constraint} CHECK ({expression}){validation}"
+                        )
+                    )
+                self._assert_phase_c_rejected_without_rewrite(engine, schema)
+
+    def test_02h_old_rows_are_preserved_without_backfill(self):
+        schema, engine = self._prepare_pre_phase_c_schema()
+        Session = sessionmaker(bind=engine, expire_on_commit=False)
+        now = datetime.now(timezone.utc)
+        request_id = uuid4()
+        with Session() as db:
+            session, _owner = self._session(db, 8291, now=now)
+            db.commit()
+            session_id = session.id
+        table = self._schema_table(schema, "demo_chat_messages")
+        with engine.begin() as connection:
+            inserted = connection.execute(
+                text(
+                    f"INSERT INTO {table} "
+                    "(demo_session_id, role, content, request_id, created_at) VALUES "
+                    "(:session_id, 'user', :user_content, :request_id, :created_at), "
+                    "(:session_id, 'assistant', :assistant_content, :request_id, :created_at) "
+                    "RETURNING id, demo_session_id, role, content, request_id, created_at"
+                ),
+                {
+                    "session_id": session_id,
+                    "user_content": "legacy user content",
+                    "assistant_content": "legacy assistant content",
+                    "request_id": str(request_id),
+                    "created_at": now,
+                },
+            ).all()
+        self.assertTrue(migrate_reservation_mutation(engine, schema=schema))
+        with engine.connect() as connection:
+            preserved = connection.execute(
+                text(
+                    f"SELECT id, demo_session_id, role, content, request_id, created_at, "
+                    "reservation_mutation_operation, reservation_mutation_reference "
+                    f"FROM {table} ORDER BY id"
+                )
+            ).all()
+        self.assertEqual(len(preserved), len(inserted))
+        self.assertEqual([tuple(row[:6]) for row in preserved], [tuple(row) for row in inserted])
+        self.assertTrue(all(tuple(row[6:]) == (None, None) for row in preserved))
+
+    def test_02i_full_migration_chain_preserves_phase_c_row(self):
+        schema, engine = self._prepare_pre_phase_c_schema()
+        self.assertTrue(migrate_reservation_mutation(engine, schema=schema))
+        Session = sessionmaker(bind=engine, expire_on_commit=False)
+        now = datetime.now(timezone.utc)
+        reference = "RSV_" + ("e" * 32)
+        with Session() as db:
+            session, _owner = self._session(db, 8292, now=now)
+            db.commit()
+            session_id = session.id
+        table = self._schema_table(schema, "demo_chat_messages")
+        request_id = uuid4()
+        with engine.begin() as connection:
+            inserted = connection.execute(
+                text(
+                    f"INSERT INTO {table} "
+                    "(demo_session_id, role, content, request_id, "
+                    "reservation_mutation_operation, reservation_mutation_reference, "
+                    "created_at) VALUES "
+                    "(:session_id, 'assistant', :content, :request_id, "
+                    "'updated', :reference, :created_at) RETURNING id"
+                ),
+                {
+                    "session_id": session_id,
+                    "content": "persisted completion",
+                    "request_id": str(request_id),
+                    "reference": reference,
+                    "created_at": now,
+                },
+            ).scalar_one()
+        before = self._phase_c_signature(engine, schema)
+        self.assertFalse(migrate(engine, schema=schema))
+        self.assertFalse(migrate_reservation_mutation(engine, schema=schema))
+        self.assertEqual(self._phase_c_signature(engine, schema), before)
+        with engine.connect() as connection:
+            row = connection.execute(
+                text(
+                    f"SELECT id, reservation_mutation_operation, "
+                    f"reservation_mutation_reference FROM {table} WHERE id = :id"
+                ),
+                {"id": inserted},
+            ).one()
+        self.assertEqual(tuple(row), (inserted, "updated", reference))
 
     def test_03_model_metadata_and_migrated_schema_converge_semantically(self):
         inspector = inspect(self.engine)
@@ -560,6 +1002,19 @@ class DemoPersistencePostgreSQLTests(unittest.TestCase):
                     for name, expression, required_fragments
                     in CHECK_CONSTRAINTS[table_name]
                 }
+                if table_name == "demo_chat_messages":
+                    expected_checks.update(
+                        {
+                            name: (
+                                expression,
+                                (
+                                    "reservation_mutation_operation",
+                                    "reservation_mutation_reference",
+                                ),
+                            )
+                            for name, expression in MUTATION_CONSTRAINTS.items()
+                        }
+                    )
                 model_checks = {
                     constraint.name: constraint.sqltext
                     for constraint in table.constraints
@@ -584,6 +1039,20 @@ class DemoPersistencePostgreSQLTests(unittest.TestCase):
                     expression,
                     required_fragments,
                 ) in expected_checks.items():
+                    if name in MUTATION_CONSTRAINTS:
+                        self.assertTrue(
+                            mutation_constraint_is_compatible(
+                                name,
+                                str(model_checks[name]),
+                            )
+                        )
+                        self.assertTrue(
+                            mutation_constraint_is_compatible(
+                                name,
+                                migrated_checks[name],
+                            )
+                        )
+                        continue
                     self.assertTrue(
                         _check_has_semantics(
                             model_checks[name],

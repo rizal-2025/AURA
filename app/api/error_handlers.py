@@ -45,6 +45,11 @@ from app.services.demo_chat_errors import (
     DemoChatServiceUnavailableError,
 )
 from app.services.demo_rate_limit_service import DemoRateLimitExceededError
+from app.services.reservation.errors import (
+    PublicReservationContractError,
+    ReservationNotFoundError,
+    ReservationReferenceRequestError,
+)
 
 
 REQUEST_BODY_TOO_LARGE = "REQUEST_BODY_TOO_LARGE"
@@ -52,6 +57,24 @@ INVALID_REQUEST_FRAMING = "INVALID_REQUEST_FRAMING"
 REQUEST_VALIDATION_FAILED = "REQUEST_VALIDATION_FAILED"
 DEMO_CHAT_VALIDATION_ERROR = "VALIDATION_ERROR"
 CONVERSATION_BUSY = "CONVERSATION_BUSY"
+
+_PUBLIC_RESERVATION_DETAILS = {
+    ReservationReferenceRequestError: (
+        422,
+        "INVALID_RESERVATION_REFERENCE",
+        "Reservation reference is invalid.",
+    ),
+    ReservationNotFoundError: (
+        404,
+        "RESERVATION_NOT_FOUND",
+        "Reservation is unavailable.",
+    ),
+    PublicReservationContractError: (
+        503,
+        "RESERVATION_REFERENCE_UNAVAILABLE",
+        "Reservation data is temporarily unavailable.",
+    ),
+}
 
 _DEMO_SESSION_DETAILS = {
     DemoServiceAuthRequiredError: (
@@ -199,6 +222,22 @@ async def transaction_exception_handler(
             "code": code,
             "detail": detail,
         },
+    )
+
+
+async def public_reservation_exception_handler(
+    _request: Request,
+    error: (
+        ReservationReferenceRequestError
+        | ReservationNotFoundError
+        | PublicReservationContractError
+    ),
+) -> JSONResponse:
+    status_code, code, detail = _PUBLIC_RESERVATION_DETAILS[type(error)]
+    logger.info("HTTP REQUEST: status=%s code=%s", status_code, code)
+    return JSONResponse(
+        status_code=status_code,
+        content={"code": code, "detail": detail},
     )
 
 

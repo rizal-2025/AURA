@@ -14,6 +14,11 @@ from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import NullPool
 
+from app.agents.result import (
+    AgentTurnResult,
+    ReservationOperationResult,
+    ReservationOperationType,
+)
 from app.db.models.conversation_workflow_state import (
     ConversationWorkflowState,
 )
@@ -55,6 +60,9 @@ from migrations.add_demo_chat_request_id import (
     DemoChatRequestIdMigrationError,
     migrate as migrate_request_id,
 )
+from migrations.add_demo_chat_reservation_mutation import (
+    migrate as migrate_reservation_mutation,
+)
 from migrations.add_demo_persistence import migrate as migrate_demo
 from tests.integration.disposable_schema import DisposableSchemaResources
 
@@ -88,9 +96,9 @@ class _ReplyCore:
         self.calls = calls
         self.reply = reply
 
-    async def process(self, **values):
+    async def process_turn(self, **values):
         self.calls.append(values)
-        return self.reply
+        return AgentTurnResult(reply=self.reply)
 
 
 class _BlockingCore:
@@ -107,7 +115,7 @@ class _BlockingCore:
         self.calls = calls
         self.create_reservation = create_reservation
 
-    async def process(
+    async def process_turn(
         self,
         *,
         db,
@@ -116,8 +124,9 @@ class _BlockingCore:
         message,
     ):
         self.calls.append((customer.id, session_reference, message))
+        reservation_operation = None
         if self.create_reservation:
-            ReservationService().create_reservation(
+            reservation = ReservationService().create_reservation(
                 db,
                 ReservationCreate(
                     name="Rizal",
@@ -127,10 +136,17 @@ class _BlockingCore:
                 ),
                 owner_customer_id=customer.id,
             )
+            reservation_operation = ReservationOperationResult(
+                operation=ReservationOperationType.CREATED,
+                reference=reservation.reference,
+            )
         self.entered.set()
         if not self.release.wait(5):
             raise RuntimeError("test release timeout")
-        return "Jawaban blocking tersimpan."
+        return AgentTurnResult(
+            reply="Jawaban blocking tersimpan.",
+            reservation_operation=reservation_operation,
+        )
 
 
 class _AsyncBlockingCore:
@@ -138,14 +154,14 @@ class _AsyncBlockingCore:
         self.entered = entered
         self.release = release
 
-    async def process(self, **_values):
+    async def process_turn(self, **_values):
         self.entered.set()
         await self.release.wait()
-        return "Jawaban pertama."
+        return AgentTurnResult(reply="Jawaban pertama.")
 
 
 class _CancellingCore:
-    async def process(self, **_values):
+    async def process_turn(self, **_values):
         raise asyncio.CancelledError()
 
 
@@ -155,8 +171,8 @@ class _DelegatingBlockingCore:
         self.entered = entered
         self.release = release
 
-    async def process(self, **values):
-        response = await self.core.process(**values)
+    async def process_turn(self, **values):
+        response = await self.core.process_turn(**values)
         self.entered.set()
         if not self.release.wait(5):
             raise RuntimeError("test release timeout")
@@ -259,6 +275,8 @@ class DemoChatPostgreSQLTests(unittest.TestCase):
         migrate_demo(cls.engine, schema=cls.schema)
         if not migrate_request_id(cls.engine, schema=cls.schema):
             raise RuntimeError("Request ID migration did not apply.")
+        if not migrate_reservation_mutation(cls.engine, schema=cls.schema):
+            raise RuntimeError("Reservation mutation migration did not apply.")
         cls.Session = sessionmaker(
             bind=cls.engine,
             autoflush=False,
@@ -1065,7 +1083,7 @@ class DemoChatPostgreSQLTests(unittest.TestCase):
         calls = []
 
         class CountingCancellingCore:
-            async def process(self, **values):
+            async def process_turn(self, **values):
                 calls.append(values)
                 raise asyncio.CancelledError()
 
@@ -1223,13 +1241,28 @@ class DemoChatPostgreSQLTests(unittest.TestCase):
         counts = self.counts()
         self.assertEqual(counts["reservations"], 1)
         self.assertEqual(counts["messages"], 2)
+        successful = next(
+            item for item in output_a if not isinstance(item, BaseException)
+        )
+        self.assertEqual(
+            successful.reservation_mutation.operation.value,
+            "created",
+        )
+        with self.Session() as db:
+            replay = self.run_process(
+                self.service(),
+                db,
+                TOKEN_A,
+                request_id,
+            )
+        self.assertEqual(replay, successful)
 
     def test_reservation_owner_is_derived_and_cross_owner_isolation_holds(self):
         self.create_session(TOKEN_B)
         calls = []
 
         class _ReservationCore:
-            async def process(_self, *, db, customer, **_kwargs):
+            async def process_turn(_self, *, db, customer, **_kwargs):
                 result = ReservationService().create_reservation(
                     db,
                     ReservationCreate(
@@ -1241,7 +1274,7 @@ class DemoChatPostgreSQLTests(unittest.TestCase):
                     owner_customer_id=customer.id,
                 )
                 calls.append((customer.id, result.id))
-                return "Reservasi tersimpan."
+                return AgentTurnResult(reply="Reservasi tersimpan.")
 
         with self.Session() as db:
             response = self.run_process(
@@ -1337,6 +1370,7 @@ class DemoChatPostgreSQLTests(unittest.TestCase):
             )
 
         assistant = next(row for row in rows if row.role == "assistant")
+        user = next(row for row in rows if row.role == "user")
         boundary_text = "\n".join(
             (
                 response.reply.content,
@@ -1349,11 +1383,224 @@ class DemoChatPostgreSQLTests(unittest.TestCase):
         self.assertIn(reservation.public_reference, response.reply.content)
         self.assertIn(reservation.public_reference, assistant.content)
         self.assertEqual(replay.reply.content, response.reply.content)
-        self.assertIsNone(response.reservation_mutation)
-        self.assertIsNone(replay.reservation_mutation)
-        self.assertIsNone(
-            response.model_dump(by_alias=True)["reservationMutation"]
+        self.assertEqual(
+            response.reservation_mutation.operation.value,
+            "created",
         )
+        self.assertEqual(
+            response.reservation_mutation.reservation_reference,
+            reservation.public_reference,
+        )
+        self.assertEqual(response.reservation_mutation, replay.reservation_mutation)
+        self.assertEqual(
+            (
+                assistant.reservation_mutation_operation,
+                assistant.reservation_mutation_reference,
+            ),
+            ("created", reservation.public_reference),
+        )
+        self.assertEqual(
+            (
+                user.reservation_mutation_operation,
+                user.reservation_mutation_reference,
+            ),
+            (None, None),
+        )
+        self.assertNotIn(
+            str(SEEDED_DEMO_RESERVATION_ID),
+            "".join(
+                (
+                    assistant.reservation_mutation_operation,
+                    assistant.reservation_mutation_reference,
+                )
+            ),
+        )
+        self.assertNotIn(
+            str(SEEDED_DEMO_RESERVATION_ID),
+            str(response.model_dump(by_alias=True)["reservationMutation"]),
+        )
+
+    def test_update_and_cancel_mutations_are_durable_and_replay_once(self):
+        session = self.session_row(TOKEN_A)
+
+        for offset, operation in enumerate(("update", "cancel"), start=1):
+            with self.subTest(operation=operation):
+                seeded_id = SEEDED_DEMO_RESERVATION_ID + (offset * 100)
+                with self.engine.begin() as connection:
+                    connection.execute(
+                        text(
+                            "SELECT setval("
+                            "pg_get_serial_sequence('reservations', 'id'), "
+                            ":seeded_id, false)"
+                        ),
+                        {"seeded_id": seeded_id},
+                    )
+                with self.Session() as db:
+                    reservation = ReservationService().create_reservation(
+                        db,
+                        ReservationCreate(
+                            name="Mutation owner",
+                            people=2,
+                            date=f"2026-08-0{offset + 3}",
+                            time="18:00",
+                        ),
+                        owner_customer_id=session.owner_customer_id,
+                    )
+                self.assertEqual(reservation.id, seeded_id)
+
+                core_calls = []
+
+                class _DurableMutationCore:
+                    async def process_turn(_self, *, db, customer, **_kwargs):
+                        core_calls.append(operation)
+                        service = ReservationService()
+                        if operation == "update":
+                            result = service.update_reservation_field_by_reference(
+                                db,
+                                reservation.reference,
+                                "people",
+                                4,
+                                customer.id,
+                            )
+                            operation_type = ReservationOperationType.UPDATED
+                        else:
+                            result = service.cancel_reservation_by_reference(
+                                db,
+                                reservation.reference,
+                                customer.id,
+                            )
+                            operation_type = ReservationOperationType.CANCELLED
+                        return AgentTurnResult(
+                            reply="Mutation completed safely.",
+                            reservation_operation=ReservationOperationResult(
+                                operation=operation_type,
+                                reference=result.reference,
+                            ),
+                        )
+
+                request_id = uuid4()
+                with self.Session() as db:
+                    original = self.run_process(
+                        self.service(
+                            core_factory=lambda _id: _DurableMutationCore()
+                        ),
+                        db,
+                        TOKEN_A,
+                        request_id,
+                        message=f"perform {operation}",
+                    )
+                with self.Session() as db:
+                    rows = DemoChatMessageRepository().list_by_request_id(
+                        db,
+                        demo_session_id=session.id,
+                        request_id=request_id,
+                    )
+                    stored_reservation = db.get(Reservation, seeded_id)
+                replay_calls = []
+                with self.Session() as db:
+                    replay = self.run_process(
+                        self.service(replay_calls),
+                        db,
+                        TOKEN_A,
+                        request_id,
+                        message=f"perform {operation}",
+                    )
+
+                assistant = next(row for row in rows if row.role == "assistant")
+                user = next(row for row in rows if row.role == "user")
+                expected_operation = (
+                    "cancelled" if operation == "cancel" else "updated"
+                )
+                self.assertEqual(core_calls, [operation])
+                self.assertEqual(replay_calls, [])
+                self.assertEqual(len(rows), 2)
+                self.assertEqual(original, replay)
+                self.assertEqual(
+                    original.reservation_mutation.operation.value,
+                    expected_operation,
+                )
+                self.assertEqual(
+                    original.reservation_mutation.reservation_reference,
+                    reservation.reference,
+                )
+                self.assertEqual(
+                    (
+                        assistant.reservation_mutation_operation,
+                        assistant.reservation_mutation_reference,
+                    ),
+                    (expected_operation, reservation.reference),
+                )
+                self.assertEqual(
+                    (
+                        user.reservation_mutation_operation,
+                        user.reservation_mutation_reference,
+                    ),
+                    (None, None),
+                )
+                persisted_boundary = "".join(
+                    (
+                        assistant.reservation_mutation_operation,
+                        assistant.reservation_mutation_reference,
+                    )
+                )
+                serialized = str(original.model_dump(by_alias=True))
+                self.assertNotIn(str(seeded_id), persisted_boundary)
+                self.assertNotIn(str(seeded_id), serialized)
+                self.assertNotIn(str(seeded_id), str(replay.model_dump(by_alias=True)))
+                if operation == "update":
+                    self.assertEqual(stored_reservation.people, 4)
+                else:
+                    self.assertEqual(stored_reservation.status, "cancelled")
+
+        mutation_columns = {
+            item["name"]
+            for item in inspect(self.engine).get_columns("demo_chat_messages")
+            if item["name"].startswith("reservation_mutation_")
+        }
+        self.assertEqual(
+            mutation_columns,
+            {
+                "reservation_mutation_operation",
+                "reservation_mutation_reference",
+            },
+        )
+
+    def test_legacy_completion_replays_null_mutation_without_core(self):
+        session = self.session_row(TOKEN_A)
+        request_id = uuid4()
+        repository = DemoChatMessageRepository()
+        with self.Session() as db:
+            repository.append_request_message(
+                db,
+                demo_session_id=session.id,
+                role="user",
+                content="legacy request",
+                request_id=request_id,
+                created_at=self.now,
+            )
+            stored = repository.append_request_message(
+                db,
+                demo_session_id=session.id,
+                role="assistant",
+                content="legacy stored completion",
+                request_id=request_id,
+                created_at=self.now,
+            )
+            db.commit()
+
+        replay_calls = []
+        with self.Session() as db:
+            replay = self.run_process(
+                self.service(replay_calls),
+                db,
+                TOKEN_A,
+                request_id,
+                message="legacy request",
+            )
+        self.assertEqual(replay_calls, [])
+        self.assertEqual(replay.reply.content, stored.content)
+        self.assertIsNone(replay.reservation_mutation)
+        self.assertEqual(self.counts()["messages"], 2)
 
     def test_update_and_cancel_use_owner_filter_for_each_demo_session(self):
         self.create_session(TOKEN_B)
@@ -1376,7 +1623,7 @@ class DemoChatPostgreSQLTests(unittest.TestCase):
                 self.operation = operation
                 self.result = None
 
-            async def process(_self, *, db, customer, **_kwargs):
+            async def process_turn(_self, *, db, customer, **_kwargs):
                 reservation_service = ReservationService()
                 if _self.operation == "update":
                     _self.result = (
@@ -1394,7 +1641,7 @@ class DemoChatPostgreSQLTests(unittest.TestCase):
                         reservation_b.reference,
                         customer.id,
                     )
-                return "Operasi selesai secara aman."
+                return AgentTurnResult(reply="Operasi selesai secara aman.")
 
         for operation in ("update", "cancel"):
             denied_core = _MutationCore(operation)

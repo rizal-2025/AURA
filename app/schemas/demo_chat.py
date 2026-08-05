@@ -1,6 +1,7 @@
 """Strict DTOs for the internal portfolio demo chat endpoint."""
 
 from datetime import datetime
+from enum import Enum
 from typing import Literal
 from uuid import UUID
 
@@ -17,6 +18,7 @@ from app.core.input_validation import (
     InputValidationError,
     normalize_chat_message,
 )
+from app.schemas.reservation import CanonicalReservationReference
 
 
 MAX_DEMO_CHAT_MESSAGE_CODEPOINTS = 1000
@@ -61,9 +63,19 @@ class DemoChatHandoff(_InternalDemoChatDTO):
     status: Literal["simulated"]
 
 
+class DemoReservationMutationOperation(str, Enum):
+    CREATED = "created"
+    UPDATED = "updated"
+    CANCELLED = "cancelled"
+
+
 class DemoReservationMutation(_InternalDemoChatDTO):
-    type: Literal["created", "updated", "cancelled"]
-    reservation_id: str = Field(serialization_alias="reservationId")
+    model_config = ConfigDict(frozen=True)
+
+    operation: DemoReservationMutationOperation
+    reservation_reference: CanonicalReservationReference = Field(
+        serialization_alias="reservationReference"
+    )
 
 
 class DemoChatResponse(_InternalDemoChatDTO):

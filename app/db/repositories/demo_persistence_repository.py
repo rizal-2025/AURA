@@ -18,9 +18,14 @@ from app.db.models.demo_persistence import (
     DemoHandoffEvent,
     DemoRateLimitBucket,
     DemoSession,
+    VALID_DEMO_RESERVATION_MUTATION_OPERATIONS,
     safe_demo_handoff_summary,
     validate_demo_digest,
     validate_utc_datetime,
+)
+from app.services.reservation.public_reference import (
+    PublicReservationReferenceUnavailableError,
+    require_canonical_public_reference,
 )
 
 
@@ -55,6 +60,32 @@ class PersistedDemoChatMessage:
     content: str
     request_id: UUID
     created_at: datetime
+    reservation_mutation_operation: str | None
+    reservation_mutation_reference: str | None
+
+
+def _validated_demo_mutation_pair(
+    *,
+    role: str,
+    operation: str | None,
+    reference: str | None,
+) -> tuple[str | None, str | None]:
+    if operation is None and reference is None:
+        return None, None
+    if (
+        role != "assistant"
+        or type(operation) is not str
+        or operation not in VALID_DEMO_RESERVATION_MUTATION_OPERATIONS
+        or type(reference) is not str
+    ):
+        raise ValueError("Invalid demo reservation mutation metadata.")
+    try:
+        canonical_reference = require_canonical_public_reference(reference)
+    except PublicReservationReferenceUnavailableError:
+        raise ValueError(
+            "Invalid demo reservation mutation metadata."
+        ) from None
+    return operation, canonical_reference
 
 
 class DemoSessionRepository:
@@ -322,6 +353,8 @@ class DemoChatMessageRepository:
         content: str,
         request_id: UUID,
         created_at: datetime | None = None,
+        reservation_mutation_operation: str | None = None,
+        reservation_mutation_reference: str | None = None,
     ) -> PersistedDemoChatMessage:
         session_id = _require_internal_session_id(demo_session_id)
         if role not in {"user", "assistant"}:
@@ -333,6 +366,11 @@ class DemoChatMessageRepository:
         timestamp = validate_utc_datetime(
             created_at or datetime.now(timezone.utc)
         )
+        mutation_operation, mutation_reference = _validated_demo_mutation_pair(
+            role=role,
+            operation=reservation_mutation_operation,
+            reference=reservation_mutation_reference,
+        )
         row = db.execute(
             text(
                 """
@@ -341,6 +379,8 @@ class DemoChatMessageRepository:
                     role,
                     content,
                     request_id,
+                    reservation_mutation_operation,
+                    reservation_mutation_reference,
                     created_at
                 )
                 VALUES (
@@ -348,6 +388,8 @@ class DemoChatMessageRepository:
                     :role,
                     :content,
                     :request_id,
+                    :reservation_mutation_operation,
+                    :reservation_mutation_reference,
                     :created_at
                 )
                 RETURNING
@@ -356,6 +398,8 @@ class DemoChatMessageRepository:
                     role,
                     content,
                     request_id,
+                    reservation_mutation_operation,
+                    reservation_mutation_reference,
                     created_at
                 """
             ),
@@ -364,6 +408,8 @@ class DemoChatMessageRepository:
                 "role": role,
                 "content": content,
                 "request_id": str(request_id),
+                "reservation_mutation_operation": mutation_operation,
+                "reservation_mutation_reference": mutation_reference,
                 "created_at": timestamp,
             },
         ).mappings().one()
@@ -388,6 +434,8 @@ class DemoChatMessageRepository:
                     role,
                     content,
                     request_id,
+                    reservation_mutation_operation,
+                    reservation_mutation_reference,
                     created_at
                 FROM demo_chat_messages
                 WHERE demo_session_id = :demo_session_id
@@ -414,6 +462,12 @@ class DemoChatMessageRepository:
             content=str(row["content"]),
             request_id=request_id,
             created_at=_comparable_utc_datetime(row["created_at"]),
+            reservation_mutation_operation=row[
+                "reservation_mutation_operation"
+            ],
+            reservation_mutation_reference=row[
+                "reservation_mutation_reference"
+            ],
         )
 
     def list_latest(

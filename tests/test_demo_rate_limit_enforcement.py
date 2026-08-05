@@ -11,6 +11,7 @@ from sqlalchemy import create_engine, event, func, select
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from app.agents.result import AgentTurnResult
 from app.api.internal_demo_chat import get_demo_chat_service
 from app.api.internal_demo_dependencies import (
     get_demo_rate_limit_service,
@@ -118,7 +119,7 @@ class _ReplayCore:
         self.calls = calls
         self.now = now
 
-    async def process(
+    async def process_turn(
         self,
         *,
         db,
@@ -146,7 +147,7 @@ class _ReplayCore:
                 created_at=self.now(),
             )
             unit.commit()
-        return "Stored assistant reply."
+        return AgentTurnResult(reply="Stored assistant reply.")
 
 
 class _FailSecondPolicyBuckets:

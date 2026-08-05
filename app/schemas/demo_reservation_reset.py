@@ -5,6 +5,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.schemas.reservation import CanonicalReservationReference
 from app.schemas.demo_session import DemoSessionSummary
 
 
@@ -17,6 +18,11 @@ class _InternalDemoReservationDTO(BaseModel):
 
 
 class DemoReservationItem(_InternalDemoReservationDTO):
+    model_config = ConfigDict(frozen=True)
+
+    reservation_reference: CanonicalReservationReference = Field(
+        serialization_alias="reservationReference"
+    )
     status: Literal["pending", "cancelled"]
     reservation_date: date = Field(serialization_alias="reservationDate")
     reservation_time: time = Field(serialization_alias="reservationTime")

@@ -2,12 +2,18 @@
 
 import asyncio
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 import unittest
 from uuid import UUID, uuid4
 
 from sqlalchemy import create_engine, event, func, select
 from sqlalchemy.orm import sessionmaker
 
+from app.agents.result import (
+    AgentTurnResult,
+    ReservationOperationResult,
+    ReservationOperationType,
+)
 from app.brain.memory_manager import MemoryManager
 from app.core.transaction_errors import PersistenceOperationError
 from app.db.models.customer import Customer
@@ -56,12 +62,20 @@ class _NoopDatabaseLock:
 
 
 class _FakeCore:
-    def __init__(self, calls, *, reply="Jawaban aman.", error=None):
+    def __init__(
+        self,
+        calls,
+        *,
+        reply="Jawaban aman.",
+        error=None,
+        reservation_operation=None,
+    ):
         self.calls = calls
         self.reply = reply
         self.error = error
+        self.reservation_operation = reservation_operation
 
-    async def process(
+    async def process_turn(
         self,
         *,
         db,
@@ -79,7 +93,12 @@ class _FakeCore:
         )
         if self.error is not None:
             raise self.error
-        return self.reply
+        if isinstance(self.reply, str) and self.reply.strip():
+            return AgentTurnResult(
+                reply=self.reply,
+                reservation_operation=self.reservation_operation,
+            )
+        return SimpleNamespace(reply=self.reply, reservation_operation=None)
 
 
 class _AssistantFailingRepository(DemoChatMessageRepository):
@@ -87,6 +106,19 @@ class _AssistantFailingRepository(DemoChatMessageRepository):
         if values["role"] == "assistant":
             raise RuntimeError("unsafe database detail")
         return super().append_request_message(db, **values)
+
+
+class _AssistantCommitMarkerRepository(DemoChatMessageRepository):
+    def __init__(self):
+        self.assistant_staged = False
+        self.assistant_values = None
+
+    def append_request_message(self, db, **values):
+        row = super().append_request_message(db, **values)
+        if values["role"] == "assistant":
+            self.assistant_staged = True
+            self.assistant_values = dict(values)
+        return row
 
 
 class _FakeConnection:
@@ -189,6 +221,7 @@ class DemoChatServiceTests(unittest.TestCase):
         repository=None,
         session_service=None,
         calls=None,
+        reservation_operation=None,
     ):
         active_calls = self.calls if calls is None else calls
         return DemoChatService(
@@ -199,6 +232,7 @@ class DemoChatServiceTests(unittest.TestCase):
                 active_calls,
                 reply=reply,
                 error=error,
+                reservation_operation=reservation_operation,
             ),
             clock=lambda: self.now,
         )
@@ -490,6 +524,102 @@ class DemoChatServiceTests(unittest.TestCase):
         )
         self.assertEqual([row.role for row in rows], ["user"])
 
+    def test_assistant_commit_failure_returns_no_mutation_and_retry_conflicts(self):
+        request_id = uuid4()
+        reference = "RSV_" + ("7" * 32)
+        repository = _AssistantCommitMarkerRepository()
+        original_commit = self.db.commit
+
+        def fail_assistant_commit():
+            if repository.assistant_staged:
+                raise RuntimeError("forced assistant commit failure")
+            return original_commit()
+
+        self.db.commit = fail_assistant_commit
+        operation = ReservationOperationResult(
+            operation=ReservationOperationType.CREATED,
+            reference=reference,
+        )
+        with self.assertRaises(DemoChatServiceUnavailableError) as captured:
+            self.process(
+                self.service(
+                    repository=repository,
+                    reservation_operation=operation,
+                ),
+                request_id=request_id,
+            )
+        self.assertNotIn("forced assistant commit failure", repr(captured.exception))
+        self.assertEqual(len(self.calls), 1)
+        self.assertEqual(
+            repository.assistant_values["reservation_mutation_operation"],
+            "created",
+        )
+        self.assertEqual(
+            repository.assistant_values["reservation_mutation_reference"],
+            reference,
+        )
+
+        self.db.close()
+        self.db = self.Session()
+        rows = self.request_rows(self.session_a.id, request_id)
+        self.assertEqual([row.role for row in rows], ["user"])
+        replay_calls = []
+        with self.assertRaises(DemoChatRequestConflictError):
+            self.process(
+                self.service(calls=replay_calls),
+                request_id=request_id,
+            )
+        self.assertEqual(replay_calls, [])
+
+    def test_successful_but_uncertain_commit_reconciles_persisted_mutation(self):
+        request_id = uuid4()
+        reference = "RSV_" + ("8" * 32)
+        repository = _AssistantCommitMarkerRepository()
+        original_commit = self.db.commit
+        uncertainty_raised = False
+
+        def commit_then_report_uncertainty():
+            nonlocal uncertainty_raised
+            result = original_commit()
+            if repository.assistant_staged and not uncertainty_raised:
+                uncertainty_raised = True
+                raise RuntimeError("forced post-commit uncertainty")
+            return result
+
+        self.db.commit = commit_then_report_uncertainty
+        with self.assertRaises(DemoChatServiceUnavailableError) as captured:
+            self.process(
+                self.service(
+                    repository=repository,
+                    reservation_operation=ReservationOperationResult(
+                        operation=ReservationOperationType.UPDATED,
+                        reference=reference,
+                    ),
+                ),
+                request_id=request_id,
+            )
+        self.assertNotIn("forced post-commit uncertainty", repr(captured.exception))
+        self.assertTrue(uncertainty_raised)
+        self.assertEqual(len(self.calls), 1)
+
+        self.db.close()
+        self.db = self.Session()
+        rows = self.request_rows(self.session_a.id, request_id)
+        self.assertEqual([row.role for row in rows], ["user", "assistant"])
+        replay_calls = []
+        replay = self.process(
+            self.service(calls=replay_calls),
+            request_id=request_id,
+        )
+        self.assertEqual(replay_calls, [])
+        self.assertEqual(replay.reply.content, rows[1].content)
+        self.assertEqual(replay.reservation_mutation.operation.value, "updated")
+        self.assertEqual(
+            replay.reservation_mutation.reservation_reference,
+            reference,
+        )
+        self.assertEqual(len(self.request_rows(self.session_a.id, request_id)), 2)
+
     def test_revoked_and_expired_sessions_never_reach_core(self):
         self.session_a.revoked_at = self.now
         self.db.commit()
@@ -540,6 +670,70 @@ class DemoChatServiceTests(unittest.TestCase):
                 reply="Reservasi berhasil dibuat dengan ID 999."
             )
         )
+        self.assertIsNone(response.reservation_mutation)
+
+    def test_structured_mutation_is_persisted_and_replayed_exactly(self):
+        request_id = uuid4()
+        reference = "RSV_" + ("a" * 32)
+        operation = ReservationOperationResult(
+            operation=ReservationOperationType.CREATED,
+            reference=reference,
+        )
+        first = self.process(
+            self.service(reservation_operation=operation),
+            request_id=request_id,
+        )
+        replay_calls = []
+        replay = self.process(
+            self.service(calls=replay_calls),
+            request_id=request_id,
+        )
+
+        rows = self.request_rows(self.session_a.id, request_id)
+        self.assertEqual(len(self.calls), 1)
+        self.assertEqual(replay_calls, [])
+        self.assertEqual(first, replay)
+        self.assertEqual(rows[0].reservation_mutation_operation, None)
+        self.assertEqual(rows[0].reservation_mutation_reference, None)
+        self.assertEqual(
+            rows[1].reservation_mutation_operation,
+            "created",
+        )
+        self.assertEqual(
+            rows[1].reservation_mutation_reference,
+            reference,
+        )
+        self.assertEqual(
+            first.model_dump(by_alias=True)["reservationMutation"],
+            {
+                "operation": "created",
+                "reservationReference": reference,
+            },
+        )
+
+    def test_legacy_completed_row_replays_without_mutation_inference(self):
+        request_id = uuid4()
+        repository = DemoChatMessageRepository()
+        for role, content in (
+            ("user", "Buat reservasi"),
+            ("assistant", "Reservasi dibuat dengan ID 999"),
+        ):
+            repository.append_request_message(
+                self.db,
+                demo_session_id=self.session_a.id,
+                role=role,
+                content=content,
+                request_id=request_id,
+                created_at=self.now,
+            )
+        self.db.commit()
+
+        response = self.process(
+            self.service(),
+            message="Buat reservasi",
+            request_id=request_id,
+        )
+        self.assertEqual(self.calls, [])
         self.assertIsNone(response.reservation_mutation)
 
 
