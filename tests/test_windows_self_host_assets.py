@@ -10,6 +10,12 @@ WINDOWS_ROOT = PROJECT_ROOT / "deploy" / "windows"
 EXPECTED_SCRIPTS = {
     "Start-Aura.ps1",
     "Stop-Aura.ps1",
+    "Start-AuraPublicDemo.ps1",
+    "Stop-AuraPublicDemo.ps1",
+    "Start-TailscaleFunnel.ps1",
+    "Stop-TailscaleFunnel.ps1",
+    "Test-TailscaleFunnel.ps1",
+    "Test-PublicDemoReadiness.ps1",
     "Test-AuraReadiness.ps1",
     "Run-DemoCleanup.ps1",
     "Backup-DemoDatabase.ps1",
@@ -44,7 +50,6 @@ class WindowsSelfHostAssetTests(unittest.TestCase):
             "ConvertTo-SecureString -AsPlainText",
             "--password",
             "PGPASSWORD",
-            "trycloudflare.com",
             "0.0.0.0",
         ):
             self.assertNotIn(forbidden.casefold(), combined.casefold())
@@ -72,12 +77,25 @@ class WindowsSelfHostAssetTests(unittest.TestCase):
         tasks = (WINDOWS_ROOT / "Register-AuraTasks.ps1").read_text(encoding="utf-8")
         firewall = (WINDOWS_ROOT / "Install-AuraFirewallRules.ps1").read_text(encoding="utf-8")
         self.assertIn("MultipleInstances IgnoreNew", tasks)
-        self.assertIn("-Profile production -Foreground", tasks)
-        self.assertEqual(tasks.count("-RestartCount"), 1)
+        self.assertNotIn("AtLogOn", tasks)
+        self.assertNotIn("AURA API Production", tasks)
+        self.assertNotIn("Start-Aura", tasks)
         self.assertIn("'00:17'", tasks)
         for port in (8000, 8001, 5432):
             self.assertIn(f"-LocalPort {port}", firewall)
         self.assertNotIn("-Action Allow -Protocol TCP -LocalPort", firewall)
+
+    def test_funnel_lifecycle_is_manual_exact_and_non_persistent(self):
+        common = (WINDOWS_ROOT / "AuraWindows.Common.ps1").read_text(encoding="utf-8")
+        start = (WINDOWS_ROOT / "Start-TailscaleFunnel.ps1").read_text(encoding="utf-8")
+        stop = (WINDOWS_ROOT / "Stop-AuraPublicDemo.ps1").read_text(encoding="utf-8")
+        self.assertIn("return 443", common)
+        self.assertIn("return 8443", common)
+        self.assertIn("http://127.0.0.1:$port", common)
+        self.assertIn("funnel status --json", common)
+        self.assertNotIn("--set-path", start)
+        self.assertNotIn("'--bg'", start)
+        self.assertLess(stop.index("Stop-TailscaleFunnel.ps1"), stop.index("Stop-Aura.ps1"))
 
     def test_bootstrap_is_additive_and_non_superuser(self):
         sql = (WINDOWS_ROOT / "Bootstrap-LocalPostgreSQL.sql").read_text(

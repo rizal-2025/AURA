@@ -5,7 +5,8 @@ import hmac
 import re
 from typing import Annotated
 
-from fastapi import Depends, Header
+from fastapi import Depends, Header, Request
+from fastapi.exceptions import RequestValidationError
 from pydantic import SecretStr
 
 from app.core.config import DemoSettings, get_demo_settings
@@ -23,6 +24,28 @@ from app.services.demo_rate_limit_service import (
 
 
 _DEMO_CLIENT_SUBJECT_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+
+
+def _empty_request_error(location: str) -> RequestValidationError:
+    return RequestValidationError(
+        [
+            {
+                "type": "extra_forbidden",
+                "loc": (location,),
+                "msg": "Request input is not accepted.",
+            }
+        ]
+    )
+
+
+async def require_empty_request_body(request: Request) -> None:
+    if await request.body():
+        raise _empty_request_error("body")
+
+
+async def require_no_query_parameters(request: Request) -> None:
+    if request.query_params:
+        raise _empty_request_error("query")
 
 
 def digest_demo_service_token(raw_token: str) -> bytes:

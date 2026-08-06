@@ -55,7 +55,7 @@ $ready = $false
 for ($attempt = 0; $attempt -lt 20; $attempt++) {
     if ($process.HasExited) { break }
     try {
-        $response = Invoke-WebRequest -Uri "http://127.0.0.1:$port/ready" -Method Get -TimeoutSec 2 -UseBasicParsing
+        $response = Invoke-WebRequest -Uri "http://127.0.0.1:$port/health" -Method Get -TimeoutSec 2 -UseBasicParsing
         if ($response.StatusCode -eq 200) { $ready = $true; break }
     } catch { }
     Start-Sleep -Seconds 1

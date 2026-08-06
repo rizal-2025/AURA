@@ -1,31 +1,24 @@
-# AURA Windows self-host deployment runbook
+# AURA public demo runbook
 
-The selected demo backend is one AURA process and local PostgreSQL on Windows,
-reached only through a named Cloudflare Tunnel and protected by Cloudflare
-Access Service Auth. Vercel remains the website and BFF. No router port is
-forwarded and AURA/PostgreSQL stay on `127.0.0.1`.
+The Windows host runs the dedicated Funnel gateway on loopback and local
+PostgreSQL on loopback. Tailscale Funnel is the only public transport, and the
+Vercel BFF is the only intended authenticated caller. Funnel itself is public;
+all authorization remains in AURA and the BFF.
 
-The audited entry point is:
+Use `deploy/windows/README.md` for installation, ACL, database, firewall,
+backup, recovery, manual start/stop, and validation procedures. Use
+`docs/windows-tailscale-funnel-deployment.md` for the boundary contract and
+port decision gate.
+
+Normal operation is manual and off by default:
 
 ```powershell
-.\deploy\windows\Start-Aura.ps1 -Profile staging
-.\deploy\windows\Start-Aura.ps1 -Profile production
+.\deploy\windows\Start-AuraPublicDemo.ps1 -Profile production
+.\deploy\windows\Test-PublicDemoReadiness.ps1 -Profile production -AuthenticatedSmoke
+.\deploy\windows\Stop-AuraPublicDemo.ps1 -Profile production
 ```
 
-It disables repository dotenv loading, requires `APP_ENV=demo`, requires a
-local demo PostgreSQL URL, and starts one Uvicorn worker without reload or
-access logging. Staging is fixed to `127.0.0.1:8001`; production is fixed to
-`127.0.0.1:8000`. Configuration mismatch stops startup.
-
-Cloudflare publishes only `/internal/demo/*` to the matching local port. Local
-`/health` and `/ready`, OpenAPI, PostgreSQL, and Windows management surfaces are
-not published. A final unmatched route returns HTTP 404. The API hostnames have
-Access applications whose only authorization policy is the matching Service
-Auth token. AURA still independently requires `X-BFF-Service-Token`.
-
-Cleanup, schema planning/application, backup, and restore are local operations.
-The old Koyeb/Neon deployment contract and GitHub Actions cleanup/migration
-workflows are removed. No cloud database or GitHub database secret is used.
-
-See `deploy/windows/README.md` for the gated installation, local PostgreSQL,
-backup/recovery, Task Scheduler, firewall, tunnel, and rollback procedures.
+Only cleanup and backup may be scheduled. Never register AURA or Funnel at
+boot/logon. Never expose PostgreSQL, RDP, file shares, OpenAPI, `/ready`, or the
+full `app.main` application. Never log the stable `*.ts.net` hostname, service
+token, session token, database URL, provider key, or Tailscale credential.

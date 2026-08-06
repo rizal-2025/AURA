@@ -2,8 +2,7 @@
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Request, Response, status
-from fastapi.exceptions import RequestValidationError
+from fastapi import APIRouter, Depends, Response, status
 from sqlalchemy.orm import Session
 
 from app.api.internal_demo_dependencies import (
@@ -11,6 +10,8 @@ from app.api.internal_demo_dependencies import (
     get_demo_rate_limit_service,
     require_demo_service_auth,
     require_demo_client_subject,
+    require_empty_request_body,
+    require_no_query_parameters,
     require_demo_session_token,
 )
 from app.db.database import get_db
@@ -32,19 +33,6 @@ router = APIRouter(
 )
 
 
-async def require_empty_request_body(request: Request) -> None:
-    if await request.body():
-        raise RequestValidationError(
-            [
-                {
-                    "type": "extra_forbidden",
-                    "loc": ("body",),
-                    "msg": "Request body is not accepted.",
-                }
-            ]
-        )
-
-
 @router.post(
     "/sessions",
     response_model=DemoSessionCreateResponse,
@@ -54,6 +42,7 @@ def create_demo_session(
     response: Response,
     client_subject: Annotated[str, Depends(require_demo_client_subject)],
     _empty_body: None = Depends(require_empty_request_body),
+    _no_query: None = Depends(require_no_query_parameters),
     db: Session = Depends(get_db),
     service: DemoSessionService = Depends(get_demo_session_service),
     rate_limits: DemoRateLimitService = Depends(
@@ -82,6 +71,8 @@ def get_current_demo_session(
     ],
     response: Response,
     client_subject: Annotated[str, Depends(require_demo_client_subject)],
+    _empty_body: None = Depends(require_empty_request_body),
+    _no_query: None = Depends(require_no_query_parameters),
     db: Session = Depends(get_db),
     service: DemoSessionService = Depends(get_demo_session_service),
     rate_limits: DemoRateLimitService = Depends(

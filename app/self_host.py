@@ -44,7 +44,7 @@ def main(argv: list[str] | None = None) -> int:
     import uvicorn
 
     uvicorn.run(
-        "app.main:app",
+        "app.funnel_main:app",
         host=runtime.host,
         port=runtime.port,
         workers=1,

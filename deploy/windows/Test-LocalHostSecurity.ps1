@@ -11,7 +11,7 @@ foreach ($port in $protectedPorts) {
     }
 }
 $firewallRules = Get-NetFirewallRule -Group 'AURA Self-Host' -ErrorAction SilentlyContinue
-if (($firewallRules | Measure-Object).Count -lt 4) { throw 'AURA_FIREWALL_RULES_MISSING' }
+if (($firewallRules | Measure-Object).Count -lt 3) { throw 'AURA_FIREWALL_RULES_MISSING' }
 foreach ($port in @(8000, 8001)) {
     $listener = Get-NetTCPConnection -State Listen -LocalAddress 127.0.0.1 -LocalPort $port -ErrorAction SilentlyContinue
     if ($listener) {
