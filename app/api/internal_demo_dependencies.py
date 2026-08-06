@@ -2,6 +2,7 @@
 
 import hashlib
 import hmac
+import re
 from typing import Annotated
 
 from fastapi import Depends, Header
@@ -19,6 +20,9 @@ from app.services.demo_rate_limit_service import (
     DemoRateLimitService,
     demo_rate_limit_service,
 )
+
+
+_DEMO_CLIENT_SUBJECT_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 
 
 def digest_demo_service_token(raw_token: str) -> bytes:
@@ -55,6 +59,21 @@ def require_demo_session_token(
     if session_token is None:
         raise DemoSessionRequiredError()
     return validate_demo_session_token(session_token)
+
+
+def require_demo_client_subject(
+    client_subject: Annotated[
+        str | None,
+        Header(alias="X-Demo-Client-Subject"),
+    ] = None,
+) -> str:
+    """Accept only the BFF-derived opaque digest, never a raw address."""
+    if (
+        not isinstance(client_subject, str)
+        or _DEMO_CLIENT_SUBJECT_PATTERN.fullmatch(client_subject) is None
+    ):
+        raise DemoServiceAuthRequiredError()
+    return client_subject
 
 
 def get_demo_session_service() -> DemoSessionService:

@@ -32,6 +32,7 @@ from app.services.demo_session_service import DemoSessionRequiredError
 
 SERVICE_TOKEN = "safe-bff-service-token-for-api-tests-2026"
 SESSION_TOKEN = "S" * 43
+CLIENT_SUBJECT = "c" * 64
 
 
 class _AllowingRateLimits:
@@ -116,12 +117,16 @@ class InternalDemoSessionAPITests(unittest.TestCase):
 
     @staticmethod
     def service_headers():
-        return {"X-BFF-Service-Token": SERVICE_TOKEN}
+        return {
+            "X-BFF-Service-Token": SERVICE_TOKEN,
+            "X-Demo-Client-Subject": CLIENT_SUBJECT,
+        }
 
     @staticmethod
     def current_headers():
         return {
             "X-BFF-Service-Token": SERVICE_TOKEN,
+            "X-Demo-Client-Subject": CLIENT_SUBJECT,
             "X-Demo-Session-Token": SESSION_TOKEN,
         }
 
@@ -134,6 +139,47 @@ class InternalDemoSessionAPITests(unittest.TestCase):
         self.assertEqual(response.json()["sessionToken"], SESSION_TOKEN)
         self.assertEqual(response.headers["cache-control"], "no-store")
         self.assertEqual(self.service.created, 1)
+
+    def test_client_subject_is_required_and_exact(self):
+        missing = self.client.post(
+            "/internal/demo/sessions",
+            headers={"X-BFF-Service-Token": SERVICE_TOKEN},
+        )
+        invalid_values = (
+            "203.0.113.7",
+            "C" * 64,
+            "c" * 63,
+            "client_" + "c" * 64,
+        )
+        responses = [
+            self.client.post(
+                "/internal/demo/sessions",
+                headers={
+                    "X-BFF-Service-Token": SERVICE_TOKEN,
+                    "X-Demo-Client-Subject": value,
+                },
+            )
+            for value in invalid_values
+        ]
+        self.assertEqual(missing.status_code, 401)
+        for response in responses:
+            self.assertEqual(response.status_code, 401)
+            self.assertEqual(response.json(), missing.json())
+        self.assertEqual(self.service.created, 0)
+
+    def test_client_subject_never_appears_in_error_or_log(self):
+        marker = "c" * 63 + "z"
+        with self.assertLogs(level=logging.INFO) as captured:
+            response = self.client.post(
+                "/internal/demo/sessions",
+                headers={
+                    "X-BFF-Service-Token": SERVICE_TOKEN,
+                    "X-Demo-Client-Subject": marker,
+                },
+            )
+        rendered = response.text + "\n".join(captured.output)
+        self.assertEqual(response.status_code, 401)
+        self.assertNotIn(marker, rendered)
 
     def test_missing_and_wrong_service_tokens_are_indistinguishable(self):
         missing = self.client.post("/internal/demo/sessions")

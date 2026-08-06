@@ -29,6 +29,7 @@ from app.services.demo_session_service import DemoSessionRequiredError
 
 SERVICE_TOKEN = "safe-bff-service-token-for-reset-tests-2026"
 SESSION_TOKEN = "U" * 43
+CLIENT_SUBJECT = "c" * 64
 
 
 class _AllowingRateLimits:
@@ -110,6 +111,7 @@ class InternalDemoReservationResetAPITests(unittest.TestCase):
     def headers():
         return {
             "X-BFF-Service-Token": SERVICE_TOKEN,
+            "X-Demo-Client-Subject": CLIENT_SUBJECT,
             "X-Demo-Session-Token": SESSION_TOKEN,
         }
 

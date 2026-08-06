@@ -82,8 +82,10 @@ class DemoRateLimitServiceTests(unittest.TestCase):
         self.assertEqual(
             flattened,
             {
+                ("session_create", "ip"): (5, 60),
                 ("session_create", "global"): (30, 60),
                 ("session_current", "session"): (60, 60),
+                ("chat", "ip"): (60, 60),
                 ("chat", "session"): (20, 60),
                 ("chat", "global"): (300, 60),
                 ("reservations_read", "session"): (30, 60),
@@ -374,9 +376,10 @@ class DemoRateLimitServiceTests(unittest.TestCase):
                 self.db,
                 action=action,
                 session_token_digest=digest,
+                client_subject_digest="a" * 64,
             )
         actions = [row.action for row in self.rows()]
-        self.assertEqual(actions.count("chat"), 2)
+        self.assertEqual(actions.count("chat"), 3)
         self.assertEqual(actions.count("reset"), 1)
 
     def test_chat_consumes_session_and_global_in_same_attempt(self):
@@ -384,12 +387,13 @@ class DemoRateLimitServiceTests(unittest.TestCase):
             self.db,
             action=DemoRateLimitAction.CHAT,
             session_token_digest="2" * 64,
+            client_subject_digest="a" * 64,
         )
-        self.assertEqual(len(decisions), 2)
+        self.assertEqual(len(decisions), 3)
         self.assertTrue(all(item.allowed for item in decisions))
         self.assertEqual(
             {(row.scope_type, row.request_count) for row in self.rows()},
-            {("session", 1), ("global", 1)},
+            {("ip", 1), ("session", 1), ("global", 1)},
         )
 
     def test_global_chat_bucket_is_shared_across_sessions(self):
@@ -398,11 +402,36 @@ class DemoRateLimitServiceTests(unittest.TestCase):
                 self.db,
                 action=DemoRateLimitAction.CHAT,
                 session_token_digest=digest,
+                client_subject_digest="a" * 64,
             )
         global_row = next(
             row for row in self.rows() if row.scope_type == "global"
         )
         self.assertEqual(global_row.request_count, 2)
+
+    def test_client_chat_buckets_are_opaque_and_isolated(self):
+        for client_subject in ("a" * 64, "b" * 64):
+            self.service.enforce(
+                self.db,
+                action=DemoRateLimitAction.CHAT,
+                session_token_digest="3" * 64,
+                client_subject_digest=client_subject,
+            )
+        ip_rows = [row for row in self.rows() if row.scope_type == "ip"]
+        self.assertEqual(len(ip_rows), 2)
+        self.assertEqual(
+            {row.subject_digest for row in ip_rows},
+            {"a" * 64, "b" * 64},
+        )
+
+    def test_chat_without_client_subject_fails_closed(self):
+        with self.assertRaises(DemoChatServiceUnavailableError):
+            self.service.enforce(
+                self.db,
+                action=DemoRateLimitAction.CHAT,
+                session_token_digest="3" * 64,
+            )
+        self.assertEqual(self.rows(), [])
 
     def test_rejected_attempt_stays_committed(self):
         for _ in range(6):
@@ -468,6 +497,7 @@ class DemoRateLimitServiceTests(unittest.TestCase):
             service.enforce(
                 self.db,
                 action=DemoRateLimitAction.SESSION_CREATE,
+                client_subject_digest="a" * 64,
             )
         self.assertNotIn("database", repr(captured.exception).casefold())
 

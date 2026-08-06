@@ -1,0 +1,9 @@
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+startCommand = "python -m app.jobs.demo_cleanup --once --batch-size 100"
+cronSchedule = "17 * * * *"
+restartPolicyType = "NEVER"
+overlapSeconds = 0

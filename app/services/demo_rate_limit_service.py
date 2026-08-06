@@ -48,6 +48,12 @@ DEMO_RATE_LIMIT_POLICIES = {
     DemoRateLimitAction.SESSION_CREATE: (
         DemoRateLimitPolicy(
             DemoRateLimitAction.SESSION_CREATE,
+            "ip",
+            5,
+            60,
+        ),
+        DemoRateLimitPolicy(
+            DemoRateLimitAction.SESSION_CREATE,
             "global",
             30,
             60,
@@ -62,6 +68,7 @@ DEMO_RATE_LIMIT_POLICIES = {
         ),
     ),
     DemoRateLimitAction.CHAT: (
+        DemoRateLimitPolicy(DemoRateLimitAction.CHAT, "ip", 60, 60),
         DemoRateLimitPolicy(DemoRateLimitAction.CHAT, "session", 20, 60),
         DemoRateLimitPolicy(DemoRateLimitAction.CHAT, "global", 300, 60),
     ),
@@ -183,12 +190,15 @@ class DemoRateLimitService:
     def _subject_for(
         policy: DemoRateLimitPolicy,
         session_token_digest: str | None,
+        client_subject_digest: str | None,
     ) -> str:
         if policy.scope_type == "global":
             return _GLOBAL_SUBJECT_DIGEST
         if policy.scope_type == "session" and session_token_digest is not None:
             return demo_session_rate_limit_subject(session_token_digest)
-        raise ValueError("A session digest is required by the selected policy.")
+        if policy.scope_type == "ip" and client_subject_digest is not None:
+            return client_subject_digest
+        raise ValueError("A required rate-limit digest is missing.")
 
     def enforce(
         self,
@@ -196,6 +206,7 @@ class DemoRateLimitService:
         *,
         action: DemoRateLimitAction,
         session_token_digest: str | None = None,
+        client_subject_digest: str | None = None,
     ) -> tuple[DemoRateLimitDecision, ...]:
         if not isinstance(action, DemoRateLimitAction):
             raise ValueError("A typed demo rate-limit action is required.")
@@ -215,6 +226,7 @@ class DemoRateLimitService:
                         subject_digest=self._subject_for(
                             policy,
                             session_token_digest,
+                            client_subject_digest,
                         ),
                         action=policy.action.value,
                         window_started_at=window_start,
