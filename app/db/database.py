@@ -26,7 +26,7 @@ def deployment_engine_options(database_url: str) -> dict:
     if backend not in {"postgres", "postgresql"}:
         return {}
     return {
-        "pool_size": 5,
+        "pool_size": 2,
         "max_overflow": 0,
         "pool_timeout": 5,
         "pool_recycle": 300,
