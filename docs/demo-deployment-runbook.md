@@ -8,8 +8,8 @@ authorize migration, secret provisioning, staging, or public traffic.
 - Build the repository `Dockerfile` from a reviewed commit.
 - Run exactly one Uvicorn worker and one application replica. AURA's current
   conversation lock is process-local; horizontal API scaling is not supported.
-- Terminate TLS at the selected trusted ingress and keep AURA unreachable from
-  the public browser. Only the website BFF may call `/internal/demo/*`.
+- Terminate TLS at Koyeb's public ingress. Only the authenticated website BFF may
+  call `/internal/demo/*`; direct browser attempts fail closed.
 - Use `/health` for liveness and `/ready` for database readiness. The readiness
   response is fixed and never exposes connection or SQL detail.
 - Do not run migrations from application startup or the container command.
@@ -48,16 +48,24 @@ Schedule one bounded process at a time:
 python -m app.jobs.demo_cleanup --once --batch-size 100
 ```
 
-The provider must supply a single-run scheduler, the same reviewed image and
-secret set as the API, a concurrency policy that forbids overlapping jobs, and
-alerts for non-zero exit status. Frequency is a deployment decision and must be
-confirmed using staging retention observations.
+GitHub Actions supplies the single-run scheduler with a direct Neon maintenance
+URL, shared per-environment maintenance concurrency, bounded timeout, and
+non-zero failure status. The hourly schedule remains inert until a post-go-live
+repository variable enables it.
 
 ## Migration gate
 
-The repository uses explicit idempotent Python migration scripts rather than a
-version ledger. Before any production migration, identify the deployed schema
-baseline and produce an exact ordered delta. Demo-related candidates include:
+For a new empty Neon database, use the controlled metadata-only runner:
+
+```text
+python -m app.jobs.demo_schema --operation apply-empty-schema
+```
+
+It blocks non-empty partial schemas, applies current metadata only to an empty
+database, and verifies aggregate schema metadata. For an existing baseline, the
+repository uses explicit idempotent Python migration scripts rather than a
+version ledger. Identify the deployed baseline and produce an exact ordered
+delta. Demo-related candidates include:
 
 - `add_secure_customer_identity.py`;
 - `add_demo_persistence.py`;
@@ -81,9 +89,9 @@ backup and logs with safe codes only, and perform a reviewed recovery. Public
 traffic remains closed until readiness, cleanup, migration, provider timeout,
 rate-limit, and client-subject protections all pass staging verification.
 
-## Outstanding provider gate
+## Outstanding runtime gates
 
-The trusted ingress, database service, scheduler, TLS/domain, secret manager,
-and monitoring system are not selected. Client-subject rate limiting also
-requires proof that the chosen ingress overwrites a documented client-IP header;
-browser forwarding headers must never be trusted directly.
+Provider accounts, secrets, databases, migrations, deployment, remote image
+capacity, cold start, browser QA, monitoring, and public traffic remain gated.
+The selected architecture is Vercel Hobby, Koyeb Free, Neon Free, and GitHub
+Actions; see `koyeb-neon-github-deployment.md` for the exact value-free contract.

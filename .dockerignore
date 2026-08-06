@@ -11,6 +11,10 @@ __pycache__
 .pytest_cache
 .mypy_cache
 .ruff_cache
+docs
+deploy
+.github
+reports
 tests
 test_results.txt
 LaptopPhoneBackup

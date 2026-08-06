@@ -2,7 +2,6 @@
 
 from pathlib import Path
 from types import SimpleNamespace
-import tomllib
 import unittest
 from unittest.mock import patch
 
@@ -52,35 +51,59 @@ class DeploymentReadinessTests(unittest.TestCase):
         for forbidden in ("database_url", "postgresql", "sql", "password"):
             self.assertNotIn(forbidden, rendered)
 
-    def test_railway_service_configs_are_bounded_and_migration_free(self):
-        api = tomllib.loads(
-            (PROJECT_ROOT / "deploy/railway/aura-api.toml").read_text(
-                encoding="utf-8"
+    def test_koyeb_image_is_single_worker_non_root_and_migration_free(self):
+        dockerfile = (PROJECT_ROOT / "Dockerfile").read_text(encoding="utf-8")
+        self.assertIn("USER aura", dockerfile)
+        self.assertIn("${HOST:-0.0.0.0}", dockerfile)
+        self.assertIn("${PORT:-8000}", dockerfile)
+        self.assertIn("--workers 1", dockerfile)
+        self.assertIn("--no-access-log", dockerfile)
+        command = next(
+            line for line in dockerfile.splitlines() if line.startswith("CMD ")
+        )
+        self.assertNotIn("migrat", command.casefold())
+
+    def test_github_maintenance_workflows_are_manual_or_guarded(self):
+        cleanup = (PROJECT_ROOT / ".github/workflows/demo-cleanup.yml").read_text(
+            encoding="utf-8"
+        )
+        migration = (
+            PROJECT_ROOT / ".github/workflows/demo-migration.yml"
+        ).read_text(encoding="utf-8")
+        self.assertIn("cron: '17 * * * *'", cleanup)
+        self.assertIn("AURA_DEMO_CLEANUP_SCHEDULE_ENABLED", cleanup)
+        self.assertIn("workflow_dispatch:", cleanup)
+        self.assertIn("workflow_dispatch:", migration)
+        self.assertNotIn("pull_request:", cleanup + migration)
+        self.assertNotIn("push:", cleanup + migration)
+        self.assertIn("contents: read", cleanup + migration)
+        self.assertIn("cancel-in-progress: false", cleanup + migration)
+        self.assertIn("NEON_MAINTENANCE_DATABASE_URL", cleanup + migration)
+
+    def test_demo_runtime_hides_internal_routes_from_openapi(self):
+        demo_client = TestClient(
+            create_app(
+                SimpleNamespace(
+                    APP_ENV="demo",
+                    APP_NAME="AURA",
+                    VERSION="test",
+                )
             )
         )
-        cleanup = tomllib.loads(
-            (PROJECT_ROOT / "deploy/railway/aura-cleanup.toml").read_text(
-                encoding="utf-8"
-            )
+        paths = demo_client.get("/openapi.json").json()["paths"]
+        self.assertIn("/chat", paths)
+        self.assertNotIn("/internal/demo/sessions", paths)
+        self.assertNotIn("/internal/demo/chat", paths)
+        self.assertNotEqual(
+            demo_client.post("/internal/demo/sessions").status_code,
+            404,
         )
-        self.assertEqual(api["build"]["builder"], "DOCKERFILE")
-        self.assertEqual(api["deploy"]["numReplicas"], 1)
-        self.assertEqual(api["deploy"]["healthcheckPath"], "/ready")
-        self.assertIn("--host ::", api["deploy"]["startCommand"])
-        self.assertIn("${PORT}", api["deploy"]["startCommand"])
-        self.assertNotIn("migrat", api["deploy"]["startCommand"].casefold())
-        self.assertEqual(cleanup["deploy"]["cronSchedule"], "17 * * * *")
-        self.assertEqual(
-            cleanup["deploy"]["startCommand"],
-            "python -m app.jobs.demo_cleanup --once --batch-size 100",
-        )
-        self.assertEqual(cleanup["deploy"]["restartPolicyType"], "NEVER")
 
     def test_managed_postgresql_pool_is_small_and_has_no_overflow(self):
         options = deployment_engine_options(
             "postgresql+psycopg://user:password@postgres:5432/aura_demo"
         )
-        self.assertEqual(options["pool_size"], 5)
+        self.assertEqual(options["pool_size"], 2)
         self.assertEqual(options["max_overflow"], 0)
         self.assertEqual(options["pool_timeout"], 5)
         self.assertTrue(options["pool_pre_ping"])
