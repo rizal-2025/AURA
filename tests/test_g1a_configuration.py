@@ -28,6 +28,7 @@ from app.core.config_validation import (
     CFG_AI_OLLAMA_INVALID,
     CFG_AI_OPENAI_INVALID,
     CFG_AI_PROVIDER_INVALID,
+    CFG_AI_TIMEOUT_INVALID,
     CFG_AUTH_AUDIENCE_INVALID,
     CFG_AUTH_EXPIRY_INVALID,
     CFG_AUTH_ISSUER_INVALID,
@@ -809,6 +810,20 @@ class TelegramRunnerConfigurationTests(unittest.TestCase):
 
 
 class AIConfigurationTests(unittest.TestCase):
+    def test_provider_timeout_is_bounded(self):
+        for invalid in (0, 31, "01", "1.5", True):
+            with self.subTest(invalid=invalid):
+                with self.assertRaises(ConfigurationError) as raised:
+                    build_ai_settings(
+                        _env_file=None,
+                        APP_ENV="test",
+                        AI_PROVIDER="openai",
+                        OPENAI_API_KEY=VALID_OPENAI_KEY,
+                        OPENAI_MODEL="test-model",
+                        AI_PROVIDER_TIMEOUT_SECONDS=invalid,
+                    )
+                self.assertEqual(str(raised.exception), CFG_AI_TIMEOUT_INVALID)
+
     def test_exact_provider_names_are_accepted(self):
         ollama = build_ai_settings(
             _env_file=None,
@@ -944,10 +959,19 @@ class AIConfigurationTests(unittest.TestCase):
         )
         with patch("app.services.ai.ollama_provider.AsyncOpenAI") as client:
             self.assertIsInstance(get_ai_provider(ollama_config), OllamaProvider)
-            client.assert_called_once()
+            client.assert_called_once_with(
+                base_url="http://localhost:11434/v1",
+                api_key="ollama",
+                timeout=20,
+                max_retries=0,
+            )
         with patch("app.services.ai.openai_provider.AsyncOpenAI") as client:
             self.assertIsInstance(get_ai_provider(openai_config), OpenAIProvider)
-            client.assert_called_once()
+            client.assert_called_once_with(
+                api_key=VALID_OPENAI_KEY,
+                timeout=20,
+                max_retries=0,
+            )
         with self.assertRaises(ConfigurationError) as raised:
             get_ai_provider(SimpleNamespace(APP_ENV="test", AI_PROVIDER="other"))
         self.assertEqual(str(raised.exception), CFG_AI_PROVIDER_INVALID)
