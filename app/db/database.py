@@ -1,4 +1,5 @@
 from sqlalchemy import create_engine
+from sqlalchemy.engine import make_url
 from sqlalchemy.orm import sessionmaker
 from app.core.config import get_database_settings
 from app.core.logger import logger
@@ -15,9 +16,28 @@ import app.db.models.demo_persistence
 
 database_settings = get_database_settings()
 
+
+def deployment_engine_options(database_url: str) -> dict:
+    """Use a small bounded pool for managed PostgreSQL demo services."""
+    try:
+        backend = make_url(database_url).get_backend_name().casefold()
+    except (AttributeError, TypeError, ValueError):
+        return {}
+    if backend not in {"postgres", "postgresql"}:
+        return {}
+    return {
+        "pool_size": 5,
+        "max_overflow": 0,
+        "pool_timeout": 5,
+        "pool_recycle": 300,
+        "pool_pre_ping": True,
+        "pool_use_lifo": True,
+    }
+
 engine = create_engine(
     database_settings.DATABASE_URL,
     echo=database_settings.SQL_ECHO,
+    **deployment_engine_options(database_settings.DATABASE_URL),
 )
 
 SessionLocal = sessionmaker(

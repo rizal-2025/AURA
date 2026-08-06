@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from app.api.internal_demo_dependencies import (
     get_demo_rate_limit_service,
     require_demo_service_auth,
+    require_demo_client_subject,
     require_demo_session_token,
 )
 from app.api.internal_demo_sessions import require_empty_request_body
@@ -59,6 +60,7 @@ async def require_no_query_parameters(request: Request) -> None:
 def get_demo_reservations(
     session_token: Annotated[str, Depends(require_demo_session_token)],
     response: Response,
+    client_subject: Annotated[str, Depends(require_demo_client_subject)],
     _empty_body: None = Depends(require_empty_request_body),
     _no_query: None = Depends(require_no_query_parameters),
     db: Session = Depends(get_db),
@@ -77,6 +79,7 @@ def get_demo_reservations(
         db,
         action=DemoRateLimitAction.RESERVATIONS_READ,
         session_token_digest=token_digest,
+        client_subject_digest=client_subject,
     )
     result = service.list_reservations(
         db,
@@ -94,6 +97,7 @@ def get_demo_reservations(
 async def reset_demo_session_data(
     session_token: Annotated[str, Depends(require_demo_session_token)],
     response: Response,
+    client_subject: Annotated[str, Depends(require_demo_client_subject)],
     _empty_body: None = Depends(require_empty_request_body),
     _no_query: None = Depends(require_no_query_parameters),
     db: Session = Depends(get_db),
@@ -112,6 +116,7 @@ async def reset_demo_session_data(
         db,
         action=DemoRateLimitAction.RESET,
         session_token_digest=token_digest,
+        client_subject_digest=client_subject,
     )
     result = await service.reset(
         db,

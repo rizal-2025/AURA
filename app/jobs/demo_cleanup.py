@@ -29,7 +29,7 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
-        from app.core.config import get_application_settings
+        from app.core.config import get_environment_settings
         from app.db.database import SessionLocal
         from app.services.demo_cleanup_service import (
             DemoCleanupService,
@@ -37,7 +37,7 @@ def main(argv: list[str] | None = None) -> int:
         )
 
         batch_size = validate_demo_cleanup_batch_size(args.batch_size)
-        settings = get_application_settings()
+        settings = get_environment_settings()
         if settings.APP_ENV != "demo":
             raise RuntimeError("demo-only")
         service = DemoCleanupService(

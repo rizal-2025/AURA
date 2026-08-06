@@ -13,12 +13,13 @@ RUN python -m pip install --no-cache-dir -r requirements.txt
 
 COPY --chown=aura:aura app ./app
 COPY --chown=aura:aura migrations ./migrations
+COPY --chown=aura:aura create_tables.py ./create_tables.py
 
 USER aura
 
 EXPOSE 8000
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-  CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3).read()"]
+  CMD ["python", "-c", "import os, urllib.request; port = os.environ.get('PORT', '8000'); urllib.request.urlopen(f'http://127.0.0.1:{port}/health', timeout=3).read()"]
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1", "--no-access-log"]
+CMD ["sh", "-c", "exec uvicorn app.main:app --host \"${HOST:-0.0.0.0}\" --port \"${PORT:-8000}\" --workers 1 --no-access-log --timeout-graceful-shutdown 25"]

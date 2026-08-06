@@ -32,7 +32,7 @@ class DemoCleanupJobTests(unittest.TestCase):
     def test_once_outputs_only_safe_aggregate_counts(self):
         with (
             patch(
-                "app.core.config.get_application_settings",
+                "app.core.config.get_environment_settings",
                 return_value=SimpleNamespace(APP_ENV="demo"),
             ),
             patch(
@@ -52,7 +52,7 @@ class DemoCleanupJobTests(unittest.TestCase):
     def test_non_demo_fails_closed_with_safe_output(self):
         with (
             patch(
-                "app.core.config.get_application_settings",
+                "app.core.config.get_environment_settings",
                 return_value=SimpleNamespace(APP_ENV="production"),
             ),
             patch("builtins.print") as output,

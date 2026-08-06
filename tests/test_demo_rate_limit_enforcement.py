@@ -53,6 +53,7 @@ from app.services.demo_session_service import (
 
 SERVICE_TOKEN = "rate-enforcement-service-token-2026"
 SESSION_TOKEN = "L" * 43
+CLIENT_SUBJECT = "c" * 64
 
 
 def _rejected():
@@ -157,7 +158,7 @@ class _FailSecondPolicyBuckets:
 
     def consume_atomic(self, db, **values):
         self.scopes.append(values["scope_type"])
-        if values["scope_type"] == "global":
+        if values["scope_type"] == "session":
             raise RuntimeError("unsafe SQL detail")
         return self.delegate.consume_atomic(db, **values)
 
@@ -201,7 +202,10 @@ class DemoRateLimitEnforcementTests(unittest.TestCase):
 
     @staticmethod
     def headers(include_session=True, service_token=SERVICE_TOKEN):
-        headers = {"X-BFF-Service-Token": service_token}
+        headers = {
+            "X-BFF-Service-Token": service_token,
+            "X-Demo-Client-Subject": CLIENT_SUBJECT,
+        }
         if include_session:
             headers["X-Demo-Session-Token"] = SESSION_TOKEN
         return headers
@@ -458,6 +462,7 @@ class DemoRateLimitActualAPIIntegrationTests(unittest.TestCase):
     def headers():
         return {
             "X-BFF-Service-Token": SERVICE_TOKEN,
+            "X-Demo-Client-Subject": CLIENT_SUBJECT,
             "X-Demo-Session-Token": SESSION_TOKEN,
         }
 
@@ -571,7 +576,10 @@ class DemoRateLimitActualAPIIntegrationTests(unittest.TestCase):
                     )
                 )
             }
-        self.assertEqual(first_counts, {"session": 1, "global": 1})
+        self.assertEqual(
+            first_counts,
+            {"ip": 1, "session": 1, "global": 1},
+        )
 
         accepted_replays = [
             self.client.post(
@@ -643,7 +651,10 @@ class DemoRateLimitActualAPIIntegrationTests(unittest.TestCase):
             ),
         )
         self.assertEqual(rejected.headers["cache-control"], "no-store")
-        self.assertEqual(rate_counts, {"session": 21, "global": 21})
+        self.assertEqual(
+            rate_counts,
+            {"ip": 21, "session": 21, "global": 21},
+        )
         self.assertEqual(core_calls, ["Replay yang sama"])
         self.assertEqual(role_counts, {"assistant": 1, "user": 1})
         self.assertEqual(assistant_content, "Stored assistant reply.")
@@ -680,7 +691,7 @@ class DemoRateLimitActualAPIIntegrationTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 503)
         self.assertEqual(response.json()["code"], "SERVICE_UNAVAILABLE")
-        self.assertEqual(buckets.scopes, ["session", "global"])
+        self.assertEqual(buckets.scopes, ["ip", "session"])
         chat.process.assert_not_awaited()
         with self.Session() as db:
             for model in (

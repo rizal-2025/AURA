@@ -29,6 +29,7 @@ from app.services.demo_session_service import DemoSessionRequiredError
 
 SERVICE_TOKEN = "safe-bff-service-token-for-chat-tests-2026"
 SESSION_TOKEN = "D" * 43
+CLIENT_SUBJECT = "c" * 64
 REQUEST_ID = "61d831fc-2708-4693-a008-3f09f906be7a"
 
 
@@ -112,6 +113,7 @@ class InternalDemoChatAPITests(unittest.TestCase):
     def headers():
         return {
             "X-BFF-Service-Token": SERVICE_TOKEN,
+            "X-Demo-Client-Subject": CLIENT_SUBJECT,
             "X-Demo-Session-Token": SESSION_TOKEN,
         }
 

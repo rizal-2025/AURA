@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from app.api.internal_demo_dependencies import (
     get_demo_rate_limit_service,
     require_demo_service_auth,
+    require_demo_client_subject,
     require_demo_session_token,
 )
 from app.db.database import get_db
@@ -45,6 +46,7 @@ async def post_demo_chat(
         Depends(require_demo_session_token),
     ],
     response: Response,
+    client_subject: Annotated[str, Depends(require_demo_client_subject)],
     db: Session = Depends(get_db),
     service: DemoChatService = Depends(get_demo_chat_service),
     rate_limits: DemoRateLimitService = Depends(
@@ -59,6 +61,7 @@ async def post_demo_chat(
         db,
         action=DemoRateLimitAction.CHAT,
         session_token_digest=token_digest,
+        client_subject_digest=client_subject,
     )
     result = await service.process(
         db,
