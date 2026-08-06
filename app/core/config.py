@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from functools import lru_cache
+import os
 
 from pydantic import (
     Field,
@@ -18,6 +19,7 @@ from app.core.config_validation import (
     CFG_AI_OLLAMA_INVALID,
     CFG_AI_OPENAI_INVALID,
     CFG_AI_PROVIDER_INVALID,
+    CFG_AI_TIMEOUT_INVALID,
     CFG_AUTH_AUDIENCE_INVALID,
     CFG_AUTH_EXPIRY_INVALID,
     CFG_AUTH_ISSUER_INVALID,
@@ -78,6 +80,7 @@ def _safe_code_from_validation(error: ValidationError, fallback: str) -> str:
             CFG_AI_PROVIDER_INVALID,
             CFG_AI_OPENAI_INVALID,
             CFG_AI_OLLAMA_INVALID,
+            CFG_AI_TIMEOUT_INVALID,
         ):
             if code in message:
                 return code
@@ -229,6 +232,7 @@ class AISettings(BaseSettings):
     OLLAMA_MODEL: object = None
     OPENAI_MODEL: object = None
     OPENAI_API_KEY: object = Field(default=None, repr=False)
+    AI_PROVIDER_TIMEOUT_SECONDS: object = 20
 
     model_config = _BASE_SETTINGS_CONFIG
 
@@ -241,6 +245,16 @@ class AISettings(BaseSettings):
     @classmethod
     def validate_provider(cls, value):
         return validate_ai_provider(value)
+
+    @field_validator("AI_PROVIDER_TIMEOUT_SECONDS", mode="before")
+    @classmethod
+    def validate_provider_timeout(cls, value):
+        return parse_strict_positive_integer(
+            value,
+            minimum=1,
+            maximum=30,
+            code=CFG_AI_TIMEOUT_INVALID,
+        )
 
     @model_validator(mode="after")
     def validate_selected_provider(self):
@@ -303,6 +317,7 @@ class ApplicationSettings:
         "OLLAMA_MODEL": "ai",
         "OPENAI_MODEL": "ai",
         "OPENAI_API_KEY": "ai",
+        "AI_PROVIDER_TIMEOUT_SECONDS": "ai",
     }
 
     def __getattr__(self, name):
@@ -312,6 +327,11 @@ class ApplicationSettings:
         return getattr(getattr(self, component_name), name)
 
 def _construct(model, fallback_code: str, **values):
+    if (
+        "_env_file" not in values
+        and os.environ.get("AURA_DISABLE_DOTENV") == "1"
+    ):
+        values["_env_file"] = None
     try:
         return model(**values)
     except ConfigurationError:

@@ -9,7 +9,9 @@ class OpenAIProvider(AIProvider):
     def __init__(self, config=None):
         self.config = config or get_ai_settings()
         self.client = AsyncOpenAI(
-            api_key=self.config.OPENAI_API_KEY
+            api_key=self.config.OPENAI_API_KEY,
+            timeout=getattr(self.config, "AI_PROVIDER_TIMEOUT_SECONDS", 20),
+            max_retries=0,
         )
 
     async def chat(self, message: str) -> str:

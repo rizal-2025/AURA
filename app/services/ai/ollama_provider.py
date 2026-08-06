@@ -10,7 +10,9 @@ class OllamaProvider(AIProvider):
         self.config = config or get_ai_settings()
         self.client = AsyncOpenAI(
             base_url=self.config.OLLAMA_BASE_URL,
-            api_key="ollama"
+            api_key="ollama",
+            timeout=getattr(self.config, "AI_PROVIDER_TIMEOUT_SECONDS", 20),
+            max_retries=0,
         )
 
     async def chat(self, message: str) -> str:
