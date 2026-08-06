@@ -26,6 +26,98 @@ function Get-AuraProfilePort {
     return 8001
 }
 
+function Get-AuraFunnelPort {
+    param([Parameter(Mandatory)][string]$Profile)
+    Assert-AuraProfile -Profile $Profile
+    if ($Profile -eq 'production') { return 443 }
+    return 8443
+}
+
+function Get-AuraFunnelTarget {
+    param([Parameter(Mandatory)][string]$Profile)
+    $port = Get-AuraProfilePort -Profile $Profile
+    return "http://127.0.0.1:$port"
+}
+
+function Get-TailscalePath {
+    $command = Get-Command tailscale.exe -ErrorAction Stop
+    $path = [System.IO.Path]::GetFullPath($command.Source)
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+        throw 'AURA_TAILSCALE_NOT_FOUND'
+    }
+    return $path
+}
+
+function Get-AuraFunnelConfigs {
+    param([Parameter(Mandatory)]$Config)
+    Write-Output -NoEnumerate $Config
+    $foregroundProperty = $Config.PSObject.Properties['Foreground']
+    if ($null -eq $foregroundProperty -or $null -eq $foregroundProperty.Value) { return }
+    foreach ($entry in $foregroundProperty.Value.PSObject.Properties) {
+        Get-AuraFunnelConfigs -Config $entry.Value
+    }
+}
+
+function Test-AuraFunnelStatusObject {
+    param(
+        [Parameter(Mandatory)]$Status,
+        [Parameter(Mandatory)][string]$Profile
+    )
+    $publicPort = Get-AuraFunnelPort -Profile $Profile
+    $target = Get-AuraFunnelTarget -Profile $Profile
+    foreach ($config in Get-AuraFunnelConfigs -Config $Status) {
+        $allowProperty = $config.PSObject.Properties['AllowFunnel']
+        $tcpProperty = $config.PSObject.Properties['TCP']
+        $webProperty = $config.PSObject.Properties['Web']
+        if ($null -eq $allowProperty -or $null -eq $tcpProperty -or $null -eq $webProperty) { continue }
+        foreach ($allowEntry in $allowProperty.Value.PSObject.Properties) {
+            $hostPort = $allowEntry.Name
+            if ($allowEntry.Value -ne $true -or -not $hostPort.EndsWith(":$publicPort", [StringComparison]::Ordinal)) { continue }
+            $tcpEntry = $tcpProperty.Value.PSObject.Properties[[string]$publicPort]
+            $webEntry = $webProperty.Value.PSObject.Properties[$hostPort]
+            if ($null -eq $tcpEntry -or $null -eq $webEntry -or $tcpEntry.Value.HTTPS -ne $true) { continue }
+            $handlers = $webEntry.Value.PSObject.Properties['Handlers']
+            if ($null -eq $handlers) { continue }
+            $rootHandler = $handlers.Value.PSObject.Properties['/']
+            if ($null -ne $rootHandler -and $rootHandler.Value.Proxy -eq $target) { return $true }
+        }
+    }
+    return $false
+}
+
+function Get-AuraTailscaleStatus {
+    $tailscale = Get-TailscalePath
+    $rawStatus = & $tailscale funnel status --json 2>$null
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace(($rawStatus -join ''))) {
+        throw 'AURA_FUNNEL_STATUS_FAILED'
+    }
+    try {
+        return (($rawStatus -join "`n") | ConvertFrom-Json)
+    } catch {
+        throw 'AURA_FUNNEL_STATUS_INVALID'
+    }
+}
+
+function Get-AuraFunnelBaseUri {
+    param([Parameter(Mandatory)][string]$Profile)
+    $tailscale = Get-TailscalePath
+    $rawStatus = & $tailscale status --json 2>$null
+    if ($LASTEXITCODE -ne 0) { throw 'AURA_TAILSCALE_STATUS_FAILED' }
+    try {
+        $status = ($rawStatus -join "`n") | ConvertFrom-Json
+        $dnsName = [string]$status.Self.DNSName
+    } catch {
+        throw 'AURA_TAILSCALE_STATUS_INVALID'
+    }
+    $dnsName = $dnsName.TrimEnd('.').ToLowerInvariant()
+    if ($dnsName -notmatch '^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.ts\.net$') {
+        throw 'AURA_TAILSCALE_DNS_INVALID'
+    }
+    $publicPort = Get-AuraFunnelPort -Profile $Profile
+    if ($publicPort -eq 443) { return "https://$dnsName" }
+    return "https://${dnsName}:$publicPort"
+}
+
 function Get-AuraSecretPath {
     param([Parameter(Mandatory)][string]$Profile)
     Assert-AuraProfile -Profile $Profile

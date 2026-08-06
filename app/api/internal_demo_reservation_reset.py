@@ -2,17 +2,17 @@
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Request, Response, status
-from fastapi.exceptions import RequestValidationError
+from fastapi import APIRouter, Depends, Response, status
 from sqlalchemy.orm import Session
 
 from app.api.internal_demo_dependencies import (
     get_demo_rate_limit_service,
     require_demo_service_auth,
     require_demo_client_subject,
+    require_empty_request_body,
+    require_no_query_parameters,
     require_demo_session_token,
 )
-from app.api.internal_demo_sessions import require_empty_request_body
 from app.db.database import get_db
 from app.schemas.demo_reservation_reset import (
     DemoReservationListResponse,
@@ -37,19 +37,6 @@ router = APIRouter(
 
 def get_demo_reservation_reset_service() -> DemoReservationResetService:
     return demo_reservation_reset_service
-
-
-async def require_no_query_parameters(request: Request) -> None:
-    if request.query_params:
-        raise RequestValidationError(
-            [
-                {
-                    "type": "extra_forbidden",
-                    "loc": ("query",),
-                    "msg": "Query parameters are not accepted.",
-                }
-            ]
-        )
 
 
 @router.get(

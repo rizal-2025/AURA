@@ -9,6 +9,7 @@ from app.api.internal_demo_dependencies import (
     get_demo_rate_limit_service,
     require_demo_service_auth,
     require_demo_client_subject,
+    require_no_query_parameters,
     require_demo_session_token,
 )
 from app.db.database import get_db
@@ -47,6 +48,7 @@ async def post_demo_chat(
     ],
     response: Response,
     client_subject: Annotated[str, Depends(require_demo_client_subject)],
+    _no_query: None = Depends(require_no_query_parameters),
     db: Session = Depends(get_db),
     service: DemoChatService = Depends(get_demo_chat_service),
     rate_limits: DemoRateLimitService = Depends(

@@ -23,6 +23,7 @@ from app.api.error_handlers import (
     transaction_exception_handler,
 )
 from app.middleware.request_body_limit import RequestBodyLimitMiddleware
+from app.core.readiness import database_is_ready
 from app.services.demo_session_service import (
     DemoServiceAuthRequiredError,
     DemoSessionRequiredError,
@@ -46,20 +47,6 @@ application_settings = get_application_settings()
 from app.api.auth import router as auth_router
 from app.api.chat import router as chat_router
 from app.api.reservation import router as reservation_router
-
-
-def database_is_ready() -> bool:
-    """Probe the configured database without exposing connection details."""
-    try:
-        from sqlalchemy import text
-
-        from app.db.database import engine
-
-        with engine.connect() as connection:
-            connection.execute(text("SELECT 1"))
-    except Exception:
-        return False
-    return True
 
 
 def create_app(application_settings=None) -> FastAPI:
