@@ -279,6 +279,75 @@ function Restore-AuraProcessEnvironment {
     }
 }
 
+function ConvertFrom-AuraSchemaProcessResult {
+    param(
+        [Parameter(Mandatory)]
+        [ValidateSet('plan', 'apply-empty-schema', 'verify')]
+        [string]$Operation,
+        [Parameter(Mandatory)][int]$ExitCode,
+        [Parameter(Mandatory)][AllowEmptyString()][string]$StandardOutput,
+        [Parameter(Mandatory)][AllowEmptyString()][string]$StandardError
+    )
+
+    # stderr is captured by the caller but is never rendered because Python and
+    # database libraries may put environment-specific diagnostics there.
+    $null = $StandardError
+    $operationFailure = switch ($Operation) {
+        'plan' { 'AURA_STAGING_SCHEMA_PLAN_OPERATION_FAILED' }
+        'apply-empty-schema' { 'AURA_STAGING_SCHEMA_APPLY_OPERATION_FAILED' }
+        'verify' { 'AURA_STAGING_SCHEMA_VERIFY_OPERATION_FAILED' }
+    }
+    if ($ExitCode -ne 0) { throw $operationFailure }
+
+    try {
+        $document = $StandardOutput | ConvertFrom-Json
+    } catch {
+        throw 'AURA_STAGING_SCHEMA_RESULT_INVALID'
+    }
+    if ($null -eq $document -or $document -is [array]) {
+        throw 'AURA_STAGING_SCHEMA_RESULT_INVALID'
+    }
+    $statusProperty = $document.PSObject.Properties['status']
+    if ($null -eq $statusProperty) { throw 'AURA_STAGING_SCHEMA_RESULT_INVALID' }
+    if ($statusProperty.Value -in @('failed', 'blocked')) {
+        throw $operationFailure
+    }
+    foreach ($name in @(
+        'operation', 'classification', 'expectedTableCount',
+        'actualTableCount', 'expectedColumnCount', 'matchingColumnCount',
+        'matchingPrimaryKeyCount', 'matchingTableStructureCount'
+    )) {
+        if ($null -eq $document.PSObject.Properties[$name]) {
+            throw 'AURA_STAGING_SCHEMA_RESULT_INVALID'
+        }
+    }
+    if ($document.operation -ne $Operation -or [int]$document.expectedTableCount -ne 10) {
+        throw 'AURA_STAGING_SCHEMA_STATE_INVALID'
+    }
+    if ($Operation -eq 'plan') {
+        if (
+            $document.status -ne 'ready' `
+            -or $document.classification -ne 'additive-empty-schema' `
+            -or [int]$document.actualTableCount -ne 0 `
+            -or [int]$document.matchingColumnCount -ne 0 `
+            -or [int]$document.matchingPrimaryKeyCount -ne 0 `
+            -or [int]$document.matchingTableStructureCount -ne 0
+        ) {
+            throw 'AURA_STAGING_SCHEMA_STATE_INVALID'
+        }
+    } elseif (
+        $document.status -ne 'verified' `
+        -or $document.classification -ne 'converged' `
+        -or [int]$document.actualTableCount -ne 10 `
+        -or [int]$document.matchingColumnCount -ne [int]$document.expectedColumnCount `
+        -or [int]$document.matchingPrimaryKeyCount -ne 10 `
+        -or [int]$document.matchingTableStructureCount -ne 10
+    ) {
+        throw 'AURA_STAGING_SCHEMA_STATE_INVALID'
+    }
+    return $document
+}
+
 function Get-AuraPythonPath {
     $path = Join-Path (Get-AuraRepositoryRoot) '.venv\Scripts\python.exe'
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {

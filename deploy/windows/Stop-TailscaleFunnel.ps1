@@ -8,9 +8,17 @@ param(
 $tailscale = Get-TailscalePath
 $publicPort = Get-AuraFunnelPort -Profile $Profile
 $pidPath = Join-Path $script:AuraRunRoot "tailscale-funnel-$Profile.pid"
+$otherProfile = if ($Profile -eq 'production') { 'staging' } else { 'production' }
 
-& $tailscale funnel "--https=$publicPort" off *> $null
-if ($LASTEXITCODE -ne 0) { throw 'AURA_FUNNEL_STOP_FAILED' }
+$status = Get-AuraTailscaleStatus
+$profileActive = Test-AuraFunnelStatusObject -Status $status -Profile $Profile
+if (Test-AuraFunnelStatusObject -Status $status -Profile $otherProfile) {
+    throw 'AURA_FUNNEL_OTHER_PROFILE_ACTIVE'
+}
+if ($profileActive) {
+    & $tailscale funnel reset *> $null
+    if ($LASTEXITCODE -ne 0) { throw 'AURA_FUNNEL_STOP_FAILED' }
+}
 
 if (Test-Path -LiteralPath $pidPath -PathType Leaf) {
     $rawPid = (Get-Content -Raw -LiteralPath $pidPath).Trim()
@@ -28,10 +36,8 @@ if (Test-Path -LiteralPath $pidPath -PathType Leaf) {
     Remove-Item -LiteralPath $pidPath -Force
 }
 
-try {
-    $status = Get-AuraTailscaleStatus
-    if (Test-AuraFunnelStatusObject -Status $status -Profile $Profile) { throw 'AURA_FUNNEL_STILL_ACTIVE' }
-} catch {
-    if ($_.Exception.Message -eq 'AURA_FUNNEL_STILL_ACTIVE') { throw }
+$status = Get-AuraTailscaleStatus
+if (Test-AuraFunnelStatusObject -Status $status -Profile $Profile) {
+    throw 'AURA_FUNNEL_STILL_ACTIVE'
 }
 Write-Output 'AURA_FUNNEL_STOP_OK'
