@@ -29,6 +29,8 @@ EXPECTED_SCRIPTS = {
     "Initialize-AuraPostgreSQLTestCredential.ps1",
     "Initialize-AuraPostgreSQLStagingCredential.ps1",
     "Initialize-AuraPostgreSQLStagingSchema.ps1",
+    "Initialize-AuraPostgreSQLProductionCredential.ps1",
+    "Initialize-AuraPostgreSQLProductionSchema.ps1",
 }
 
 
@@ -76,6 +78,8 @@ class WindowsSelfHostAssetTests(unittest.TestCase):
         self.assertIn("RESTORE_TO_AURA_RESTORE_TEST", restore)
         self.assertIn("DROP_AURA_RESTORE_TEST", restore)
         self.assertNotRegex(backup, re.compile(r"--dbname=\$env:DEMO_DATABASE_URL", re.I))
+        self.assertIn('-Filter "${expectedDatabase}_*.dump"', backup)
+        self.assertNotIn("-Filter 'aura_demo_*.dump'", backup)
 
     def test_task_and_firewall_contracts_are_fixed(self):
         tasks = (WINDOWS_ROOT / "Register-AuraTasks.ps1").read_text(encoding="utf-8")
@@ -169,6 +173,24 @@ class WindowsSelfHostAssetTests(unittest.TestCase):
         self.assertNotIn("PGPASSWORD", script)
         self.assertNotIn("aura_demo_public", script)
         self.assertNotIn("test.pgpass", script)
+
+    def test_production_schema_initializer_is_empty_only_and_secret_safe(self):
+        script = (
+            WINDOWS_ROOT / "Initialize-AuraPostgreSQLProductionSchema.ps1"
+        ).read_text(encoding="utf-8")
+        self.assertIn("Read-Host", script)
+        self.assertIn("-AsSecureString", script)
+        self.assertIn("SecureStringToBSTR", script)
+        self.assertIn("ZeroFreeBSTR", script)
+        self.assertIn("additive-empty-schema", script)
+        self.assertIn("actualTableCount -ne 0", script)
+        self.assertLess(script.index("-Operation plan"), script.index("-Operation apply-empty-schema"))
+        self.assertLess(script.index("-Operation apply-empty-schema"), script.index("-Operation verify"))
+        self.assertIn("Remove-Item -LiteralPath $tempPath -Force", script)
+        self.assertIn("-Profile production", script)
+        self.assertNotIn("PGPASSWORD", script)
+        self.assertNotIn("aura_demo_staging", script)
+        self.assertNotIn("aura_test", script)
 
 
 if __name__ == "__main__":
