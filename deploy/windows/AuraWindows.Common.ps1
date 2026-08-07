@@ -40,12 +40,39 @@ function Get-AuraFunnelTarget {
 }
 
 function Get-TailscalePath {
-    $command = Get-Command tailscale.exe -ErrorAction Stop
-    $path = [System.IO.Path]::GetFullPath($command.Source)
-    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
-        throw 'AURA_TAILSCALE_NOT_FOUND'
+    $candidates = [System.Collections.Generic.List[string]]::new()
+    $programFiles = [Environment]::GetFolderPath(
+        [Environment+SpecialFolder]::ProgramFiles
+    )
+    if (-not [string]::IsNullOrWhiteSpace($programFiles)) {
+        $candidates.Add(
+            (Join-Path $programFiles 'Tailscale\tailscale.exe')
+        )
     }
-    return $path
+    $command = Get-Command tailscale.exe -CommandType Application `
+        -ErrorAction SilentlyContinue
+    if ($null -ne $command) { $candidates.Add($command.Source) }
+
+    foreach ($candidate in $candidates) {
+        try {
+            $path = [System.IO.Path]::GetFullPath($candidate)
+        } catch {
+            continue
+        }
+        if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { continue }
+        $signature = Get-AuthenticodeSignature -LiteralPath $path
+        if (
+            $signature.Status -ne [System.Management.Automation.SignatureStatus]::Valid `
+            -or $null -eq $signature.SignerCertificate `
+            -or -not $signature.SignerCertificate.Subject.StartsWith(
+                'CN=Tailscale Inc.,', [StringComparison]::Ordinal
+            )
+        ) {
+            continue
+        }
+        return $path
+    }
+    throw 'AURA_TAILSCALE_NOT_FOUND'
 }
 
 function Get-AuraFunnelConfigs {
