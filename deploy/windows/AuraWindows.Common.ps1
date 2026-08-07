@@ -281,6 +281,8 @@ function Restore-AuraProcessEnvironment {
 
 function ConvertFrom-AuraSchemaProcessResult {
     param(
+        [ValidateSet('staging', 'production')]
+        [string]$Profile = 'staging',
         [Parameter(Mandatory)]
         [ValidateSet('plan', 'apply-empty-schema', 'verify')]
         [string]$Operation,
@@ -292,23 +294,40 @@ function ConvertFrom-AuraSchemaProcessResult {
     # stderr is captured by the caller but is never rendered because Python and
     # database libraries may put environment-specific diagnostics there.
     $null = $StandardError
+    $codes = if ($Profile -eq 'production') {
+        @{
+            Result = 'AURA_PRODUCTION_SCHEMA_RESULT_INVALID'
+            State = 'AURA_PRODUCTION_SCHEMA_STATE_INVALID'
+            Plan = 'AURA_PRODUCTION_SCHEMA_PLAN_OPERATION_FAILED'
+            Apply = 'AURA_PRODUCTION_SCHEMA_APPLY_OPERATION_FAILED'
+            Verify = 'AURA_PRODUCTION_SCHEMA_VERIFY_OPERATION_FAILED'
+        }
+    } else {
+        @{
+            Result = 'AURA_STAGING_SCHEMA_RESULT_INVALID'
+            State = 'AURA_STAGING_SCHEMA_STATE_INVALID'
+            Plan = 'AURA_STAGING_SCHEMA_PLAN_OPERATION_FAILED'
+            Apply = 'AURA_STAGING_SCHEMA_APPLY_OPERATION_FAILED'
+            Verify = 'AURA_STAGING_SCHEMA_VERIFY_OPERATION_FAILED'
+        }
+    }
     $operationFailure = switch ($Operation) {
-        'plan' { 'AURA_STAGING_SCHEMA_PLAN_OPERATION_FAILED' }
-        'apply-empty-schema' { 'AURA_STAGING_SCHEMA_APPLY_OPERATION_FAILED' }
-        'verify' { 'AURA_STAGING_SCHEMA_VERIFY_OPERATION_FAILED' }
+        'plan' { $codes.Plan }
+        'apply-empty-schema' { $codes.Apply }
+        'verify' { $codes.Verify }
     }
     if ($ExitCode -ne 0) { throw $operationFailure }
 
     try {
         $document = $StandardOutput | ConvertFrom-Json
     } catch {
-        throw 'AURA_STAGING_SCHEMA_RESULT_INVALID'
+        throw $codes.Result
     }
     if ($null -eq $document -or $document -is [array]) {
-        throw 'AURA_STAGING_SCHEMA_RESULT_INVALID'
+        throw $codes.Result
     }
     $statusProperty = $document.PSObject.Properties['status']
-    if ($null -eq $statusProperty) { throw 'AURA_STAGING_SCHEMA_RESULT_INVALID' }
+    if ($null -eq $statusProperty) { throw $codes.Result }
     if ($statusProperty.Value -in @('failed', 'blocked')) {
         throw $operationFailure
     }
@@ -318,11 +337,11 @@ function ConvertFrom-AuraSchemaProcessResult {
         'matchingPrimaryKeyCount', 'matchingTableStructureCount'
     )) {
         if ($null -eq $document.PSObject.Properties[$name]) {
-            throw 'AURA_STAGING_SCHEMA_RESULT_INVALID'
+            throw $codes.Result
         }
     }
     if ($document.operation -ne $Operation -or [int]$document.expectedTableCount -ne 10) {
-        throw 'AURA_STAGING_SCHEMA_STATE_INVALID'
+        throw $codes.State
     }
     if ($Operation -eq 'plan') {
         if (
@@ -333,7 +352,7 @@ function ConvertFrom-AuraSchemaProcessResult {
             -or [int]$document.matchingPrimaryKeyCount -ne 0 `
             -or [int]$document.matchingTableStructureCount -ne 0
         ) {
-            throw 'AURA_STAGING_SCHEMA_STATE_INVALID'
+            throw $codes.State
         }
     } elseif (
         $document.status -ne 'verified' `
@@ -343,7 +362,7 @@ function ConvertFrom-AuraSchemaProcessResult {
         -or [int]$document.matchingPrimaryKeyCount -ne 10 `
         -or [int]$document.matchingTableStructureCount -ne 10
     ) {
-        throw 'AURA_STAGING_SCHEMA_STATE_INVALID'
+        throw $codes.State
     }
     return $document
 }

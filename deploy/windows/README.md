@@ -160,6 +160,50 @@ explicit `additive-empty-schema` plan, applies only the model metadata to that
 empty staging database, verifies exact convergence, and removes the temporary
 credential. It refuses any non-empty non-converged schema and never drops data.
 
+## Production PostgreSQL preparation
+
+Production preparation is a separate human-gated flow. Its fixed role and
+database are `aura_public_runtime` and `aura_demo_public`; staging and test
+credentials are never accepted as substitutes.
+
+From an elevated local PowerShell at the repository root, run the reviewed
+additive bootstrap only after its Production database gate is authorized:
+
+```powershell
+& 'C:\Program Files\PostgreSQL\18\bin\psql.exe' `
+  --host=127.0.0.1 --port=5432 --username=postgres --dbname=postgres `
+  --set=target=production --file=.\deploy\windows\Bootstrap-LocalPostgreSQL.sql
+```
+
+The bootstrap prompts locally only for missing role passwords, never drops a
+database or schema, and does not rotate an existing password automatically.
+
+After the reviewed additive bootstrap has created the Production role and
+database, create the protected runtime credential. Enter the existing
+`aura_public_runtime` password only at the secure local prompt:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File `
+  .\deploy\windows\Initialize-AuraPostgreSQLProductionCredential.ps1
+```
+
+The initializer is fixed to `production.pgpass`, authenticates through a
+password-free URL, verifies least privilege and denial of test/staging database
+access, and atomically installs the credential only after the preflight passes.
+
+For a newly bootstrapped empty Production database, run the separate empty-only
+schema initializer and enter the existing `aura_migration_owner` password only
+at its secure prompt:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File `
+  .\deploy\windows\Initialize-AuraPostgreSQLProductionSchema.ps1
+```
+
+The wrapper requires a zero-table plan, exact ten-table convergence after
+apply, and an independent verify. It never drops or repairs a partial schema
+and removes its temporary migration credential unconditionally.
+
 ## Manual lifecycle
 
 ```powershell
@@ -181,9 +225,13 @@ a PID ownership error.
 ## Backup and recovery
 
 `Backup-DemoDatabase.ps1` creates bounded local backups under
-`C:\ProgramData\AURA\backups`. `Restore-DemoDatabase-Test.ps1` restores only to
-the allowlisted recovery database and requires exact confirmations. Never test
-restore against staging or production.
+`C:\ProgramData\AURA\backups`. `Restore-DemoDatabase-Test.ps1` accepts an exact
+source profile and matching backup filename, securely prompts for the migration
+owner password, and restores only to the allowlisted `aura_restore_test`
+database. It requires exact ten-table schema verification and explicit
+confirmations. Never test restore against staging or production. Dropping the
+restore-test database is optional and requires the separate exact
+`DROP_AURA_RESTORE_TEST` confirmation.
 
 ## Staging port fallback gate
 

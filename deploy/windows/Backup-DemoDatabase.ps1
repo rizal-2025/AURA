@@ -31,7 +31,9 @@ try {
     if ($backup.Length -le 0) { throw 'AURA_BACKUP_EMPTY' }
     Move-Item -LiteralPath $tempPath -Destination $finalPath
     $retention = [int]$env:AURA_BACKUP_RETENTION_DAYS
-    Remove-AuraExpiredFiles -Root $script:AuraBackupRoot -Filter 'aura_demo_*.dump' -RetentionDays $retention -PreservePath $finalPath
+    Remove-AuraExpiredFiles -Root $script:AuraBackupRoot `
+        -Filter "${expectedDatabase}_*.dump" `
+        -RetentionDays $retention -PreservePath $finalPath
     Write-Output ("AURA_BACKUP_OK timestamp={0} bytes={1} database={2}" -f $timestamp, $backup.Length, $expectedDatabase)
 } catch {
     if ($null -ne $tempPath -and (Test-Path -LiteralPath $tempPath)) {
