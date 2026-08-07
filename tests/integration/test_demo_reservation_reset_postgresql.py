@@ -94,6 +94,7 @@ TOKEN_A = "V" * 43
 TOKEN_B = "W" * 43
 TOKEN_C = "X" * 43
 SERVICE_TOKEN = "safe-bff-service-token-for-reset-integration-tests"
+CLIENT_SUBJECT = "d" * 64
 SEEDED_DEMO_LIST_RESERVATION_ID = (2**30) + 205_771
 
 
@@ -325,6 +326,7 @@ class DemoReservationResetPostgreSQLTests(unittest.TestCase):
         return {
             "X-BFF-Service-Token": SERVICE_TOKEN,
             "X-Demo-Session-Token": token,
+            "X-Demo-Client-Subject": CLIENT_SUBJECT,
         }
 
     def database_snapshot(self):
@@ -1419,7 +1421,10 @@ class DemoReservationResetPostgreSQLTests(unittest.TestCase):
         ) as client:
             created = client.post(
                 "/internal/demo/sessions",
-                headers={"X-BFF-Service-Token": SERVICE_TOKEN},
+                headers={
+                    "X-BFF-Service-Token": SERVICE_TOKEN,
+                    "X-Demo-Client-Subject": CLIENT_SUBJECT,
+                },
             )
             self.assertEqual(created.status_code, 201)
             raw_token = created.json()["sessionToken"]

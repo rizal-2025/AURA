@@ -38,6 +38,72 @@ five internal demo operations. The full AURA app is never the Funnel target.
    This registers hourly cleanup and daily backup. It does not register AURA
    or Funnel startup.
 
+## Local PostgreSQL integration tests
+
+The unittest PostgreSQL gate uses only `aura_test` with the dedicated
+`aura_test_runner` login. `aura_migration_owner` owns the database, while the
+runner receives only `CONNECT`, database-level `CREATE`, and public-schema
+`USAGE` so it can own and remove its generated disposable schemas. It receives
+no public-schema table or sequence access. The test process never needs the
+migration-owner credential.
+
+From an elevated PowerShell window at the repository root, provision or repair
+the test-only roles and database. `psql` prompts locally and does not put a
+password in command history:
+
+```powershell
+& 'C:\Program Files\PostgreSQL\18\bin\psql.exe' `
+  --host=127.0.0.1 --port=5432 --username=postgres --dbname=postgres `
+  --set=target=test --file=.\deploy\windows\Bootstrap-LocalPostgreSQL.sql
+```
+
+Then create the protected standard PostgreSQL password file. Enter the existing
+`aura_test_runner` password only at the secure local prompt:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File `
+  .\deploy\windows\Initialize-AuraPostgreSQLTestCredential.ps1
+```
+
+The default command refuses to overwrite an existing credential. After an
+intentional PostgreSQL password rotation, update it explicitly:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File `
+  .\deploy\windows\Initialize-AuraPostgreSQLTestCredential.ps1 -ReplaceExisting
+```
+
+The replacement is written to an ACL-protected temporary file in the same
+directory, validated through the password-free Python/psycopg preflight, and
+atomically installed only after authentication and identity checks pass. A bad
+password leaves the existing credential unchanged and removes the temporary
+file.
+
+The credential is stored outside Git at
+`C:\ProgramData\AURA\secrets\test.pgpass` with protected ACLs. Do not open,
+print, copy, or commit it. Passwords containing PostgreSQL URI-reserved
+characters are supported because the test URL contains no password; libpq reads
+the escaped password from `PGPASSFILE`.
+
+From a standard PowerShell window at the repository root, the default runner
+performs the secret-safe preflight, the two-test disposable-schema module, and
+then complete unittest discovery in that order:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File `
+  .\deploy\windows\Run-AuraPostgreSQLTests.ps1
+```
+
+Use `-PreflightOnly` or `-Focused` only for bounded diagnostics; neither option
+reaches the full suite.
+
+The runner sets `APP_ENV=test`, disables dotenv loading and live provider
+credentials only for each child process, validates the fixed loopback target and
+least-privilege database identity before discovery, propagates the unittest exit
+code, and leaves the caller's environment unchanged. The process-scoped
+execution-policy option is needed on hosts that block local scripts; it does not
+change the machine or user execution policy.
+
 ## Tailscale human gate
 
 Install the current Windows client, sign in interactively through an identity

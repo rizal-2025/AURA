@@ -21,33 +21,70 @@ SELECT NOT EXISTS (
 ) AS migration_owner_missing \gset
 
 \if :migration_owner_missing
-\prompt -s 'Password for aura_migration_owner: ' aura_migration_password
-SELECT format('CREATE ROLE aura_migration_owner LOGIN NOSUPERUSER CREATEDB NOCREATEROLE NOREPLICATION PASSWORD %L', :'aura_migration_password') \gexec
-\unset aura_migration_password
+CREATE ROLE aura_migration_owner NOLOGIN NOSUPERUSER CREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
 \endif
+SELECT rolpassword IS NULL AS migration_owner_password_missing
+FROM pg_authid WHERE rolname = 'aura_migration_owner' \gset
+\if :migration_owner_password_missing
+\password aura_migration_owner
+\endif
+ALTER ROLE aura_migration_owner LOGIN NOSUPERUSER CREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
 
 \if :is_test
-\prompt -s 'Password for aura_test_runtime (ignored if role exists): ' aura_runtime_password
-SELECT format('CREATE ROLE aura_test_runtime LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION PASSWORD %L', :'aura_runtime_password')
-WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'aura_test_runtime') \gexec
+SELECT NOT EXISTS (
+    SELECT 1 FROM pg_roles WHERE rolname = 'aura_test_runner'
+) AS test_runner_missing \gset
+\if :test_runner_missing
+CREATE ROLE aura_test_runner NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
+\endif
+SELECT rolpassword IS NULL AS test_runner_password_missing
+FROM pg_authid WHERE rolname = 'aura_test_runner' \gset
+\if :test_runner_password_missing
+\password aura_test_runner
+\endif
+ALTER ROLE aura_test_runner LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
 SELECT 'CREATE DATABASE aura_test OWNER aura_migration_owner'
 WHERE NOT EXISTS (SELECT 1 FROM pg_database WHERE datname = 'aura_test') \gexec
+ALTER DATABASE aura_test OWNER TO aura_migration_owner;
 REVOKE ALL ON DATABASE aura_test FROM PUBLIC;
-GRANT CONNECT, TEMPORARY ON DATABASE aura_test TO aura_test_runtime;
+GRANT CONNECT, CREATE ON DATABASE aura_test TO aura_test_runner;
+SELECT EXISTS (
+    SELECT 1 FROM pg_roles WHERE rolname = 'aura_test_runtime'
+) AS obsolete_test_runtime_exists \gset
+\if :obsolete_test_runtime_exists
+REVOKE ALL ON DATABASE aura_test FROM aura_test_runtime;
+\endif
 \connect aura_test
 REVOKE CREATE ON SCHEMA public FROM PUBLIC;
-GRANT USAGE, CREATE ON SCHEMA public TO aura_test_runtime;
-GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO aura_test_runtime;
-GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA public TO aura_test_runtime;
-ALTER DEFAULT PRIVILEGES FOR ROLE aura_migration_owner IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO aura_test_runtime;
-ALTER DEFAULT PRIVILEGES FOR ROLE aura_migration_owner IN SCHEMA public GRANT USAGE, SELECT, UPDATE ON SEQUENCES TO aura_test_runtime;
-\unset aura_runtime_password
+REVOKE CREATE ON SCHEMA public FROM aura_test_runner;
+GRANT USAGE ON SCHEMA public TO aura_test_runner;
+REVOKE ALL ON ALL TABLES IN SCHEMA public FROM aura_test_runner;
+REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM aura_test_runner;
+ALTER DEFAULT PRIVILEGES FOR ROLE aura_migration_owner IN SCHEMA public REVOKE ALL ON TABLES FROM aura_test_runner;
+ALTER DEFAULT PRIVILEGES FOR ROLE aura_migration_owner IN SCHEMA public REVOKE ALL ON SEQUENCES FROM aura_test_runner;
+\if :obsolete_test_runtime_exists
+REVOKE ALL ON SCHEMA public FROM aura_test_runtime;
+REVOKE ALL ON ALL TABLES IN SCHEMA public FROM aura_test_runtime;
+REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM aura_test_runtime;
+ALTER DEFAULT PRIVILEGES FOR ROLE aura_migration_owner IN SCHEMA public REVOKE ALL ON TABLES FROM aura_test_runtime;
+ALTER DEFAULT PRIVILEGES FOR ROLE aura_migration_owner IN SCHEMA public REVOKE ALL ON SEQUENCES FROM aura_test_runtime;
+\endif
 \elif :is_staging
-\prompt -s 'Password for aura_staging_runtime (ignored if role exists): ' aura_runtime_password
-SELECT format('CREATE ROLE aura_staging_runtime LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION PASSWORD %L', :'aura_runtime_password')
-WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'aura_staging_runtime') \gexec
+SELECT NOT EXISTS (
+    SELECT 1 FROM pg_roles WHERE rolname = 'aura_staging_runtime'
+) AS staging_runtime_missing \gset
+\if :staging_runtime_missing
+CREATE ROLE aura_staging_runtime NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
+\endif
+SELECT rolpassword IS NULL AS staging_runtime_password_missing
+FROM pg_authid WHERE rolname = 'aura_staging_runtime' \gset
+\if :staging_runtime_password_missing
+\password aura_staging_runtime
+\endif
+ALTER ROLE aura_staging_runtime LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
 SELECT 'CREATE DATABASE aura_demo_staging OWNER aura_migration_owner'
 WHERE NOT EXISTS (SELECT 1 FROM pg_database WHERE datname = 'aura_demo_staging') \gexec
+ALTER DATABASE aura_demo_staging OWNER TO aura_migration_owner;
 REVOKE ALL ON DATABASE aura_demo_staging FROM PUBLIC;
 GRANT CONNECT ON DATABASE aura_demo_staging TO aura_staging_runtime;
 \connect aura_demo_staging
@@ -57,13 +94,22 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO aura_stag
 GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA public TO aura_staging_runtime;
 ALTER DEFAULT PRIVILEGES FOR ROLE aura_migration_owner IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO aura_staging_runtime;
 ALTER DEFAULT PRIVILEGES FOR ROLE aura_migration_owner IN SCHEMA public GRANT USAGE, SELECT, UPDATE ON SEQUENCES TO aura_staging_runtime;
-\unset aura_runtime_password
 \elif :is_production
-\prompt -s 'Password for aura_public_runtime (ignored if role exists): ' aura_runtime_password
-SELECT format('CREATE ROLE aura_public_runtime LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION PASSWORD %L', :'aura_runtime_password')
-WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'aura_public_runtime') \gexec
+SELECT NOT EXISTS (
+    SELECT 1 FROM pg_roles WHERE rolname = 'aura_public_runtime'
+) AS public_runtime_missing \gset
+\if :public_runtime_missing
+CREATE ROLE aura_public_runtime NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
+\endif
+SELECT rolpassword IS NULL AS public_runtime_password_missing
+FROM pg_authid WHERE rolname = 'aura_public_runtime' \gset
+\if :public_runtime_password_missing
+\password aura_public_runtime
+\endif
+ALTER ROLE aura_public_runtime LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
 SELECT 'CREATE DATABASE aura_demo_public OWNER aura_migration_owner'
 WHERE NOT EXISTS (SELECT 1 FROM pg_database WHERE datname = 'aura_demo_public') \gexec
+ALTER DATABASE aura_demo_public OWNER TO aura_migration_owner;
 REVOKE ALL ON DATABASE aura_demo_public FROM PUBLIC;
 GRANT CONNECT ON DATABASE aura_demo_public TO aura_public_runtime;
 \connect aura_demo_public
@@ -73,7 +119,6 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO aura_publ
 GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA public TO aura_public_runtime;
 ALTER DEFAULT PRIVILEGES FOR ROLE aura_migration_owner IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO aura_public_runtime;
 ALTER DEFAULT PRIVILEGES FOR ROLE aura_migration_owner IN SCHEMA public GRANT USAGE, SELECT, UPDATE ON SEQUENCES TO aura_public_runtime;
-\unset aura_runtime_password
 \else
 \echo 'Invalid target. Use test, staging, or production.'
 \quit 3

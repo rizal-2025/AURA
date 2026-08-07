@@ -63,6 +63,7 @@ from tests.integration.disposable_schema import DisposableSchemaResources
 
 TOKEN_A = "A" * 43
 TOKEN_B = "B" * 43
+CLIENT_SUBJECT = "c" * 64
 
 
 def _skip_reason():
@@ -393,6 +394,7 @@ class DemoRateLimitCleanupPostgreSQLTests(unittest.TestCase):
                             if index % 2
                             else self.digest(TOKEN_B)
                         ),
+                        client_subject_digest=CLIENT_SUBJECT,
                     )
                 except DemoRateLimitExceededError:
                     pass
