@@ -121,6 +121,31 @@ provider bandwidth limits, and this deployment assumes no Funnel SLA. The
 gateway's service token, HMAC subject, session, limits, and validation remain
 mandatory.
 
+## Staging PostgreSQL credential
+
+Provision the additive staging role and database from an elevated local
+PowerShell window. PostgreSQL prompts locally for only passwords that are
+missing; the values do not enter command history or process arguments:
+
+```powershell
+& 'C:\Program Files\PostgreSQL\18\bin\psql.exe' `
+  --host=127.0.0.1 --port=5432 --username=postgres --dbname=postgres `
+  --set=target=staging --file=.\deploy\windows\Bootstrap-LocalPostgreSQL.sql
+```
+
+Then create the separate protected staging pgpass file. Enter the same
+`aura_staging_runtime` password at the secure local prompt:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File `
+  .\deploy\windows\Initialize-AuraPostgreSQLStagingCredential.ps1
+```
+
+The initializer refuses an existing credential unless `-ReplaceExisting` is
+explicit, validates the temporary credential against the fixed staging-only
+database and least-privilege role contract, and installs it atomically. It does
+not read, replace, or authenticate with `test.pgpass` or a production database.
+
 ## Manual lifecycle
 
 ```powershell

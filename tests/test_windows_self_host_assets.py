@@ -27,6 +27,7 @@ EXPECTED_SCRIPTS = {
     "Test-LocalHostSecurity.ps1",
     "Run-AuraPostgreSQLTests.ps1",
     "Initialize-AuraPostgreSQLTestCredential.ps1",
+    "Initialize-AuraPostgreSQLStagingCredential.ps1",
 }
 
 
