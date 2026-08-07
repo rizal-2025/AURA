@@ -146,6 +146,20 @@ explicit, validates the temporary credential against the fixed staging-only
 database and least-privilege role contract, and installs it atomically. It does
 not read, replace, or authenticate with `test.pgpass` or a production database.
 
+For a newly bootstrapped empty staging database, initialize its schema from an
+elevated local PowerShell window. Enter the existing `aura_migration_owner`
+password only at the secure prompt:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File `
+  .\deploy\windows\Initialize-AuraPostgreSQLStagingSchema.ps1
+```
+
+The schema initializer uses an ACL-protected temporary pgpass file, requires an
+explicit `additive-empty-schema` plan, applies only the model metadata to that
+empty staging database, verifies exact convergence, and removes the temporary
+credential. It refuses any non-empty non-converged schema and never drops data.
+
 ## Manual lifecycle
 
 ```powershell

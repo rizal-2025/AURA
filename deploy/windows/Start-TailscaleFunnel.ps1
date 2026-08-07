@@ -11,6 +11,7 @@ $publicPort = Get-AuraFunnelPort -Profile $Profile
 $target = Get-AuraFunnelTarget -Profile $Profile
 $localPort = Get-AuraProfilePort -Profile $Profile
 $pidPath = Join-Path $script:AuraRunRoot "tailscale-funnel-$Profile.pid"
+$otherProfile = if ($Profile -eq 'production') { 'staging' } else { 'production' }
 
 if (-not (Get-NetTCPConnection -State Listen -LocalAddress 127.0.0.1 -LocalPort $localPort -ErrorAction SilentlyContinue)) {
     throw 'AURA_GATEWAY_NOT_RUNNING'
@@ -21,6 +22,13 @@ if (Test-Path -LiteralPath $pidPath -PathType Leaf) {
         throw 'AURA_FUNNEL_ALREADY_RUNNING'
     }
     Remove-Item -LiteralPath $pidPath -Force
+}
+$existingStatus = Get-AuraTailscaleStatus
+if (Test-AuraFunnelStatusObject -Status $existingStatus -Profile $Profile) {
+    throw 'AURA_FUNNEL_ALREADY_ACTIVE'
+}
+if (Test-AuraFunnelStatusObject -Status $existingStatus -Profile $otherProfile) {
+    throw 'AURA_FUNNEL_OTHER_PROFILE_ACTIVE'
 }
 
 # No --bg: the detached foreground CLI session does not persist Funnel across
@@ -38,7 +46,8 @@ for ($attempt = 0; $attempt -lt 20; $attempt++) {
     Start-Sleep -Seconds 1
 }
 if (-not $ready) {
-    & $tailscale funnel "--https=$publicPort" off *> $null
+    & $tailscale funnel reset *> $null
+    if ($LASTEXITCODE -ne 0) { throw 'AURA_FUNNEL_RESET_FAILED' }
     if (-not $process.HasExited) { Stop-Process -Id $process.Id -Force }
     Remove-Item -LiteralPath $pidPath -Force -ErrorAction SilentlyContinue
     throw 'AURA_FUNNEL_START_FAILED'

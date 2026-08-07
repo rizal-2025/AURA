@@ -28,6 +28,7 @@ EXPECTED_SCRIPTS = {
     "Run-AuraPostgreSQLTests.ps1",
     "Initialize-AuraPostgreSQLTestCredential.ps1",
     "Initialize-AuraPostgreSQLStagingCredential.ps1",
+    "Initialize-AuraPostgreSQLStagingSchema.ps1",
 }
 
 
@@ -91,6 +92,12 @@ class WindowsSelfHostAssetTests(unittest.TestCase):
     def test_funnel_lifecycle_is_manual_exact_and_non_persistent(self):
         common = (WINDOWS_ROOT / "AuraWindows.Common.ps1").read_text(encoding="utf-8")
         start = (WINDOWS_ROOT / "Start-TailscaleFunnel.ps1").read_text(encoding="utf-8")
+        orchestrator = (WINDOWS_ROOT / "Start-AuraPublicDemo.ps1").read_text(
+            encoding="utf-8"
+        )
+        funnel_stop = (WINDOWS_ROOT / "Stop-TailscaleFunnel.ps1").read_text(
+            encoding="utf-8"
+        )
         stop = (WINDOWS_ROOT / "Stop-AuraPublicDemo.ps1").read_text(encoding="utf-8")
         self.assertIn("return 443", common)
         self.assertIn("return 8443", common)
@@ -98,6 +105,18 @@ class WindowsSelfHostAssetTests(unittest.TestCase):
         self.assertIn("funnel status --json", common)
         self.assertNotIn("--set-path", start)
         self.assertNotIn("'--bg'", start)
+        self.assertNotIn('"--https=$publicPort" off', start + funnel_stop)
+        self.assertIn("funnel reset", start)
+        self.assertIn("funnel reset", funnel_stop)
+        self.assertIn("AURA_FUNNEL_OTHER_PROFILE_ACTIVE", start)
+        self.assertIn("AURA_FUNNEL_OTHER_PROFILE_ACTIVE", funnel_stop)
+        self.assertNotIn("finally", stop)
+        self.assertIn("$publicBoundaryInactive", orchestrator)
+        self.assertIn("AURA_PUBLIC_DEMO_ROLLBACK_FAILED", orchestrator)
+        self.assertLess(
+            orchestrator.index("if ($auraStarted -and $publicBoundaryInactive)"),
+            orchestrator.index("AURA_PUBLIC_DEMO_ROLLBACK_FAILED"),
+        )
         self.assertLess(stop.index("Stop-TailscaleFunnel.ps1"), stop.index("Stop-Aura.ps1"))
 
     def test_tailscale_cli_discovery_accepts_only_signed_official_binary(self):
@@ -128,6 +147,28 @@ class WindowsSelfHostAssetTests(unittest.TestCase):
         )
         for database in ("aura_test", "aura_demo_staging", "aura_demo_public"):
             self.assertIn(database, sql)
+
+    def test_staging_schema_initializer_is_empty_only_and_secret_safe(self):
+        script = (
+            WINDOWS_ROOT / "Initialize-AuraPostgreSQLStagingSchema.ps1"
+        ).read_text(encoding="utf-8")
+        self.assertIn("Read-Host", script)
+        self.assertIn("-AsSecureString", script)
+        self.assertIn("SecureStringToBSTR", script)
+        self.assertIn("ZeroFreeBSTR", script)
+        self.assertIn("additive-empty-schema", script)
+        self.assertIn("actualTableCount -ne 0", script)
+        self.assertLess(script.index("-Operation plan"), script.index("-Operation apply-empty-schema"))
+        self.assertLess(script.index("-Operation apply-empty-schema"), script.index("-Operation verify"))
+        self.assertIn("Remove-Item -LiteralPath $tempPath -Force", script)
+        self.assertIn("ConvertFrom-AuraSchemaProcessResult", script)
+        self.assertNotIn(
+            "-or -not [string]::IsNullOrEmpty($standardError)",
+            script,
+        )
+        self.assertNotIn("PGPASSWORD", script)
+        self.assertNotIn("aura_demo_public", script)
+        self.assertNotIn("test.pgpass", script)
 
 
 if __name__ == "__main__":

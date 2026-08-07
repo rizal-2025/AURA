@@ -29,8 +29,30 @@ try {
     $funnelStarted = $true
     & (Join-Path $PSScriptRoot 'Test-PublicDemoReadiness.ps1') -Profile $Profile -AuthenticatedSmoke | Out-Null
 } catch {
-    if ($funnelStarted) { & (Join-Path $PSScriptRoot 'Stop-TailscaleFunnel.ps1') -Profile $Profile | Out-Null }
-    if ($auraStarted) { & (Join-Path $PSScriptRoot 'Stop-Aura.ps1') -Profile $Profile | Out-Null }
+    $publicBoundaryInactive = -not $funnelStarted
+    try {
+        $status = Get-AuraTailscaleStatus
+        $publicBoundaryInactive = -not (
+            Test-AuraFunnelStatusObject -Status $status -Profile $Profile
+        )
+    } catch {
+        $publicBoundaryInactive = $false
+    }
+    if (-not $publicBoundaryInactive) {
+        try {
+            & (Join-Path $PSScriptRoot 'Stop-TailscaleFunnel.ps1') `
+                -Profile $Profile | Out-Null
+            $publicBoundaryInactive = $true
+        } catch {
+            $publicBoundaryInactive = $false
+        }
+    }
+    if ($auraStarted -and $publicBoundaryInactive) {
+        & (Join-Path $PSScriptRoot 'Stop-Aura.ps1') -Profile $Profile | Out-Null
+    }
+    if (-not $publicBoundaryInactive) {
+        throw 'AURA_PUBLIC_DEMO_ROLLBACK_FAILED'
+    }
     throw 'AURA_PUBLIC_DEMO_START_FAILED'
 }
 Write-Output 'AURA_PUBLIC_DEMO_START_OK'
