@@ -99,6 +99,21 @@ class WindowsSelfHostAssetTests(unittest.TestCase):
         self.assertNotIn("'--bg'", start)
         self.assertLess(stop.index("Stop-TailscaleFunnel.ps1"), stop.index("Stop-Aura.ps1"))
 
+    def test_tailscale_cli_discovery_accepts_only_signed_official_binary(self):
+        common = (WINDOWS_ROOT / "AuraWindows.Common.ps1").read_text(
+            encoding="utf-8"
+        )
+        fixed_install = common.index("'Tailscale\\tailscale.exe'")
+        path_lookup = common.index("Get-Command tailscale.exe")
+        self.assertLess(fixed_install, path_lookup)
+        self.assertIn("[Environment+SpecialFolder]::ProgramFiles", common)
+        self.assertIn("-CommandType Application", common)
+        self.assertIn("-ErrorAction SilentlyContinue", common)
+        self.assertIn("Get-AuthenticodeSignature -LiteralPath $path", common)
+        self.assertIn("[System.Management.Automation.SignatureStatus]::Valid", common)
+        self.assertIn("'CN=Tailscale Inc.,'", common)
+        self.assertIn("AURA_TAILSCALE_NOT_FOUND", common)
+
     def test_bootstrap_is_additive_and_non_superuser(self):
         sql = (WINDOWS_ROOT / "Bootstrap-LocalPostgreSQL.sql").read_text(
             encoding="utf-8"

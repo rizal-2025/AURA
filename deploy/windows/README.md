@@ -112,6 +112,10 @@ provider using Personal use, give the device a generic name such as
 the browser consent flow. Do not use an auth key or automation token. Do not
 paste or record the stable hostname in chat, Git, scripts, or logs.
 
+The lifecycle scripts discover the signed Tailscale CLI at the official
+`Program Files` installation before considering an application found on
+`PATH`. Do not modify the system or user `PATH` just for these scripts.
+
 Funnel is public beta. Anyone can reach an enabled Funnel URL, traffic has
 provider bandwidth limits, and this deployment assumes no Funnel SLA. The
 gateway's service token, HMAC subject, session, limits, and validation remain
