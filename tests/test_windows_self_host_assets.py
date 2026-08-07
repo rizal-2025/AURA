@@ -25,6 +25,8 @@ EXPECTED_SCRIPTS = {
     "Install-AuraFirewallRules.ps1",
     "Remove-AuraFirewallRules.ps1",
     "Test-LocalHostSecurity.ps1",
+    "Run-AuraPostgreSQLTests.ps1",
+    "Initialize-AuraPostgreSQLTestCredential.ps1",
 }
 
 
@@ -101,7 +103,8 @@ class WindowsSelfHostAssetTests(unittest.TestCase):
         sql = (WINDOWS_ROOT / "Bootstrap-LocalPostgreSQL.sql").read_text(
             encoding="utf-8"
         )
-        self.assertIn("\\prompt -s", sql)
+        self.assertNotIn("\\prompt", sql)
+        self.assertIn("\\password aura_migration_owner", sql)
         self.assertIn("NOSUPERUSER", sql)
         self.assertNotRegex(
             sql.casefold(),

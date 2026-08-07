@@ -149,7 +149,12 @@ function Assert-AuraSecretAcl {
     if (-not $acl.AreAccessRulesProtected) {
         throw 'AURA_SECRET_ACL_INHERITANCE_ENABLED'
     }
-    $blocked = @('S-1-1-0', 'S-1-5-11', 'S-1-5-32-545')
+    $blocked = @(
+        'S-1-1-0',      # Everyone
+        'S-1-3-0',      # CREATOR OWNER
+        'S-1-5-11',     # Authenticated Users
+        'S-1-5-32-545'  # BUILTIN\Users
+    )
     foreach ($rule in $acl.Access) {
         try {
             $sid = $rule.IdentityReference.Translate(
@@ -162,6 +167,36 @@ function Assert-AuraSecretAcl {
             throw 'AURA_SECRET_ACL_TOO_BROAD'
         }
     }
+}
+
+function Assert-AuraOperatorSecretAcl {
+    param([Parameter(Mandatory)][string]$Path)
+    Assert-AuraSecretAcl -Path $Path
+    $currentSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+    $allowed = @($currentSid, 'S-1-5-18', 'S-1-5-32-544')
+    $currentUserAllowed = $false
+    foreach ($rule in (Get-Acl -LiteralPath $Path).Access) {
+        try {
+            $sid = $rule.IdentityReference.Translate(
+                [Security.Principal.SecurityIdentifier]
+            ).Value
+        } catch {
+            throw 'AURA_SECRET_ACL_IDENTITY_INVALID'
+        }
+        if (
+            $rule.AccessControlType -eq [Security.AccessControl.AccessControlType]::Allow `
+            -and $sid -notin $allowed
+        ) {
+            throw 'AURA_SECRET_ACL_UNEXPECTED_IDENTITY'
+        }
+        if (
+            $rule.AccessControlType -eq [Security.AccessControl.AccessControlType]::Allow `
+            -and $sid -eq $currentSid
+        ) {
+            $currentUserAllowed = $true
+        }
+    }
+    if (-not $currentUserAllowed) { throw 'AURA_SECRET_ACL_OPERATOR_MISSING' }
 }
 
 function Import-AuraConfiguration {
