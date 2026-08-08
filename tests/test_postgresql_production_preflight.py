@@ -142,6 +142,75 @@ class ProductionRestoreAssetTests(unittest.TestCase):
         self.assertIn("DROP_AURA_RESTORE_TEST", script)
         self.assertIn("AURA_RESTORE_TARGET_NOT_EMPTY", script)
 
+    def test_restore_failure_reports_exact_safe_stage(self):
+        script = (WINDOWS_ROOT / "Restore-DemoDatabase-Test.ps1").read_text(
+            encoding="utf-8"
+        )
+        stages = (
+            "AURA_RESTORE_CREDENTIAL_STAGE_FAILED",
+            "AURA_RESTORE_ARCHIVE_VALIDATION_STAGE_FAILED",
+            "AURA_RESTORE_TARGET_PREFLIGHT_STAGE_FAILED",
+            "AURA_RESTORE_DATABASE_CREATE_STAGE_FAILED",
+            "AURA_RESTORE_PG_RESTORE_STAGE_FAILED",
+            "AURA_RESTORE_SCHEMA_VERIFICATION_STAGE_FAILED",
+            "AURA_RESTORE_AGGREGATE_VERIFICATION_STAGE_FAILED",
+            "AURA_RESTORE_DROP_STAGE_FAILED",
+        )
+        for stage in stages:
+            self.assertIn(stage, script)
+        self.assertIn("throw $failureCode", script)
+        self.assertNotIn("throw 'AURA_RESTORE_FAILED'", script)
+
+
+class ExistingRestoreVerifierAssetTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.script = (
+            WINDOWS_ROOT / "Test-AuraRestoredDatabase.ps1"
+        ).read_text(encoding="utf-8")
+
+    def test_verifier_is_exact_target_and_read_only(self):
+        for expected in (
+            "VERIFY_EXISTING_AURA_RESTORE_TEST",
+            "$targetDatabase = 'aura_restore_test'",
+            "default_transaction_read_only=on",
+            "--set=ON_ERROR_STOP=1",
+            "ConvertFrom-AuraSchemaProcessResult",
+            "matchingColumnCount",
+            "matchingPrimaryKeyCount",
+            "matchingTableStructureCount",
+            "aggregateRowEstimate",
+            "readOnly=true",
+            ") -f `",
+        ):
+            self.assertIn(expected, self.script)
+        for forbidden in (
+            "createdb.exe",
+            "pg_restore.exe",
+            "dropdb.exe",
+            "aura_demo_public@",
+            "aura_demo_staging@",
+            "aura_test@",
+            "Base.metadata.create_all",
+        ):
+            self.assertNotIn(forbidden, self.script)
+
+    def test_verifier_handles_secret_locally_and_always_cleans_up(self):
+        for expected in (
+            "Read-Host",
+            "-AsSecureString",
+            "SecureStringToBSTR",
+            "ZeroFreeBSTR",
+            "Set-AuraOperatorProtectedAcl -Path $tempPath",
+            "Remove-Item -LiteralPath $tempPath -Force",
+            "AURA_RESTORE_EXISTING_SCHEMA_VERIFICATION_STAGE_FAILED",
+            "AURA_RESTORE_EXISTING_AGGREGATE_VERIFICATION_STAGE_FAILED",
+        ):
+            self.assertIn(expected, self.script)
+        self.assertNotIn("PGPASSWORD", self.script)
+        self.assertNotIn("Write-Output $standardError", self.script)
+        self.assertNotIn("Write-Output $plainPassword", self.script)
+
 
 if __name__ == "__main__":
     unittest.main()

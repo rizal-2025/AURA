@@ -236,6 +236,13 @@ schema verification and explicit confirmations. Never test restore against
 staging or production. Dropping the restore-test database is optional and
 requires the separate exact `DROP_AURA_RESTORE_TEST` confirmation.
 
+If an interrupted or generically reported restore already created
+`aura_restore_test`, do not run restore again. `Test-AuraRestoredDatabase.ps1`
+uses a transaction-read-only session, metadata-only exact schema inspection,
+and an aggregate table estimate to validate that existing database. It cannot
+create, restore, or drop a database and requires the exact
+`VERIFY_EXISTING_AURA_RESTORE_TEST` confirmation.
+
 ## Staging port fallback gate
 
 Preview normally calls HTTPS 8443 while production calls default HTTPS 443 on
