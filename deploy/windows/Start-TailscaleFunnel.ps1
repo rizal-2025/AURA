@@ -46,22 +46,29 @@ if ($ownership.State -eq 'owned') {
 $tailscale = Get-TailscalePath
 $ownershipPath = Get-AuraOwnershipPath -Kind funnel -Profile $Profile
 # Deliberately foreground: no persistent public exposure after reboot.
-$process = Start-Process -FilePath $tailscale `
-    -ArgumentList @('funnel', "--https=$publicPort", $target) `
-    -WindowStyle Hidden -RedirectStandardOutput 'NUL' `
-    -RedirectStandardError '\\.\NUL' -PassThru
+$commandLine = '"{0}" funnel --https={1} {2}' -f `
+    $tailscale, $publicPort, $target
+$startup = New-CimInstance -ClassName Win32_ProcessStartup `
+    -Namespace root\cimv2 -Property @{ ShowWindow = [uint16]0 } -ClientOnly
+$created = Invoke-CimMethod -ClassName Win32_Process -MethodName Create `
+    -Arguments @{
+        CommandLine = $commandLine
+        ProcessStartupInformation = $startup
+    }
+if ([int]$created.ReturnValue -ne 0 -or [int]$created.ProcessId -le 0) {
+    throw 'AURA_FUNNEL_PROCESS_CREATE_FAILED'
+}
+$processId = [int]$created.ProcessId
 $processInfo = $null
 for ($attempt = 0; $attempt -lt 20; $attempt++) {
     $processInfo = Get-CimInstance Win32_Process `
-        -Filter "ProcessId = $($process.Id)" -ErrorAction SilentlyContinue
+        -Filter "ProcessId = $processId" -ErrorAction SilentlyContinue
     if ($null -ne $processInfo) { break }
     Start-Sleep -Milliseconds 100
 }
-if (
-    $null -eq $processInfo `
-    -or -not (Test-AuraExpectedProcessInfo -ProcessInfo $processInfo `
-        -Kind funnel -Profile $Profile)
-) {
+if ($null -eq $processInfo) { throw 'AURA_FUNNEL_START_FAILED' }
+if (-not (Test-AuraExpectedProcessInfo -ProcessInfo $processInfo `
+    -Kind funnel -Profile $Profile)) {
     throw 'HUMAN_GATE_PROCESS_OWNERSHIP_AMBIGUOUS'
 }
 try {
@@ -78,7 +85,8 @@ try {
 
 $ready = $false
 for ($attempt = 0; $attempt -lt 30; $attempt++) {
-    if ($process.HasExited) { break }
+    if ($null -eq (Get-CimInstance Win32_Process `
+        -Filter "ProcessId = $processId" -ErrorAction SilentlyContinue)) { break }
     $current = Get-AuraOwnedProcessState -Kind funnel -Profile $Profile
     if ($current.State -eq 'owned' -and (Test-AuraPublicHealth -Profile $Profile)) {
         $ready = $true

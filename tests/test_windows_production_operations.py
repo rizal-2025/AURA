@@ -104,8 +104,10 @@ class ProductionOperationsStaticTests(unittest.TestCase):
         self.assertNotIn("funnel reset", lifecycle)
         self.assertNotIn("serve reset", lifecycle)
         self.assertNotIn("--bg", lifecycle)
-        self.assertIn("-RedirectStandardOutput 'NUL'", funnel_start)
-        self.assertIn("-RedirectStandardError '\\\\.\\NUL'", funnel_start)
+        self.assertIn("Invoke-CimMethod -ClassName Win32_Process", funnel_start)
+        self.assertIn("New-CimInstance -ClassName Win32_ProcessStartup", funnel_start)
+        self.assertIn("ShowWindow = [uint16]0", funnel_start)
+        self.assertNotIn("Start-Process -FilePath $tailscale", funnel_start)
 
     def test_status_start_and_readiness_share_exact_firewall_and_database_gates(self):
         common = read(COMMON)
