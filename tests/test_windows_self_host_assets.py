@@ -16,6 +16,8 @@ EXPECTED_SCRIPTS = {
     "Stop-TailscaleFunnel.ps1",
     "Test-TailscaleFunnel.ps1",
     "Test-PublicDemoReadiness.ps1",
+    "Get-AuraPublicDemoStatus.ps1",
+    "Invoke-AuraProductionBackup.ps1",
     "Test-AuraReadiness.ps1",
     "Run-DemoCleanup.ps1",
     "Backup-DemoDatabase.ps1",
@@ -159,15 +161,16 @@ class WindowsSelfHostAssetTests(unittest.TestCase):
         self.assertNotIn("--set-path", start)
         self.assertNotIn("'--bg'", start)
         self.assertNotIn('"--https=$publicPort" off', start + funnel_stop)
-        self.assertIn("funnel reset", start)
-        self.assertIn("funnel reset", funnel_stop)
+        self.assertNotIn("funnel reset", start + funnel_stop + orchestrator + stop)
+        self.assertNotIn("serve reset", start + funnel_stop + orchestrator + stop)
         self.assertIn("AURA_FUNNEL_OTHER_PROFILE_ACTIVE", start)
-        self.assertIn("AURA_FUNNEL_OTHER_PROFILE_ACTIVE", funnel_stop)
-        self.assertNotIn("finally", stop)
-        self.assertIn("$publicBoundaryInactive", orchestrator)
+        self.assertIn("Test-AuraPublicHealth", funnel_stop)
+        self.assertIn("Assert-AuraOwnedProcessStillMatches", funnel_stop)
+        self.assertNotIn("Method Post", orchestrator)
+        self.assertNotIn("AuthenticatedSmoke", orchestrator)
         self.assertIn("AURA_PUBLIC_DEMO_ROLLBACK_FAILED", orchestrator)
         self.assertLess(
-            orchestrator.index("if ($auraStarted -and $publicBoundaryInactive)"),
+            orchestrator.index("Stop-TailscaleFunnel.ps1"),
             orchestrator.index("AURA_PUBLIC_DEMO_ROLLBACK_FAILED"),
         )
         self.assertLess(stop.index("Stop-TailscaleFunnel.ps1"), stop.index("Stop-Aura.ps1"))

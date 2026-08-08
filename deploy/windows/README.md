@@ -204,23 +204,28 @@ The wrapper requires a zero-table plan, exact ten-table convergence after
 apply, and an independent verify. It never drops or repairs a partial schema
 and removes its temporary migration credential unconditionally.
 
-## Manual lifecycle
+## One-command Production lifecycle
 
 ```powershell
-.\Start-AuraPublicDemo.ps1 -Profile staging
-.\Test-PublicDemoReadiness.ps1 -Profile staging -AuthenticatedSmoke
-.\Stop-AuraPublicDemo.ps1 -Profile staging
+.\Start-AuraPublicDemo.ps1 -Profile production
+.\Get-AuraPublicDemoStatus.ps1 -Profile production
+.\Stop-AuraPublicDemo.ps1 -Profile production
+.\Invoke-AuraProductionBackup.ps1 -Profile production
 ```
 
-The start script checks protected configuration, local database readiness,
-port ownership, gateway health and route inventory, Funnel status JSON, public
-health, and a safe authenticated session create. It never prints the hostname
-or credentials. The Funnel process intentionally omits `--bg`; restart the
-demo manually after a reboot or Tailscale restart.
+The start script checks protected configuration and pgpass ACLs, the fixed
+Production database role/target and exact ten-table schema, local process and
+listener ownership, firewall rules, foreground Funnel ownership, and public
+health. Ordinary start and readiness never create a session or mutate the
+database. The Funnel process intentionally omits `--bg`; restart the demo
+manually after a reboot or Tailscale restart.
 
-Stop disables the profile's Funnel port before stopping AURA. PostgreSQL stays
-running. Do not stop the processes by hand unless the lifecycle script reports
-a PID ownership error.
+Stop terminates only the exact owned foreground Funnel before stopping the exact
+owned AURA process. It does not use routine Funnel or Serve resets. PostgreSQL
+stays running. Ambiguous process ownership fails closed at a human gate.
+
+See `docs/windows-production-operations.md` for the operator runbook and
+`docs/PUBLIC-DEMO-MANUAL.md` for the short Indonesian manual.
 
 ## Backup and recovery
 

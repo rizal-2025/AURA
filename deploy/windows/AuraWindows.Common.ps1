@@ -579,7 +579,47 @@ function Get-AuraPythonPath {
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
         throw 'AURA_PYTHON_NOT_FOUND'
     }
-    return [System.IO.Path]::GetFullPath($path)
+    $path = [System.IO.Path]::GetFullPath($path)
+    $signature = Get-AuthenticodeSignature -LiteralPath $path
+    if (
+        $signature.Status -ne `
+            [System.Management.Automation.SignatureStatus]::Valid `
+        -or $null -eq $signature.SignerCertificate `
+        -or -not $signature.SignerCertificate.Subject.StartsWith(
+            'CN=Python Software Foundation', [StringComparison]::Ordinal
+        )
+    ) { throw 'AURA_PYTHON_SIGNATURE_INVALID' }
+    return $path
+}
+
+function Get-AuraPythonRuntimePaths {
+    $launcher = Get-AuraPythonPath
+    $paths = [System.Collections.Generic.List[string]]::new()
+    $paths.Add($launcher)
+    try {
+        $rawBase = & $launcher -I -c `
+            'import sys; print(sys._base_executable)' 2>$null
+        if ($LASTEXITCODE -eq 0 -and @($rawBase).Count -eq 1) {
+            $base = [IO.Path]::GetFullPath(([string]$rawBase).Trim())
+            if (Test-Path -LiteralPath $base -PathType Leaf) {
+                $item = Get-Item -LiteralPath $base -Force
+                $signature = Get-AuthenticodeSignature -LiteralPath $base
+                if (
+                    ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -eq 0 `
+                    -and $signature.Status -eq `
+                        [System.Management.Automation.SignatureStatus]::Valid `
+                    -and $null -ne $signature.SignerCertificate `
+                    -and $signature.SignerCertificate.Subject.StartsWith(
+                        'CN=Python Software Foundation',
+                        [StringComparison]::Ordinal
+                    )
+                ) {
+                    $paths.Add($base)
+                }
+            }
+        }
+    } catch { }
+    return @($paths | Select-Object -Unique)
 }
 
 function Remove-AuraExpiredFiles {
@@ -601,4 +641,474 @@ function Remove-AuraExpiredFiles {
             Remove-Item -LiteralPath $safeFile -Force
         }
     }
+}
+
+function Assert-AuraProductionProfile {
+    param([Parameter(Mandatory)][string]$Profile)
+    if ($Profile -cne 'production') { throw 'AURA_PROFILE_INVALID' }
+}
+
+function Assert-AuraRepositoryLayout {
+    $root = Get-AuraRepositoryRoot
+    foreach ($relativePath in @(
+        'app\self_host.py',
+        'app\jobs\demo_schema.py',
+        'deploy\windows\AuraWindows.Common.ps1'
+    )) {
+        $candidate = Assert-AuraPathWithin -Path (Join-Path $root $relativePath) `
+            -Root $root
+        if (-not (Test-Path -LiteralPath $candidate -PathType Leaf)) {
+            throw 'AURA_REPOSITORY_LAYOUT_INVALID'
+        }
+    }
+    return $root
+}
+
+function Get-AuraPgPassPath {
+    param([Parameter(Mandatory)][string]$Profile)
+    Assert-AuraProfile -Profile $Profile
+    return Join-Path $script:AuraSecretRoot "$Profile.pgpass"
+}
+
+function Assert-AuraProductionConfiguration {
+    if (
+        $env:APP_ENV -ne 'demo' `
+        -or $env:AURA_DB_HOST -ne '127.0.0.1' `
+        -or $env:AURA_DB_PORT -ne '5432' `
+        -or $env:AURA_DB_NAME -ne 'aura_demo_public' `
+        -or $env:AURA_DB_USER -ne 'aura_public_runtime' `
+        -or $env:DEMO_DATABASE_URL -ne (
+            'postgresql+psycopg://aura_public_runtime@' +
+            '127.0.0.1:5432/aura_demo_public'
+        )
+    ) {
+        throw 'AURA_PRODUCTION_CONFIGURATION_INVALID'
+    }
+    $expectedPgPass = [IO.Path]::GetFullPath((Get-AuraPgPassPath -Profile production))
+    if (
+        [string]::IsNullOrWhiteSpace($env:PGPASSFILE) `
+        -or [IO.Path]::GetFullPath($env:PGPASSFILE) -ne $expectedPgPass
+    ) {
+        throw 'AURA_PRODUCTION_PGPASS_TARGET_INVALID'
+    }
+}
+
+function Test-AuraPostgreSQLServiceRunning {
+    $services = @(
+        Get-Service -ErrorAction SilentlyContinue |
+            Where-Object {
+                $_.Name -like 'postgresql*' -or
+                $_.DisplayName -like 'PostgreSQL*'
+            }
+    )
+    return @($services | Where-Object Status -eq 'Running').Count -gt 0
+}
+
+function Test-AuraProductionDatabaseReadiness {
+    try {
+        Assert-AuraProductionConfiguration
+        $python = Get-AuraPythonPath
+        & $python -m app.jobs.public_demo_readiness 1>$null 2>$null
+        if ($LASTEXITCODE -ne 0) { return $false }
+        $schemaOutput = & $python -m app.jobs.demo_schema `
+            --operation verify 2>$null
+        $schemaExitCode = $LASTEXITCODE
+        $null = ConvertFrom-AuraSchemaProcessResult -Profile production `
+            -Operation verify -ExitCode $schemaExitCode `
+            -StandardOutput ($schemaOutput -join "`n") -StandardError ''
+        return $true
+    } catch {
+        return $false
+    }
+}
+
+function Test-AuraExactLoopbackListener {
+    param(
+        [Parameter(Mandatory)][int]$Port,
+        [Nullable[int]]$OwningProcess = $null
+    )
+    $listeners = @(Get-NetTCPConnection -State Listen -LocalPort $Port `
+        -ErrorAction SilentlyContinue)
+    if ($listeners.Count -eq 0) { return $false }
+    foreach ($listener in $listeners) {
+        if ($listener.LocalAddress -ne '127.0.0.1') { return $false }
+        if (
+            $null -ne $OwningProcess `
+            -and [int]$listener.OwningProcess -ne [int]$OwningProcess
+        ) { return $false }
+    }
+    return $true
+}
+
+function Test-AuraPortClosed {
+    param([Parameter(Mandatory)][int]$Port)
+    return @(
+        Get-NetTCPConnection -State Listen -LocalPort $Port `
+            -ErrorAction SilentlyContinue
+    ).Count -eq 0
+}
+
+function Test-AuraHealthContract {
+    param(
+        [Parameter(Mandatory)][Uri]$Uri,
+        [ValidateRange(1, 30)][int]$TimeoutSeconds = 5
+    )
+    try {
+        $response = Invoke-WebRequest -Uri $Uri -Method Get `
+            -TimeoutSec $TimeoutSeconds -UseBasicParsing -MaximumRedirection 0
+        return (
+            $response.StatusCode -eq 200 `
+            -and $response.Content -ceq '{"status":"healthy"}' `
+            -and $response.Headers['Content-Type'] -match '^application/json'
+        )
+    } catch {
+        return $false
+    }
+}
+
+function Test-AuraLocalHealth {
+    param([Parameter(Mandatory)][string]$Profile)
+    $port = Get-AuraProfilePort -Profile $Profile
+    return Test-AuraHealthContract -Uri ([Uri]"http://127.0.0.1:$port/health")
+}
+
+function Test-AuraPublicHealth {
+    param([Parameter(Mandatory)][string]$Profile)
+    try {
+        $baseUri = Get-AuraFunnelBaseUri -Profile $Profile
+        return Test-AuraHealthContract -Uri ([Uri]"$baseUri/health") `
+            -TimeoutSeconds 10
+    } catch {
+        return $false
+    }
+}
+
+function Test-AuraFirewallRules {
+    $expectedPorts = @(8000, 8001, 5432)
+    $rules = @(Get-NetFirewallRule -Group 'AURA Self-Host' `
+        -ErrorAction SilentlyContinue)
+    foreach ($port in $expectedPorts) {
+        $matching = @()
+        foreach ($rule in $rules) {
+            if (
+                $rule.Enabled -ne 'True' `
+                -or $rule.Direction -ne 'Inbound' `
+                -or $rule.Action -ne 'Block'
+            ) { continue }
+            $filters = @(Get-NetFirewallPortFilter -AssociatedNetFirewallRule $rule `
+                -ErrorAction SilentlyContinue)
+            if (@($filters | Where-Object {
+                $_.Protocol -eq 'TCP' -and [string]$_.LocalPort -eq [string]$port
+            }).Count -gt 0) { $matching += $rule }
+        }
+        if ($matching.Count -ne 1) { return $false }
+    }
+    return $true
+}
+
+function Get-AuraProcessCreationTimeUtc {
+    param([Parameter(Mandatory)]$ProcessInfo)
+    if ($ProcessInfo.CreationDate -is [DateTime]) {
+        return $ProcessInfo.CreationDate.ToUniversalTime()
+    }
+    try {
+        return [Management.ManagementDateTimeConverter]::ToDateTime(
+            [string]$ProcessInfo.CreationDate
+        ).ToUniversalTime()
+    } catch {
+        throw 'AURA_PROCESS_CREATION_TIME_INVALID'
+    }
+}
+
+function Get-AuraOwnershipPath {
+    param(
+        [Parameter(Mandatory)][ValidateSet('aura', 'funnel')][string]$Kind,
+        [Parameter(Mandatory)][string]$Profile
+    )
+    Assert-AuraProfile -Profile $Profile
+    $name = if ($Kind -eq 'aura') {
+        "aura-$Profile.pid"
+    } else {
+        "tailscale-funnel-$Profile.pid"
+    }
+    return Join-Path $script:AuraRunRoot $name
+}
+
+function Test-AuraExpectedProcessInfo {
+    param(
+        [Parameter(Mandatory)]$ProcessInfo,
+        [Parameter(Mandatory)][ValidateSet('aura', 'funnel')][string]$Kind,
+        [Parameter(Mandatory)][string]$Profile
+    )
+    $commandLine = [string]$ProcessInfo.CommandLine
+    $executablePath = [string]$ProcessInfo.ExecutablePath
+    if ([string]::IsNullOrWhiteSpace($commandLine) -or
+        [string]::IsNullOrWhiteSpace($executablePath)) { return $false }
+    if ($Kind -eq 'aura') {
+        $expectedExecutables = @(Get-AuraPythonRuntimePaths)
+        $executableExpected = @($expectedExecutables | Where-Object {
+            $executablePath.Equals($_, [StringComparison]::OrdinalIgnoreCase)
+        }).Count -eq 1
+        if (
+            $ProcessInfo.Name -notmatch '^python(?:\.exe)?$' `
+            -or -not $executableExpected
+        ) { return $false }
+        $commandExecutables = @($expectedExecutables | ForEach-Object {
+            '"?' + [Regex]::Escape($_) + '"?'
+        }) -join '|'
+        $escapedProfile = [Regex]::Escape($Profile)
+        return $commandLine -match (
+            '^\s*(?:' + $commandExecutables + ')\s+' +
+            '-m\s+app\.self_host\s+' +
+            '--profile\s+' + $escapedProfile + '\s*$'
+        )
+    }
+    $expectedTailscale = Get-TailscalePath
+    if (
+        $ProcessInfo.Name -ne 'tailscale.exe' `
+        -or -not $executablePath.Equals(
+            $expectedTailscale, [StringComparison]::OrdinalIgnoreCase
+        )
+    ) { return $false }
+    $escapedExecutable = [Regex]::Escape($expectedTailscale)
+    $escapedTarget = [Regex]::Escape((Get-AuraFunnelTarget -Profile $Profile))
+    $publicPort = Get-AuraFunnelPort -Profile $Profile
+    return $commandLine -match (
+        '^\s*"?' + $escapedExecutable + '"?\s+funnel\s+' +
+        '--https=' + $publicPort + '\s+' + $escapedTarget + '\s*$'
+    )
+}
+
+function Get-AuraGatewayListenerProcessInfo {
+    param(
+        [Parameter(Mandatory)]$OwnershipProcessInfo,
+        [Parameter(Mandatory)][string]$Profile
+    )
+    $port = Get-AuraProfilePort -Profile $Profile
+    $listeners = @(Get-NetTCPConnection -State Listen -LocalPort $port `
+        -ErrorAction SilentlyContinue)
+    if (
+        $listeners.Count -eq 0 `
+        -or @($listeners | Where-Object LocalAddress -ne '127.0.0.1').Count -gt 0
+    ) { return $null }
+    $owners = @($listeners | Select-Object -ExpandProperty OwningProcess -Unique)
+    if ($owners.Count -ne 1) { return $null }
+    $listenerProcess = Get-CimInstance Win32_Process `
+        -Filter "ProcessId = $($owners[0])" -ErrorAction SilentlyContinue
+    if (
+        $null -eq $listenerProcess `
+        -or -not (Test-AuraExpectedProcessInfo -ProcessInfo $listenerProcess `
+            -Kind aura -Profile $Profile)
+    ) { return $null }
+    if (
+        [int]$listenerProcess.ProcessId -eq [int]$OwnershipProcessInfo.ProcessId `
+        -or [int]$listenerProcess.ParentProcessId -eq `
+            [int]$OwnershipProcessInfo.ProcessId
+    ) { return $listenerProcess }
+    return $null
+}
+
+function Read-AuraOwnershipMetadata {
+    param([Parameter(Mandatory)][string]$Path)
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return $null }
+    Assert-AuraOperatorSecretAcl -Path $Path
+    $item = Get-Item -LiteralPath $Path -Force
+    if (
+        $item.Length -lt 1 `
+        -or $item.Length -gt 1024 `
+        -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0
+    ) { throw 'AURA_PROCESS_METADATA_INVALID' }
+    $raw = (Get-Content -Raw -LiteralPath $Path).Trim()
+    if ($raw -match '^[1-9][0-9]*$') {
+        return [PSCustomObject]@{
+            ProcessId = [int]$raw
+            CreationTimeUtc = $null
+            Legacy = $true
+        }
+    }
+    try { $document = $raw | ConvertFrom-Json } catch {
+        throw 'AURA_PROCESS_METADATA_INVALID'
+    }
+    if (
+        $null -eq $document `
+        -or [string]$document.version -ne '1' `
+        -or [string]$document.processId -notmatch '^[1-9][0-9]*$' `
+        -or [string]::IsNullOrWhiteSpace([string]$document.creationTimeUtc)
+    ) { throw 'AURA_PROCESS_METADATA_INVALID' }
+    try {
+        $created = [DateTime]::ParseExact(
+            [string]$document.creationTimeUtc,
+            'o',
+            [Globalization.CultureInfo]::InvariantCulture,
+            [Globalization.DateTimeStyles]::RoundtripKind
+        ).ToUniversalTime()
+    } catch { throw 'AURA_PROCESS_METADATA_INVALID' }
+    return [PSCustomObject]@{
+        ProcessId = [int]$document.processId
+        CreationTimeUtc = $created
+        Legacy = $false
+    }
+}
+
+function Write-AuraOwnershipMetadata {
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)]$ProcessInfo
+    )
+    Initialize-AuraDataDirectories
+    Set-AuraOperatorProtectedAcl -Path $script:AuraRunRoot -Container
+    $safePath = Assert-AuraPathWithin -Path $Path -Root $script:AuraRunRoot
+    $tempPath = "$safePath.partial"
+    if (Test-Path -LiteralPath $tempPath) {
+        Remove-Item -LiteralPath $tempPath -Force
+    }
+    $payload = [ordered]@{
+        version = 1
+        processId = [int]$ProcessInfo.ProcessId
+        creationTimeUtc = (Get-AuraProcessCreationTimeUtc -ProcessInfo $ProcessInfo).ToString('o')
+    } | ConvertTo-Json -Compress
+    try {
+        [IO.File]::WriteAllText($tempPath, $payload, [Text.Encoding]::ASCII)
+        Set-AuraOperatorProtectedAcl -Path $tempPath
+        Move-Item -LiteralPath $tempPath -Destination $safePath -Force
+        Assert-AuraOperatorSecretAcl -Path $safePath
+    } finally {
+        Remove-Item -LiteralPath $tempPath -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Get-AuraOwnedProcessState {
+    param(
+        [Parameter(Mandatory)][ValidateSet('aura', 'funnel')][string]$Kind,
+        [Parameter(Mandatory)][string]$Profile,
+        [switch]$RepairStaleMetadata
+    )
+    $path = Get-AuraOwnershipPath -Kind $Kind -Profile $Profile
+    $metadata = Read-AuraOwnershipMetadata -Path $path
+    if ($null -ne $metadata) {
+        $processInfo = Get-CimInstance Win32_Process `
+            -Filter "ProcessId = $($metadata.ProcessId)" `
+            -ErrorAction SilentlyContinue
+        if ($null -eq $processInfo) {
+            if ($RepairStaleMetadata) { Remove-Item -LiteralPath $path -Force }
+            return [PSCustomObject]@{ State = 'stale'; ProcessInfo = $null; Path = $path }
+        }
+        if (-not (Test-AuraExpectedProcessInfo -ProcessInfo $processInfo `
+            -Kind $Kind -Profile $Profile)) {
+            return [PSCustomObject]@{ State = 'ambiguous'; ProcessInfo = $null; Path = $path }
+        }
+        if ($null -ne $metadata.CreationTimeUtc) {
+            $actualCreation = Get-AuraProcessCreationTimeUtc -ProcessInfo $processInfo
+            if ($actualCreation.ToString('o') -ne $metadata.CreationTimeUtc.ToString('o')) {
+                return [PSCustomObject]@{ State = 'ambiguous'; ProcessInfo = $null; Path = $path }
+            }
+        }
+        return [PSCustomObject]@{
+            State = 'owned'
+            ProcessInfo = $processInfo
+            Path = $path
+            Legacy = [bool]$metadata.Legacy
+        }
+    }
+
+    if ($Kind -eq 'aura') {
+        $port = Get-AuraProfilePort -Profile $Profile
+        $listeners = @(Get-NetTCPConnection -State Listen -LocalPort $port `
+            -ErrorAction SilentlyContinue)
+        if ($listeners.Count -gt 0) {
+            return [PSCustomObject]@{ State = 'uncertain'; ProcessInfo = $null; Path = $path }
+        }
+    } else {
+        $candidates = @(Get-CimInstance Win32_Process -Filter "Name = 'tailscale.exe'" `
+            -ErrorAction SilentlyContinue | Where-Object {
+                [string]$_.CommandLine -match '\sfunnel\s'
+            })
+        $otherProfile = if ($Profile -eq 'production') {
+            'staging'
+        } else { 'production' }
+        $unexpected = @($candidates | Where-Object {
+            -not (Test-AuraExpectedProcessInfo -ProcessInfo $_ `
+                -Kind funnel -Profile $otherProfile)
+        })
+        if ($unexpected.Count -gt 0) {
+            return [PSCustomObject]@{ State = 'ambiguous'; ProcessInfo = $null; Path = $path }
+        }
+    }
+    return [PSCustomObject]@{ State = 'absent'; ProcessInfo = $null; Path = $path }
+}
+
+function Test-AuraFunnelProcessesAbsent {
+    param([Parameter(Mandatory)][string]$Profile)
+    $otherProfile = if ($Profile -eq 'production') {
+        'staging'
+    } else { 'production' }
+    $candidates = @(Get-CimInstance Win32_Process -Filter "Name = 'tailscale.exe'" `
+        -ErrorAction SilentlyContinue | Where-Object {
+            [string]$_.CommandLine -match '\sfunnel\s'
+        })
+    foreach ($candidate in $candidates) {
+        if (Test-AuraExpectedProcessInfo -ProcessInfo $candidate `
+            -Kind funnel -Profile $Profile) { return $false }
+        if (-not (Test-AuraExpectedProcessInfo -ProcessInfo $candidate `
+            -Kind funnel -Profile $otherProfile)) { return $false }
+    }
+    return $true
+}
+
+function Assert-AuraOwnedProcessStillMatches {
+    param(
+        [Parameter(Mandatory)]$OriginalProcessInfo,
+        [Parameter(Mandatory)][ValidateSet('aura', 'funnel')][string]$Kind,
+        [Parameter(Mandatory)][string]$Profile
+    )
+    $current = Get-CimInstance Win32_Process `
+        -Filter "ProcessId = $($OriginalProcessInfo.ProcessId)" `
+        -ErrorAction SilentlyContinue
+    if ($null -eq $current) { return $null }
+    if (-not (Test-AuraExpectedProcessInfo -ProcessInfo $current `
+        -Kind $Kind -Profile $Profile)) {
+        throw 'HUMAN_GATE_PROCESS_OWNERSHIP_AMBIGUOUS'
+    }
+    $originalTime = Get-AuraProcessCreationTimeUtc -ProcessInfo $OriginalProcessInfo
+    $currentTime = Get-AuraProcessCreationTimeUtc -ProcessInfo $current
+    if ($originalTime.ToString('o') -ne $currentTime.ToString('o')) {
+        throw 'HUMAN_GATE_PROCESS_OWNERSHIP_AMBIGUOUS'
+    }
+    return $current
+}
+
+function Get-AuraBackupAgeClassification {
+    param(
+        [string]$Profile = 'production',
+        [DateTime]$NowUtc = [DateTime]::UtcNow
+    )
+    Assert-AuraProfile -Profile $Profile
+    $database = if ($Profile -eq 'production') {
+        'aura_demo_public'
+    } else { 'aura_demo_staging' }
+    $latest = Get-ChildItem -LiteralPath $script:AuraBackupRoot -File `
+        -Filter "${database}_*.dump" -ErrorAction SilentlyContinue |
+        Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1
+    if ($null -eq $latest) { return 'missing' }
+    $age = $NowUtc.ToUniversalTime() - $latest.LastWriteTimeUtc.ToUniversalTime()
+    if ($age.TotalHours -le 24) { return 'fresh' }
+    if ($age.TotalHours -le 48) { return 'warning' }
+    return 'stale'
+}
+
+function Write-AuraOperationLog {
+    param(
+        [Parameter(Mandatory)][string]$Profile,
+        [Parameter(Mandatory)][ValidatePattern('^[A-Z0-9_]+$')][string]$Stage,
+        [Parameter(Mandatory)][ValidatePattern('^[A-Z0-9_]+$')][string]$Code,
+        [ValidateRange(0, 3600000)][int]$ElapsedMs = 0
+    )
+    Initialize-AuraDataDirectories
+    $day = [DateTime]::UtcNow.ToString('yyyyMMdd')
+    $path = Join-Path $script:AuraLogRoot "operations-$day.log"
+    $line = 'timestamp={0} profile={1} stage={2} code={3} elapsed_ms={4}' -f `
+        [DateTime]::UtcNow.ToString('o'), $Profile, $Stage, $Code, $ElapsedMs
+    Add-Content -LiteralPath $path -Value $line -Encoding ascii
+    Remove-AuraExpiredFiles -Root $script:AuraLogRoot `
+        -Filter 'operations-*.log' -RetentionDays 14 -PreservePath $path
 }

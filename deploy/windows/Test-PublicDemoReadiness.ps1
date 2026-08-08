@@ -1,50 +1,51 @@
 [CmdletBinding()]
-param(
-    [ValidateSet('staging', 'production')]
-    [string]$Profile = 'production',
-    [switch]$AuthenticatedSmoke
-)
+param([string]$Profile = 'production')
 
 . (Join-Path $PSScriptRoot 'AuraWindows.Common.ps1')
-$port = Get-AuraProfilePort -Profile $Profile
-$localBase = "http://127.0.0.1:$port"
-
+Assert-AuraProductionProfile -Profile $Profile
+$null = Assert-AuraRepositoryLayout
+$configPath = Get-AuraSecretPath -Profile production
+$pgPassPath = Get-AuraPgPassPath -Profile production
+if (-not (Test-Path -LiteralPath $configPath -PathType Leaf)) {
+    throw 'AURA_PRODUCTION_CONFIG_MISSING'
+}
+if (-not (Test-Path -LiteralPath $pgPassPath -PathType Leaf)) {
+    throw 'AURA_PRODUCTION_PGPASS_MISSING'
+}
+Assert-AuraOperatorSecretAcl -Path $configPath
+Assert-AuraOperatorSecretAcl -Path $pgPassPath
+$previous = Import-AuraConfiguration -Profile production
 try {
-    $health = Invoke-WebRequest -Uri "$localBase/health" -Method Get -TimeoutSec 5 -UseBasicParsing -MaximumRedirection 0
-    if ($health.StatusCode -ne 200 -or $health.Content -ne '{"status":"healthy"}') { throw 'invalid' }
-    foreach ($path in @('/', '/ready', '/docs', '/redoc', '/openapi.json', '/chat', '/reservations', '/telegram', '/admin', '/internal/demo/sessions/')) {
-        try {
-            $unexpected = Invoke-WebRequest -Uri "$localBase$path" -Method Get -TimeoutSec 3 -UseBasicParsing -MaximumRedirection 0
-            throw 'unexpected'
-        } catch {
-            if ($_.Exception.Response.StatusCode.value__ -ne 404) { throw }
-        }
+    Assert-AuraProductionConfiguration
+    if (-not (Test-AuraPostgreSQLServiceRunning)) {
+        throw 'AURA_POSTGRESQL_SERVICE_NOT_RUNNING'
     }
-} catch {
-    throw 'AURA_GATEWAY_ROUTE_INVENTORY_FAILED'
+    if (-not (Test-AuraExactLoopbackListener -Port 5432)) {
+        throw 'AURA_POSTGRESQL_LISTENER_INVALID'
+    }
+    if (-not (Test-AuraProductionDatabaseReadiness)) {
+        throw 'AURA_PRODUCTION_DATABASE_NOT_READY'
+    }
+} finally {
+    Restore-AuraProcessEnvironment -Previous $previous
 }
 
-& (Join-Path $PSScriptRoot 'Test-AuraReadiness.ps1') -Profile $Profile | Out-Null
-& (Join-Path $PSScriptRoot 'Test-TailscaleFunnel.ps1') -Profile $Profile | Out-Null
-
-if ($AuthenticatedSmoke) {
-    $previous = Import-AuraConfiguration -Profile $Profile
-    try {
-        $baseUri = Get-AuraFunnelBaseUri -Profile $Profile
-        $headers = @{
-            'X-BFF-Service-Token' = $env:DEMO_BFF_SERVICE_TOKEN
-            'X-Demo-Client-Subject' = ('0' * 64)
-        }
-        $response = Invoke-WebRequest -Uri "$baseUri/internal/demo/sessions" -Method Post -Headers $headers -ContentType 'application/json' -Body ([byte[]]@()) -TimeoutSec 15 -UseBasicParsing -MaximumRedirection 0
-        if ($response.StatusCode -ne 201 -or $response.Headers['Content-Type'] -notmatch '^application/json') { throw 'invalid' }
-        $document = $response.Content | ConvertFrom-Json
-        if ([string]::IsNullOrWhiteSpace([string]$document.sessionToken)) { throw 'invalid' }
-        $document = $null
-        $response = $null
-    } catch {
-        throw 'AURA_AUTHENTICATED_SMOKE_FAILED'
-    } finally {
-        Restore-AuraProcessEnvironment -Previous $previous
-    }
+$aura = Get-AuraOwnedProcessState -Kind aura -Profile production
+if ($aura.State -ne 'owned') { throw 'AURA_PROCESS_OWNERSHIP_UNCERTAIN' }
+$gateway = Get-AuraGatewayListenerProcessInfo `
+    -OwnershipProcessInfo $aura.ProcessInfo -Profile production
+if ($null -eq $gateway) {
+    throw 'AURA_PRODUCTION_LISTENER_INVALID'
 }
-Write-Output 'AURA_PUBLIC_DEMO_READY'
+if (-not (Test-AuraLocalHealth -Profile production)) {
+    throw 'AURA_LOCAL_HEALTH_FAILED'
+}
+if (-not (Test-AuraFirewallRules)) { throw 'AURA_FIREWALL_INVALID' }
+$funnel = Get-AuraOwnedProcessState -Kind funnel -Profile production
+if ($funnel.State -ne 'owned') {
+    throw 'HUMAN_GATE_PROCESS_OWNERSHIP_AMBIGUOUS'
+}
+if (-not (Test-AuraPublicHealth -Profile production)) {
+    throw 'AURA_PUBLIC_HEALTH_FAILED'
+}
+Write-Output 'AURA_PUBLIC_DEMO_READY profile=production'
