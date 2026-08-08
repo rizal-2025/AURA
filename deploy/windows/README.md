@@ -245,6 +245,12 @@ create, restore, or drop a database and requires the exact
 fixed password-free loopback target only for `verify`; the global demo database
 policy and all plan/apply operations remain unchanged.
 
+After successful restore verification, cleanup remains destructive and separate.
+`Remove-AuraRestoreTestDatabase.ps1` requires the exact
+`DROP_AURA_RESTORE_TEST` confirmation, rechecks the fixed database owner and
+exact schema under read-only enforcement, calls `dropdb` without force, and
+independently verifies absence afterward. It cannot target any other database.
+
 ## Staging port fallback gate
 
 Preview normally calls HTTPS 8443 while production calls default HTTPS 443 on

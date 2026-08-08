@@ -22,6 +22,7 @@ EXPECTED_SCRIPTS = {
     "Protect-AuraBackup.ps1",
     "Restore-DemoDatabase-Test.ps1",
     "Test-AuraRestoredDatabase.ps1",
+    "Remove-AuraRestoreTestDatabase.ps1",
     "Register-AuraTasks.ps1",
     "Unregister-AuraTasks.ps1",
     "Install-AuraFirewallRules.ps1",
