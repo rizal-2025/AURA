@@ -86,7 +86,8 @@ class ProductionOperationsStaticTests(unittest.TestCase):
         self.assertNotIn("Stop-Process -Name", combined_stop)
 
     def test_listener_funnel_and_public_health_are_multi_signal(self):
-        combined = read(COMMON) + read(WINDOWS_ROOT / "Start-TailscaleFunnel.ps1")
+        funnel_start = read(WINDOWS_ROOT / "Start-TailscaleFunnel.ps1")
+        combined = read(COMMON) + funnel_start
         self.assertIn("Test-AuraExactLoopbackListener", combined)
         self.assertIn("Test-AuraExpectedProcessInfo", combined)
         self.assertIn("Get-AuraFunnelBaseUri", combined)
@@ -103,6 +104,8 @@ class ProductionOperationsStaticTests(unittest.TestCase):
         self.assertNotIn("funnel reset", lifecycle)
         self.assertNotIn("serve reset", lifecycle)
         self.assertNotIn("--bg", lifecycle)
+        self.assertIn("-RedirectStandardOutput 'NUL'", funnel_start)
+        self.assertIn("-RedirectStandardError '\\\\.\\NUL'", funnel_start)
 
     def test_status_start_and_readiness_share_exact_firewall_and_database_gates(self):
         common = read(COMMON)
