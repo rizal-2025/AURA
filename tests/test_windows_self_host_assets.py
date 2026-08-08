@@ -19,6 +19,7 @@ EXPECTED_SCRIPTS = {
     "Test-AuraReadiness.ps1",
     "Run-DemoCleanup.ps1",
     "Backup-DemoDatabase.ps1",
+    "Protect-AuraBackup.ps1",
     "Restore-DemoDatabase-Test.ps1",
     "Register-AuraTasks.ps1",
     "Unregister-AuraTasks.ps1",
@@ -73,13 +74,22 @@ class WindowsSelfHostAssetTests(unittest.TestCase):
 
     def test_backup_and_restore_are_allowlisted_and_confirmed(self):
         backup = (WINDOWS_ROOT / "Backup-DemoDatabase.ps1").read_text(encoding="utf-8")
+        protect = (WINDOWS_ROOT / "Protect-AuraBackup.ps1").read_text(
+            encoding="utf-8"
+        )
         restore = (WINDOWS_ROOT / "Restore-DemoDatabase-Test.ps1").read_text(encoding="utf-8")
-        self.assertIn("Assert-AuraPathWithin", backup + restore)
+        self.assertIn("Assert-AuraPathWithin", backup + protect + restore)
+        self.assertIn("PROTECT_AURA_BACKUP", protect)
         self.assertIn("RESTORE_TO_AURA_RESTORE_TEST", restore)
         self.assertIn("DROP_AURA_RESTORE_TEST", restore)
         self.assertNotRegex(backup, re.compile(r"--dbname=\$env:DEMO_DATABASE_URL", re.I))
         self.assertIn('-Filter "${expectedDatabase}_*.dump"', backup)
         self.assertNotIn("-Filter 'aura_demo_*.dump'", backup)
+        self.assertIn("Set-AuraOperatorProtectedAcl", backup + protect)
+        self.assertIn("Assert-AuraOperatorSecretAcl -Path $safeBackup", protect)
+        self.assertIn("Assert-AuraOperatorSecretAcl -Path $safeBackup", restore)
+        self.assertIn("Resolve-AuraPostgreSQLTool -ToolName 'pg_restore.exe'", protect)
+        self.assertNotIn("Read-Host", protect)
 
     def test_postgresql_tools_use_centralized_trusted_discovery(self):
         common = (WINDOWS_ROOT / "AuraWindows.Common.ps1").read_text(

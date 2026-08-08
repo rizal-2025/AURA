@@ -384,6 +384,55 @@ function Assert-AuraOperatorSecretAcl {
     if (-not $currentUserAllowed) { throw 'AURA_SECRET_ACL_OPERATOR_MISSING' }
 }
 
+function Set-AuraOperatorProtectedAcl {
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [switch]$Container
+    )
+
+    $item = Get-Item -LiteralPath $Path -Force
+    if (
+        ($Container -and -not $item.PSIsContainer) `
+        -or (-not $Container -and $item.PSIsContainer)
+    ) {
+        throw 'AURA_PROTECTED_ACL_PATH_TYPE_INVALID'
+    }
+    $acl = if ($Container) {
+        [Security.AccessControl.DirectorySecurity]::new()
+    } else {
+        [Security.AccessControl.FileSecurity]::new()
+    }
+    $acl.SetAccessRuleProtection($true, $false)
+
+    $inheritance = if ($Container) {
+        [Security.AccessControl.InheritanceFlags]::ContainerInherit -bor `
+            [Security.AccessControl.InheritanceFlags]::ObjectInherit
+    } else {
+        [Security.AccessControl.InheritanceFlags]::None
+    }
+    $currentSid = [Security.Principal.WindowsIdentity]::GetCurrent().User
+    foreach ($sid in @(
+        [Security.Principal.SecurityIdentifier]::new('S-1-5-18'),
+        [Security.Principal.SecurityIdentifier]::new('S-1-5-32-544'),
+        $currentSid
+    )) {
+        $rule = [Security.AccessControl.FileSystemAccessRule]::new(
+            $sid,
+            [Security.AccessControl.FileSystemRights]::FullControl,
+            $inheritance,
+            [Security.AccessControl.PropagationFlags]::None,
+            [Security.AccessControl.AccessControlType]::Allow
+        )
+        [void]$acl.AddAccessRule($rule)
+    }
+    if ($Container) {
+        [IO.Directory]::SetAccessControl($item.FullName, $acl)
+    } else {
+        [IO.File]::SetAccessControl($item.FullName, $acl)
+    }
+    Assert-AuraOperatorSecretAcl -Path $item.FullName
+}
+
 function Import-AuraConfiguration {
     param([Parameter(Mandatory)][string]$Profile)
     $path = Get-AuraSecretPath -Profile $Profile

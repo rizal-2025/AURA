@@ -6,6 +6,7 @@ param(
 
 . (Join-Path $PSScriptRoot 'AuraWindows.Common.ps1')
 Initialize-AuraDataDirectories
+Set-AuraOperatorProtectedAcl -Path $script:AuraBackupRoot -Container
 $previous = Import-AuraConfiguration -Profile $Profile
 $tempPath = $null
 try {
@@ -29,7 +30,9 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'AURA_BACKUP_COMMAND_FAILED' }
     $backup = Get-Item -LiteralPath $tempPath
     if ($backup.Length -le 0) { throw 'AURA_BACKUP_EMPTY' }
+    Set-AuraOperatorProtectedAcl -Path $tempPath
     Move-Item -LiteralPath $tempPath -Destination $finalPath
+    Assert-AuraOperatorSecretAcl -Path $finalPath
     $retention = [int]$env:AURA_BACKUP_RETENTION_DAYS
     Remove-AuraExpiredFiles -Root $script:AuraBackupRoot `
         -Filter "${expectedDatabase}_*.dump" `
