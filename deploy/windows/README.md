@@ -225,13 +225,16 @@ a PID ownership error.
 ## Backup and recovery
 
 `Backup-DemoDatabase.ps1` creates bounded local backups under
-`C:\ProgramData\AURA\backups`. `Restore-DemoDatabase-Test.ps1` accepts an exact
-source profile and matching backup filename, securely prompts for the migration
-owner password, and restores only to the allowlisted `aura_restore_test`
-database. It requires exact ten-table schema verification and explicit
-confirmations. Never test restore against staging or production. Dropping the
-restore-test database is optional and requires the separate exact
-`DROP_AURA_RESTORE_TEST` confirmation.
+`C:\ProgramData\AURA\backups` with inheritance disabled and access limited to
+the current operator, Administrators, and SYSTEM. `Protect-AuraBackup.ps1`
+repairs and validates an exact pre-existing backup only after its explicit
+`PROTECT_AURA_BACKUP` confirmation. `Restore-DemoDatabase-Test.ps1` rejects
+backups without that protected ACL, accepts an exact source profile and matching
+backup filename, securely prompts for the migration owner password, and restores
+only to the allowlisted `aura_restore_test` database. It requires exact ten-table
+schema verification and explicit confirmations. Never test restore against
+staging or production. Dropping the restore-test database is optional and
+requires the separate exact `DROP_AURA_RESTORE_TEST` confirmation.
 
 ## Staging port fallback gate
 

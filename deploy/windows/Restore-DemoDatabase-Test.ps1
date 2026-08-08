@@ -43,6 +43,7 @@ if (
 if ((Get-Item -LiteralPath $safeBackup).Length -le 0) {
     throw 'AURA_RESTORE_BACKUP_EMPTY'
 }
+Assert-AuraOperatorSecretAcl -Path $safeBackup
 if ($DropAfterVerification -and $DropConfirmation -ne 'DROP_AURA_RESTORE_TEST') {
     throw 'AURA_RESTORE_DROP_CONFIRMATION_REQUIRED'
 }
