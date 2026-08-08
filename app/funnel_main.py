@@ -33,6 +33,9 @@ from app.core.transaction_errors import (
 from app.middleware.public_demo_concurrency import (
     PublicDemoConcurrencyMiddleware,
 )
+from app.middleware.funnel_ingress_observability import (
+    FunnelIngressObservabilityMiddleware,
+)
 from app.middleware.request_body_limit import RequestBodyLimitMiddleware
 from app.services.demo_chat_errors import (
     DemoChatProviderError,
@@ -64,10 +67,12 @@ def create_funnel_app(application_settings=None) -> FastAPI:
     )
     application.router.redirect_slashes = False
 
-    # Starlette applies the last-added middleware first: size/framing is bounded
-    # before a request can occupy one of the finite application work slots.
+    # Starlette applies the last-added middleware first. The fixed-field,
+    # bounded observer sits at the Funnel application boundary; size/framing
+    # remains bounded before a request occupies a finite application work slot.
     application.add_middleware(PublicDemoConcurrencyMiddleware)
     application.add_middleware(RequestBodyLimitMiddleware)
+    application.add_middleware(FunnelIngressObservabilityMiddleware)
     application.add_exception_handler(
         RequestValidationError, request_validation_exception_handler
     )
