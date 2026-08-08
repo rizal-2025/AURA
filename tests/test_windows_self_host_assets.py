@@ -81,6 +81,43 @@ class WindowsSelfHostAssetTests(unittest.TestCase):
         self.assertIn('-Filter "${expectedDatabase}_*.dump"', backup)
         self.assertNotIn("-Filter 'aura_demo_*.dump'", backup)
 
+    def test_postgresql_tools_use_centralized_trusted_discovery(self):
+        common = (WINDOWS_ROOT / "AuraWindows.Common.ps1").read_text(
+            encoding="utf-8"
+        )
+        backup = (WINDOWS_ROOT / "Backup-DemoDatabase.ps1").read_text(
+            encoding="utf-8"
+        )
+        restore = (WINDOWS_ROOT / "Restore-DemoDatabase-Test.ps1").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("function Resolve-AuraPostgreSQLTool", common)
+        self.assertIn("Get-Command $ToolName -CommandType Application -All", common)
+        self.assertIn("[Environment+SpecialFolder]::ProgramFiles", common)
+        self.assertIn("Join-Path $programFiles 'PostgreSQL'", common)
+        self.assertIn("'pgAdmin 4\\runtime'", common)
+        self.assertIn("[IO.FileAttributes]::ReparsePoint", common)
+        self.assertIn("AURA_POSTGRESQL_TOOL_NOT_FOUND", common)
+        for tool_name in (
+            "psql.exe",
+            "pg_dump.exe",
+            "pg_restore.exe",
+            "createdb.exe",
+            "dropdb.exe",
+        ):
+            self.assertIn(tool_name, common)
+        self.assertIn(
+            "Resolve-AuraPostgreSQLTool -ToolName 'pg_dump.exe'", backup
+        )
+        for tool_name in ("psql.exe", "createdb.exe", "pg_restore.exe", "dropdb.exe"):
+            self.assertIn(
+                f"Resolve-AuraPostgreSQLTool -ToolName '{tool_name}'", restore
+            )
+        self.assertNotRegex(
+            backup + restore,
+            re.compile(r"Get-Command\s+(?:psql|pg_dump|pg_restore|createdb|dropdb)", re.I),
+        )
+
     def test_task_and_firewall_contracts_are_fixed(self):
         tasks = (WINDOWS_ROOT / "Register-AuraTasks.ps1").read_text(encoding="utf-8")
         firewall = (WINDOWS_ROOT / "Install-AuraFirewallRules.ps1").read_text(encoding="utf-8")

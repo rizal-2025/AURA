@@ -50,10 +50,10 @@ if ($DropAfterVerification -and $DropConfirmation -ne 'DROP_AURA_RESTORE_TEST') 
 Assert-AuraOperatorSecretAcl -Path $script:AuraSecretRoot
 $targetDatabase = 'aura_restore_test'
 $migrationUser = 'aura_migration_owner'
-$psql = (Get-Command psql.exe -ErrorAction Stop).Source
-$createdb = (Get-Command createdb.exe -ErrorAction Stop).Source
-$pgRestore = (Get-Command pg_restore.exe -ErrorAction Stop).Source
-$dropdb = (Get-Command dropdb.exe -ErrorAction Stop).Source
+$psql = Resolve-AuraPostgreSQLTool -ToolName 'psql.exe'
+$createdb = Resolve-AuraPostgreSQLTool -ToolName 'createdb.exe'
+$pgRestore = Resolve-AuraPostgreSQLTool -ToolName 'pg_restore.exe'
+$dropdb = Resolve-AuraPostgreSQLTool -ToolName 'dropdb.exe'
 
 function Set-AuraRestoreCredentialAcl {
     param([Parameter(Mandatory)][string]$Path)

@@ -164,6 +164,164 @@ function Assert-AuraPathWithin {
     return $resolvedPath
 }
 
+function ConvertTo-AuraPostgreSQLVersion {
+    param([Parameter(Mandatory)][string]$Name)
+
+    if ($Name -notmatch '^[0-9]+(?:\.[0-9]+){0,3}$') { return $null }
+    $components = @($Name.Split('.'))
+    while ($components.Count -lt 2) { $components += '0' }
+    try {
+        return [Version]::Parse(($components -join '.'))
+    } catch {
+        return $null
+    }
+}
+
+function Get-AuraPostgreSQLToolCandidate {
+    param(
+        [Parameter(Mandatory)]
+        [ValidateSet('psql.exe', 'pg_dump.exe', 'pg_restore.exe', 'createdb.exe', 'dropdb.exe')]
+        [string]$ToolName,
+        [Parameter(Mandatory)][string]$CandidatePath,
+        [Parameter(Mandatory)][string]$InstallRoot
+    )
+
+    try {
+        $root = [IO.Path]::GetFullPath($InstallRoot).TrimEnd('\')
+        $path = [IO.Path]::GetFullPath($CandidatePath)
+    } catch {
+        return $null
+    }
+    if (
+        [string]::IsNullOrWhiteSpace($root) `
+        -or -not $path.StartsWith($root + '\', [StringComparison]::OrdinalIgnoreCase) `
+        -or -not [IO.Path]::GetFileName($path).Equals($ToolName, [StringComparison]::OrdinalIgnoreCase) `
+        -or -not (Test-Path -LiteralPath $path -PathType Leaf)
+    ) {
+        return $null
+    }
+
+    $relative = $path.Substring($root.Length + 1)
+    $parts = @($relative.Split('\'))
+    $layout = $null
+    $directories = @()
+    if (
+        $parts.Count -eq 3 `
+        -and $parts[1].Equals('bin', [StringComparison]::OrdinalIgnoreCase) `
+        -and $parts[2].Equals($ToolName, [StringComparison]::OrdinalIgnoreCase)
+    ) {
+        $layout = 'bin'
+        $directories = @(
+            (Join-Path $root $parts[0]),
+            (Join-Path (Join-Path $root $parts[0]) 'bin')
+        )
+    } elseif (
+        $parts.Count -eq 4 `
+        -and $parts[1].Equals('pgAdmin 4', [StringComparison]::OrdinalIgnoreCase) `
+        -and $parts[2].Equals('runtime', [StringComparison]::OrdinalIgnoreCase) `
+        -and $parts[3].Equals($ToolName, [StringComparison]::OrdinalIgnoreCase)
+    ) {
+        $layout = 'pgadmin-runtime'
+        $versionRoot = Join-Path $root $parts[0]
+        $pgAdminRoot = Join-Path $versionRoot 'pgAdmin 4'
+        $directories = @(
+            $versionRoot,
+            $pgAdminRoot,
+            (Join-Path $pgAdminRoot 'runtime')
+        )
+    } else {
+        return $null
+    }
+
+    $version = ConvertTo-AuraPostgreSQLVersion -Name $parts[0]
+    if ($null -eq $version) { return $null }
+    foreach ($itemPath in @($root) + $directories + @($path)) {
+        try {
+            $item = Get-Item -LiteralPath $itemPath -Force
+        } catch {
+            return $null
+        }
+        if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+            return $null
+        }
+    }
+    return [PSCustomObject]@{
+        Path = $path
+        Layout = $layout
+        Version = $version
+    }
+}
+
+function Select-AuraPostgreSQLTool {
+    param(
+        [Parameter(Mandatory)]
+        [ValidateSet('psql.exe', 'pg_dump.exe', 'pg_restore.exe', 'createdb.exe', 'dropdb.exe')]
+        [string]$ToolName,
+        [Parameter(Mandatory)][string]$InstallRoot,
+        [string[]]$PathCandidates = @()
+    )
+
+    $pathRuntime = $null
+    foreach ($candidatePath in $PathCandidates) {
+        $candidate = Get-AuraPostgreSQLToolCandidate `
+            -ToolName $ToolName -CandidatePath $candidatePath `
+            -InstallRoot $InstallRoot
+        if ($null -eq $candidate) { continue }
+        if ($candidate.Layout -eq 'bin') { return $candidate.Path }
+        if ($null -eq $pathRuntime) { $pathRuntime = $candidate }
+    }
+
+    $installed = @()
+    if (Test-Path -LiteralPath $InstallRoot -PathType Container) {
+        foreach ($versionDirectory in Get-ChildItem -LiteralPath $InstallRoot -Directory) {
+            $version = ConvertTo-AuraPostgreSQLVersion -Name $versionDirectory.Name
+            if ($null -eq $version) { continue }
+            foreach ($relativePath in @(
+                (Join-Path 'bin' $ToolName),
+                (Join-Path 'pgAdmin 4\runtime' $ToolName)
+            )) {
+                $candidate = Get-AuraPostgreSQLToolCandidate `
+                    -ToolName $ToolName `
+                    -CandidatePath (Join-Path $versionDirectory.FullName $relativePath) `
+                    -InstallRoot $InstallRoot
+                if ($null -ne $candidate) { $installed += $candidate }
+            }
+        }
+    }
+    $official = @($installed | Where-Object Layout -eq 'bin' | Sort-Object Version -Descending)
+    if ($official.Count -gt 0) { return $official[0].Path }
+    if ($null -ne $pathRuntime) { return $pathRuntime.Path }
+    $runtime = @(
+        $installed | Where-Object Layout -eq 'pgadmin-runtime' |
+            Sort-Object Version -Descending
+    )
+    if ($runtime.Count -gt 0) { return $runtime[0].Path }
+    throw 'AURA_POSTGRESQL_TOOL_NOT_FOUND'
+}
+
+function Resolve-AuraPostgreSQLTool {
+    param(
+        [Parameter(Mandatory)]
+        [ValidateSet('psql.exe', 'pg_dump.exe', 'pg_restore.exe', 'createdb.exe', 'dropdb.exe')]
+        [string]$ToolName
+    )
+
+    $programFiles = [Environment]::GetFolderPath(
+        [Environment+SpecialFolder]::ProgramFiles
+    )
+    if ([string]::IsNullOrWhiteSpace($programFiles)) {
+        throw 'AURA_POSTGRESQL_INSTALL_ROOT_NOT_FOUND'
+    }
+    $installRoot = Join-Path $programFiles 'PostgreSQL'
+    $pathCandidates = @(
+        Get-Command $ToolName -CommandType Application -All `
+            -ErrorAction SilentlyContinue |
+            ForEach-Object { $_.Source }
+    )
+    return Select-AuraPostgreSQLTool -ToolName $ToolName `
+        -InstallRoot $installRoot -PathCandidates $pathCandidates
+}
+
 function Initialize-AuraDataDirectories {
     foreach ($path in @($script:AuraLogRoot, $script:AuraBackupRoot, $script:AuraRunRoot)) {
         [void](New-Item -ItemType Directory -Path $path -Force)
