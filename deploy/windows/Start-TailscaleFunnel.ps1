@@ -48,7 +48,8 @@ $ownershipPath = Get-AuraOwnershipPath -Kind funnel -Profile $Profile
 # Deliberately foreground: no persistent public exposure after reboot.
 $process = Start-Process -FilePath $tailscale `
     -ArgumentList @('funnel', "--https=$publicPort", $target) `
-    -WindowStyle Hidden -PassThru
+    -WindowStyle Hidden -RedirectStandardOutput 'NUL' `
+    -RedirectStandardError '\\.\NUL' -PassThru
 $processInfo = $null
 for ($attempt = 0; $attempt -lt 20; $attempt++) {
     $processInfo = Get-CimInstance Win32_Process `
