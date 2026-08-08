@@ -3,11 +3,8 @@ param(
     [Parameter(Mandatory)][ValidateSet('staging', 'production')]
     [string]$SourceProfile,
     [Parameter(Mandatory)][string]$BackupPath,
-    [Parameter(Mandatory)][ValidateSet('RESTORE_TO_AURA_RESTORE_TEST')]
-    [string]$Confirmation,
-    [switch]$DropAfterVerification,
-    [ValidateSet('', 'DROP_AURA_RESTORE_TEST')]
-    [string]$DropConfirmation = ''
+    [Parameter(Mandatory)][ValidateSet('VERIFY_EXISTING_AURA_RESTORE_TEST')]
+    [string]$Confirmation
 )
 
 Set-StrictMode -Version Latest
@@ -21,9 +18,9 @@ if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administra
 }
 
 $repositoryRoot = Get-AuraRepositoryRoot
-$currentRoot = [System.IO.Path]::GetFullPath((Get-Location).Path).TrimEnd('\')
+$currentRoot = [IO.Path]::GetFullPath((Get-Location).Path).TrimEnd('\')
 if ($currentRoot -ne $repositoryRoot.TrimEnd('\')) {
-    throw 'AURA_RESTORE_REPOSITORY_ROOT_REQUIRED'
+    throw 'AURA_RESTORE_EXISTING_REPOSITORY_ROOT_REQUIRED'
 }
 
 $safeBackup = Assert-AuraPathWithin -Path $BackupPath -Root $script:AuraBackupRoot
@@ -36,39 +33,22 @@ $expectedNamePattern = '^' + [Regex]::Escape($expectedSourceDatabase) + `
     '_[0-9]{8}T[0-9]{6}Z\.dump$'
 if (
     -not (Test-Path -LiteralPath $safeBackup -PathType Leaf) `
-    -or [System.IO.Path]::GetFileName($safeBackup) -notmatch $expectedNamePattern
+    -or [IO.Path]::GetFileName($safeBackup) -notmatch $expectedNamePattern `
+    -or (Get-Item -LiteralPath $safeBackup).Length -le 0
 ) {
-    throw 'AURA_RESTORE_BACKUP_INVALID'
-}
-if ((Get-Item -LiteralPath $safeBackup).Length -le 0) {
-    throw 'AURA_RESTORE_BACKUP_EMPTY'
+    throw 'AURA_RESTORE_EXISTING_BACKUP_INVALID'
 }
 Assert-AuraOperatorSecretAcl -Path $safeBackup
-if ($DropAfterVerification -and $DropConfirmation -ne 'DROP_AURA_RESTORE_TEST') {
-    throw 'AURA_RESTORE_DROP_CONFIRMATION_REQUIRED'
-}
-
 Assert-AuraOperatorSecretAcl -Path $script:AuraSecretRoot
+
 $targetDatabase = 'aura_restore_test'
 $migrationUser = 'aura_migration_owner'
 $psql = Resolve-AuraPostgreSQLTool -ToolName 'psql.exe'
-$createdb = Resolve-AuraPostgreSQLTool -ToolName 'createdb.exe'
-$pgRestore = Resolve-AuraPostgreSQLTool -ToolName 'pg_restore.exe'
-$dropdb = Resolve-AuraPostgreSQLTool -ToolName 'dropdb.exe'
 
-function Set-AuraRestoreCredentialAcl {
-    param([Parameter(Mandatory)][string]$Path)
-    $icacls = (Get-Command icacls.exe -ErrorAction Stop).Source
-    & $icacls $Path '/inheritance:r' '/grant:r' 'SYSTEM:F' `
-        'Administrators:F' "$($identity.Name):F" | Out-Null
-    if ($LASTEXITCODE -ne 0) { throw 'AURA_RESTORE_PGPASSFILE_ACL_FAILED' }
-    Assert-AuraOperatorSecretAcl -Path $Path
-}
-
-function Invoke-AuraRestoreSchemaVerification {
+function Invoke-AuraExistingRestoreSchemaVerification {
     param([Parameter(Mandatory)][string]$CredentialPath)
 
-    $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
+    $startInfo = [Diagnostics.ProcessStartInfo]::new()
     $startInfo.FileName = Get-AuraPythonPath
     $startInfo.Arguments = '-B -m app.jobs.demo_schema --operation verify'
     $startInfo.WorkingDirectory = $repositoryRoot
@@ -97,8 +77,11 @@ function Invoke-AuraRestoreSchemaVerification {
     )
     $startInfo.EnvironmentVariables['SQL_ECHO'] = 'false'
     $startInfo.EnvironmentVariables['PGPASSFILE'] = $CredentialPath
+    $startInfo.EnvironmentVariables['PGOPTIONS'] = (
+        '-c default_transaction_read_only=on'
+    )
 
-    $process = [System.Diagnostics.Process]::Start($startInfo)
+    $process = [Diagnostics.Process]::Start($startInfo)
     try {
         $standardOutput = $process.StandardOutput.ReadToEnd()
         $standardError = $process.StandardError.ReadToEnd()
@@ -116,12 +99,14 @@ function Invoke-AuraRestoreSchemaVerification {
     }
 }
 
-$tempName = 'restore-migration.pgpass.' + [Guid]::NewGuid().ToString('N') + '.tmp'
+$tempName = 'restore-existing-verification.pgpass.' + `
+    [Guid]::NewGuid().ToString('N') + '.tmp'
 $tempPath = Assert-AuraPathWithin `
     -Path (Join-Path $script:AuraSecretRoot $tempName) `
     -Root $script:AuraSecretRoot
 $previousPgPass = [Environment]::GetEnvironmentVariable('PGPASSFILE', 'Process')
-$failureCode = 'AURA_RESTORE_CREDENTIAL_STAGE_FAILED'
+$previousPgOptions = [Environment]::GetEnvironmentVariable('PGOPTIONS', 'Process')
+$failureCode = 'AURA_RESTORE_EXISTING_CREDENTIAL_STAGE_FAILED'
 
 try {
     $securePassword = Read-Host `
@@ -129,26 +114,24 @@ try {
     $bstr = [IntPtr]::Zero
     $plainPassword = $null
     $escapedPassword = $null
-    $postgresEntry = $null
     $restoreEntry = $null
     try {
         $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($securePassword)
         $plainPassword = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr)
         if ([string]::IsNullOrEmpty($plainPassword) -or $plainPassword -match '[\x00\r\n]') {
-            throw 'AURA_RESTORE_MIGRATION_PASSWORD_INVALID'
+            throw 'AURA_RESTORE_EXISTING_MIGRATION_PASSWORD_INVALID'
         }
         $escapedPassword = $plainPassword.Replace('\', '\\').Replace(':', '\:')
-        $postgresEntry = "127.0.0.1:5432:postgres:${migrationUser}:$escapedPassword"
-        $restoreEntry = "127.0.0.1:5432:${targetDatabase}:${migrationUser}:$escapedPassword"
+        $restoreEntry = (
+            "127.0.0.1:5432:${targetDatabase}:${migrationUser}:$escapedPassword"
+        )
         [IO.File]::WriteAllText(
             $tempPath,
-            $postgresEntry + [Environment]::NewLine + `
-                $restoreEntry + [Environment]::NewLine,
+            $restoreEntry + [Environment]::NewLine,
             [Text.UTF8Encoding]::new($false)
         )
     } finally {
         $restoreEntry = $null
-        $postgresEntry = $null
         $escapedPassword = $null
         $plainPassword = $null
         $securePassword.Dispose()
@@ -156,72 +139,44 @@ try {
             [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)
         }
     }
-    Set-AuraRestoreCredentialAcl -Path $tempPath
+    Set-AuraOperatorProtectedAcl -Path $tempPath
     $env:PGPASSFILE = $tempPath
+    $env:PGOPTIONS = '-c default_transaction_read_only=on'
 
-    $failureCode = 'AURA_RESTORE_ARCHIVE_VALIDATION_STAGE_FAILED'
-    & $pgRestore --list $safeBackup 1>$null 2>$null
-    if ($LASTEXITCODE -ne 0) { throw 'AURA_RESTORE_ARCHIVE_INVALID' }
+    $failureCode = 'AURA_RESTORE_EXISTING_SCHEMA_VERIFICATION_STAGE_FAILED'
+    $verification = Invoke-AuraExistingRestoreSchemaVerification `
+        -CredentialPath $tempPath
 
-    $failureCode = 'AURA_RESTORE_TARGET_PREFLIGHT_STAGE_FAILED'
-    $databaseExistsSql = (
-        "SELECT 1 FROM pg_database WHERE datname = '$targetDatabase'"
-    )
-    $exists = & $psql --no-psqlrc --tuples-only --no-align `
-        --host=127.0.0.1 --port=5432 "--username=$migrationUser" `
-        --dbname=postgres "--command=$databaseExistsSql" 2>$null
-    if ($LASTEXITCODE -ne 0 -or ($exists -join '').Trim() -ne '') {
-        throw 'AURA_RESTORE_TARGET_NOT_EMPTY'
-    }
-
-    $failureCode = 'AURA_RESTORE_DATABASE_CREATE_STAGE_FAILED'
-    & $createdb --host=127.0.0.1 --port=5432 `
-        "--username=$migrationUser" "--owner=$migrationUser" `
-        $targetDatabase 1>$null 2>$null
-    if ($LASTEXITCODE -ne 0) { throw 'AURA_RESTORE_CREATE_FAILED' }
-
-    $failureCode = 'AURA_RESTORE_PG_RESTORE_STAGE_FAILED'
-    & $pgRestore --exit-on-error --no-owner --no-privileges `
-        --host=127.0.0.1 --port=5432 "--username=$migrationUser" `
-        "--dbname=$targetDatabase" $safeBackup 1>$null 2>$null
-    if ($LASTEXITCODE -ne 0) { throw 'AURA_RESTORE_COMMAND_FAILED' }
-
-    $failureCode = 'AURA_RESTORE_SCHEMA_VERIFICATION_STAGE_FAILED'
-    $verification = Invoke-AuraRestoreSchemaVerification -CredentialPath $tempPath
-    if (
-        $verification.status -ne 'verified' `
-        -or $verification.classification -ne 'converged' `
-        -or [int]$verification.expectedTableCount -ne 10 `
-        -or [int]$verification.actualTableCount -ne 10
-    ) {
-        throw 'AURA_RESTORE_SCHEMA_INVALID'
-    }
-
-    $failureCode = 'AURA_RESTORE_AGGREGATE_VERIFICATION_STAGE_FAILED'
+    $failureCode = 'AURA_RESTORE_EXISTING_AGGREGATE_VERIFICATION_STAGE_FAILED'
     $rowEstimateSql = (
         'SELECT COALESCE(sum(n_live_tup), 0)::bigint FROM pg_stat_user_tables'
     )
-    $rowEstimate = & $psql --no-psqlrc --tuples-only --no-align `
-        --host=127.0.0.1 --port=5432 "--username=$migrationUser" `
-        "--dbname=$targetDatabase" "--command=$rowEstimateSql" 2>$null
+    $rowEstimate = & $psql --no-psqlrc --set=ON_ERROR_STOP=1 `
+        --tuples-only --no-align --host=127.0.0.1 --port=5432 `
+        "--username=$migrationUser" "--dbname=$targetDatabase" `
+        "--command=$rowEstimateSql" 2>$null
     if (
         $LASTEXITCODE -ne 0 `
         -or (($rowEstimate -join '').Trim()) -notmatch '^[0-9]+$'
     ) {
-        throw 'AURA_RESTORE_AGGREGATE_INVALID'
+        throw 'AURA_RESTORE_EXISTING_AGGREGATE_INVALID'
     }
-    Write-Output (
-        'AURA_RESTORE_OK database={0} tableCount=10 aggregateRowEstimate={1}' -f `
-            $targetDatabase, (($rowEstimate -join '').Trim())
-    )
 
-    if ($DropAfterVerification) {
-        $failureCode = 'AURA_RESTORE_DROP_STAGE_FAILED'
-        & $dropdb --host=127.0.0.1 --port=5432 `
-            "--username=$migrationUser" $targetDatabase 1>$null 2>$null
-        if ($LASTEXITCODE -ne 0) { throw 'AURA_RESTORE_DROP_FAILED' }
-        Write-Output 'AURA_RESTORE_TEST_DATABASE_DROPPED'
-    }
+    Write-Output (
+        (
+            'AURA_RESTORE_EXISTING_VERIFIED database={0} tables={1}/{2} ' +
+            'columns={3}/{4} primaryKeys={5} structures={6} ' +
+            'aggregateRowEstimate={7} readOnly=true'
+        ) -f `
+            $targetDatabase,
+            [int]$verification.actualTableCount,
+            [int]$verification.expectedTableCount,
+            [int]$verification.matchingColumnCount,
+            [int]$verification.expectedColumnCount,
+            [int]$verification.matchingPrimaryKeyCount,
+            [int]$verification.matchingTableStructureCount,
+            (($rowEstimate -join '').Trim())
+    )
 } catch {
     throw $failureCode
 } finally {
@@ -229,6 +184,9 @@ try {
     $rowEstimate = $null
     [Environment]::SetEnvironmentVariable(
         'PGPASSFILE', $previousPgPass, 'Process'
+    )
+    [Environment]::SetEnvironmentVariable(
+        'PGOPTIONS', $previousPgOptions, 'Process'
     )
     if (Test-Path -LiteralPath $tempPath -PathType Leaf) {
         Remove-Item -LiteralPath $tempPath -Force -ErrorAction SilentlyContinue
