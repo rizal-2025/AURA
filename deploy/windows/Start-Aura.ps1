@@ -66,17 +66,32 @@ try {
         $retention = [int]$env:AURA_LOG_RETENTION_DAYS
     }
     $python = Get-AuraPythonPath
-    $timestamp = [DateTime]::UtcNow.ToString('yyyyMMddTHHmmssZ')
-    $stdout = Join-Path $script:AuraLogRoot "aura-$Profile-$timestamp.log"
-    $stderr = Join-Path $script:AuraLogRoot "aura-$Profile-$timestamp.err.log"
-    $process = Start-Process -FilePath $python `
-        -ArgumentList @('-m', 'app.self_host', '--profile', $Profile) `
-        -WorkingDirectory (Get-AuraRepositoryRoot) -WindowStyle Hidden `
-        -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru
+    $environmentVariables = @(
+        [Environment]::GetEnvironmentVariables('Process').GetEnumerator() |
+            ForEach-Object { '{0}={1}' -f $_.Key, $_.Value }
+    )
+    $startup = New-CimInstance -ClassName Win32_ProcessStartup `
+        -Namespace root\cimv2 -Property @{
+            ShowWindow = [uint16]0
+            EnvironmentVariables = [string[]]$environmentVariables
+        } -ClientOnly
+    $commandLine = '"{0}" -m app.self_host --profile {1}' -f `
+        $python, $Profile
+    $created = Invoke-CimMethod -ClassName Win32_Process -MethodName Create `
+        -Arguments @{
+            CommandLine = $commandLine
+            CurrentDirectory = (Get-AuraRepositoryRoot)
+            ProcessStartupInformation = $startup
+        }
+    if ([int]$created.ReturnValue -ne 0 -or [int]$created.ProcessId -le 0) {
+        throw 'AURA_PROCESS_CREATE_FAILED'
+    }
+    $processId = [int]$created.ProcessId
+    $process = [Diagnostics.Process]::GetProcessById($processId)
     $processInfo = $null
     for ($attempt = 0; $attempt -lt 20; $attempt++) {
         $processInfo = Get-CimInstance Win32_Process `
-            -Filter "ProcessId = $($process.Id)" -ErrorAction SilentlyContinue
+            -Filter "ProcessId = $processId" -ErrorAction SilentlyContinue
         if ($null -ne $processInfo) { break }
         Start-Sleep -Milliseconds 100
     }
@@ -89,7 +104,7 @@ try {
     $ownershipAmbiguous = $false
     if ($null -ne $process) {
         $startedInfo = Get-CimInstance Win32_Process `
-            -Filter "ProcessId = $($process.Id)" -ErrorAction SilentlyContinue
+            -Filter "ProcessId = $processId" -ErrorAction SilentlyContinue
         if (
             $null -ne $startedInfo `
             -and (Test-AuraExpectedProcessInfo -ProcessInfo $startedInfo `
@@ -145,7 +160,7 @@ if (-not $ready) {
         }
     }
     $current = Get-CimInstance Win32_Process `
-        -Filter "ProcessId = $($process.Id)" -ErrorAction SilentlyContinue
+        -Filter "ProcessId = $processId" -ErrorAction SilentlyContinue
     if (
         $null -ne $current `
         -and (Test-AuraExpectedProcessInfo -ProcessInfo $current `
@@ -174,7 +189,7 @@ Remove-AuraExpiredFiles -Root $script:AuraLogRoot -Filter 'aura-*.log' `
     -RetentionDays $retention
 Write-Output 'AURA_START_OK'
 if ($Foreground) {
-    Wait-Process -Id $process.Id
+    Wait-Process -Id $processId
     $process.Refresh()
     Remove-Item -LiteralPath $ownershipPath -Force -ErrorAction SilentlyContinue
     if ($process.ExitCode -ne 0) { throw 'AURA_PROCESS_FAILED' }

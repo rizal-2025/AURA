@@ -35,6 +35,15 @@ class ProductionOperationsStaticTests(unittest.TestCase):
         self.assertIn("State -in @('stale', 'absent')", read(WINDOWS_ROOT / "Stop-Aura.ps1"))
         self.assertIn("State -in @('stale', 'absent')", read(WINDOWS_ROOT / "Stop-TailscaleFunnel.ps1"))
 
+    def test_aura_gateway_launch_is_detached_with_in_memory_environment(self):
+        aura_start = read(WINDOWS_ROOT / "Start-Aura.ps1")
+        self.assertIn("Invoke-CimMethod -ClassName Win32_Process", aura_start)
+        self.assertIn("New-CimInstance -ClassName Win32_ProcessStartup", aura_start)
+        self.assertIn("GetEnvironmentVariables('Process')", aura_start)
+        self.assertIn("EnvironmentVariables = [string[]]$environmentVariables", aura_start)
+        self.assertIn("CurrentDirectory = (Get-AuraRepositoryRoot)", aura_start)
+        self.assertNotIn("Start-Process -FilePath $python", aura_start)
+
     def test_start_order_and_stop_order_are_fixed(self):
         start = read(START)
         ordered = (
