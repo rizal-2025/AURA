@@ -241,7 +241,9 @@ If an interrupted or generically reported restore already created
 uses a transaction-read-only session, metadata-only exact schema inspection,
 and an aggregate table estimate to validate that existing database. It cannot
 create, restore, or drop a database and requires the exact
-`VERIFY_EXISTING_AURA_RESTORE_TEST` confirmation.
+`VERIFY_EXISTING_AURA_RESTORE_TEST` confirmation. The schema job permits this
+fixed password-free loopback target only for `verify`; the global demo database
+policy and all plan/apply operations remain unchanged.
 
 ## Staging port fallback gate
 

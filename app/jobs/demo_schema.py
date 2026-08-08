@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 from dataclasses import dataclass
 import json
+import os
 
 from sqlalchemy import (
     CheckConstraint,
@@ -13,6 +14,8 @@ from sqlalchemy import (
     create_engine,
     inspect,
 )
+from sqlalchemy.engine import make_url
+from sqlalchemy.exc import ArgumentError
 
 from app.core.config import get_database_settings, get_environment_settings
 from app.db.base import Base
@@ -26,6 +29,36 @@ import app.db.models.demo_persistence  # noqa: F401
 
 
 SAFE_FAILURE_CODE = "DEMO_SCHEMA_OPERATION_FAILED"
+RESTORE_TEST_DATABASE = "aura_restore_test"
+RESTORE_TEST_USER = "aura_migration_owner"
+
+
+def is_exact_restore_verification_url(value: object) -> bool:
+    """Allow only the fixed password-free local restore-verification target."""
+    if not isinstance(value, str) or not value or value != value.strip():
+        return False
+    try:
+        parsed = make_url(value)
+        port = parsed.port
+    except (ArgumentError, TypeError, ValueError):
+        return False
+    return (
+        parsed.drivername == "postgresql+psycopg"
+        and parsed.username == RESTORE_TEST_USER
+        and parsed.password is None
+        and parsed.host == "127.0.0.1"
+        and port == 5432
+        and parsed.database == RESTORE_TEST_DATABASE
+        and not parsed.query
+    )
+
+
+def resolve_schema_database_url(*, operation: str) -> str:
+    """Keep the global demo target policy except for exact restore verification."""
+    candidate = os.environ.get("DEMO_DATABASE_URL")
+    if operation == "verify" and is_exact_restore_verification_url(candidate):
+        return candidate
+    return get_database_settings().DATABASE_URL
 
 
 @dataclass(frozen=True)
@@ -211,9 +244,9 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if get_environment_settings().APP_ENV != "demo":
             raise RuntimeError("demo-only")
-        settings = get_database_settings()
+        database_url = resolve_schema_database_url(operation=args.operation)
         engine = create_engine(
-            settings.DATABASE_URL,
+            database_url,
             echo=False,
             pool_size=1,
             max_overflow=0,
