@@ -19,7 +19,7 @@ try {
     $pgPassPath = Assert-AuraPathWithin -Path $env:PGPASSFILE -Root $script:AuraSecretRoot
     if (-not (Test-Path -LiteralPath $pgPassPath -PathType Leaf)) { throw 'AURA_PGPASSFILE_MISSING' }
     Assert-AuraSecretAcl -Path $pgPassPath
-    $pgDump = (Get-Command pg_dump.exe -ErrorAction Stop).Source
+    $pgDump = Resolve-AuraPostgreSQLTool -ToolName 'pg_dump.exe'
     $timestamp = [DateTime]::UtcNow.ToString('yyyyMMddTHHmmssZ')
     $finalPath = Join-Path $script:AuraBackupRoot "${expectedDatabase}_$timestamp.dump"
     $tempPath = "$finalPath.partial"
