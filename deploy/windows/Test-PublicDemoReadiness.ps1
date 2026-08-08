@@ -20,7 +20,7 @@ try {
     if (-not (Test-AuraPostgreSQLServiceRunning)) {
         throw 'AURA_POSTGRESQL_SERVICE_NOT_RUNNING'
     }
-    if (-not (Test-AuraExactLoopbackListener -Port 5432)) {
+    if (-not (Test-AuraPostgreSQLLoopbackListener)) {
         throw 'AURA_POSTGRESQL_LISTENER_INVALID'
     }
     if (-not (Test-AuraProductionDatabaseReadiness)) {

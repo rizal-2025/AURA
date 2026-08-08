@@ -704,6 +704,21 @@ function Test-AuraPostgreSQLServiceRunning {
     return @($services | Where-Object Status -eq 'Running').Count -gt 0
 }
 
+function Test-AuraPostgreSQLLoopbackListener {
+    $listeners = @(Get-NetTCPConnection -State Listen -LocalPort 5432 `
+        -ErrorAction SilentlyContinue)
+    if ($listeners.Count -eq 0) { return $false }
+    if (@($listeners | Where-Object LocalAddress -eq '127.0.0.1').Count -eq 0) {
+        return $false
+    }
+    foreach ($listener in $listeners) {
+        if ($listener.LocalAddress -notin @('127.0.0.1', '::1')) {
+            return $false
+        }
+    }
+    return $true
+}
+
 function Test-AuraProductionDatabaseReadiness {
     try {
         Assert-AuraProductionConfiguration
@@ -783,27 +798,93 @@ function Test-AuraPublicHealth {
     }
 }
 
-function Test-AuraFirewallRules {
-    $expectedPorts = @(8000, 8001, 5432)
-    $rules = @(Get-NetFirewallRule -Group 'AURA Self-Host' `
-        -ErrorAction SilentlyContinue)
-    foreach ($port in $expectedPorts) {
-        $matching = @()
-        foreach ($rule in $rules) {
-            if (
-                $rule.Enabled -ne 'True' `
-                -or $rule.Direction -ne 'Inbound' `
-                -or $rule.Action -ne 'Block'
-            ) { continue }
-            $filters = @(Get-NetFirewallPortFilter -AssociatedNetFirewallRule $rule `
-                -ErrorAction SilentlyContinue)
-            if (@($filters | Where-Object {
-                $_.Protocol -eq 'TCP' -and [string]$_.LocalPort -eq [string]$port
-            }).Count -gt 0) { $matching += $rule }
-        }
-        if ($matching.Count -ne 1) { return $false }
+function Test-AuraFirewallRegistryRuleValues {
+    param([Parameter(Mandatory)][AllowEmptyCollection()][string[]]$Values)
+    $expected = [ordered]@{
+        'AURA block direct API 8000' = '8000'
+        'AURA block direct API 8001' = '8001'
+        'AURA block direct PostgreSQL 5432' = '5432'
     }
-    return $true
+    $ruleCounts = @{}
+    foreach ($name in $expected.Keys) { $ruleCounts[$name] = 0 }
+    foreach ($value in $Values) {
+        $fields = @{}
+        foreach ($segment in ([string]$value -split '\|')) {
+            if ($segment -match '^([^=]+)=(.*)$') {
+                $fields[$Matches[1]] = $Matches[2]
+            }
+        }
+        $name = [string]$fields['Name']
+        if (-not $expected.Contains($name)) { continue }
+        $profileAny = (
+            -not $fields.ContainsKey('Profile') `
+            -or [string]$fields['Profile'] -in @(
+                'All', 'Domain,Private,Public', 'Public,Private,Domain'
+            )
+        )
+        $unscoped = @(
+            'App', 'Svc', 'LA4', 'LA6', 'RA4', 'RA6'
+        ) | Where-Object { $fields.ContainsKey($_) }
+        if (
+            [string]$fields['EmbedCtxt'] -eq 'AURA Self-Host' `
+            -and [string]$fields['Active'] -eq 'TRUE' `
+            -and [string]$fields['Dir'] -eq 'In' `
+            -and [string]$fields['Action'] -eq 'Block' `
+            -and [string]$fields['Protocol'] -eq '6' `
+            -and [string]$fields['LPort'] -eq $expected[$name] `
+            -and $profileAny `
+            -and @($unscoped).Count -eq 0
+        ) { $ruleCounts[$name]++ }
+    }
+    return @($ruleCounts.Values | Where-Object { $_ -ne 1 }).Count -eq 0
+}
+
+function Test-AuraFirewallRules {
+    $expected = [ordered]@{
+        'AURA block direct API 8000' = '8000'
+        'AURA block direct API 8001' = '8001'
+        'AURA block direct PostgreSQL 5432' = '5432'
+    }
+    try {
+        $rules = @(Get-NetFirewallRule -Group 'AURA Self-Host' `
+            -ErrorAction Stop)
+        if ($rules.Count -ne $expected.Count) { return $false }
+        foreach ($name in $expected.Keys) {
+            $matching = @($rules | Where-Object DisplayName -eq $name)
+            if ($matching.Count -ne 1) { return $false }
+            $rule = $matching[0]
+            if (
+                [string]$rule.Enabled -ne 'True' `
+                -or [string]$rule.Direction -ne 'Inbound' `
+                -or [string]$rule.Action -ne 'Block' `
+                -or [string]$rule.Profile -ne 'Any'
+            ) { return $false }
+            $filters = @(Get-NetFirewallPortFilter `
+                -AssociatedNetFirewallRule $rule -ErrorAction Stop)
+            if (
+                $filters.Count -ne 1 `
+                -or [string]$filters[0].Protocol -ne 'TCP' `
+                -or [string]$filters[0].LocalPort -ne $expected[$name] `
+                -or [string]$filters[0].RemotePort -ne 'Any'
+            ) { return $false }
+        }
+        return $true
+    } catch {
+        # Standard operators may receive an access-denied CIM error even for a
+        # read-only firewall query. The protected machine firewall registry is
+        # readable without elevation and provides a stable value-only fallback.
+        try {
+            $path = 'Registry::HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\' +
+                'Services\SharedAccess\Parameters\FirewallPolicy\FirewallRules'
+            $item = Get-ItemProperty -LiteralPath $path -ErrorAction Stop
+            $values = @($item.PSObject.Properties | Where-Object {
+                -not $_.Name.StartsWith('PS', [StringComparison]::Ordinal)
+            } | ForEach-Object { [string]$_.Value })
+            return Test-AuraFirewallRegistryRuleValues -Values $values
+        } catch {
+            return $false
+        }
+    }
 }
 
 function Get-AuraProcessCreationTimeUtc {

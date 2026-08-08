@@ -104,6 +104,15 @@ class ProductionOperationsStaticTests(unittest.TestCase):
         self.assertNotIn("serve reset", lifecycle)
         self.assertNotIn("--bg", lifecycle)
 
+    def test_status_start_and_readiness_share_exact_firewall_and_database_gates(self):
+        common = read(COMMON)
+        self.assertIn("function Test-AuraFirewallRegistryRuleValues", common)
+        self.assertIn("Registry::HKEY_LOCAL_MACHINE", common)
+        self.assertIn("function Test-AuraPostgreSQLLoopbackListener", common)
+        for script in (read(START), read(STATUS), read(READINESS)):
+            self.assertIn("Test-AuraFirewallRules", script)
+            self.assertIn("Test-AuraPostgreSQLLoopbackListener", script)
+
     def test_status_and_readiness_are_read_only_and_output_safe(self):
         combined = "\n".join(read(path) for path in (START, STATUS, READINESS))
         for forbidden in (
@@ -225,6 +234,46 @@ Write-Output 'HEALTH_CLASSIFICATION_OK'
         result = self.invoke(body)
         self.assert_ok(result)
         self.assertEqual(result.stdout.strip(), "HEALTH_CLASSIFICATION_OK")
+
+    def test_postgresql_listener_allows_both_loopbacks_but_rejects_wildcard(self):
+        body = r"""
+function Get-NetTCPConnection {
+    @(
+        [PSCustomObject]@{ LocalAddress='127.0.0.1' },
+        [PSCustomObject]@{ LocalAddress='::1' }
+    )
+}
+if (-not (Test-AuraPostgreSQLLoopbackListener)) { throw 'loopbacks-rejected' }
+function Get-NetTCPConnection {
+    @(
+        [PSCustomObject]@{ LocalAddress='127.0.0.1' },
+        [PSCustomObject]@{ LocalAddress='0.0.0.0' }
+    )
+}
+if (Test-AuraPostgreSQLLoopbackListener) { throw 'wildcard-accepted' }
+Write-Output 'POSTGRES_LOOPBACK_OK'
+"""
+        result = self.invoke(body)
+        self.assert_ok(result)
+        self.assertEqual(result.stdout.strip(), "POSTGRES_LOOPBACK_OK")
+
+    def test_firewall_registry_fallback_requires_three_exact_rules(self):
+        body = r"""
+$values = @(
+    'v2.30|Action=Block|Active=TRUE|Dir=In|Protocol=6|LPort=8000|Name=AURA block direct API 8000|EmbedCtxt=AURA Self-Host|',
+    'v2.30|Action=Block|Active=TRUE|Dir=In|Protocol=6|LPort=8001|Name=AURA block direct API 8001|EmbedCtxt=AURA Self-Host|',
+    'v2.30|Action=Block|Active=TRUE|Dir=In|Protocol=6|LPort=5432|Name=AURA block direct PostgreSQL 5432|EmbedCtxt=AURA Self-Host|'
+)
+if (-not (Test-AuraFirewallRegistryRuleValues -Values $values)) { throw 'valid-rejected' }
+if (Test-AuraFirewallRegistryRuleValues -Values @($values[0],$values[1])) { throw 'missing-accepted' }
+if (Test-AuraFirewallRegistryRuleValues -Values @($values + $values[0])) { throw 'duplicate-accepted' }
+$scoped = $values[0].Replace('|Name=', '|App=C:\unsafe.exe|Name=')
+if (Test-AuraFirewallRegistryRuleValues -Values @($scoped,$values[1],$values[2])) { throw 'scoped-accepted' }
+Write-Output 'FIREWALL_REGISTRY_OK'
+"""
+        result = self.invoke(body)
+        self.assert_ok(result)
+        self.assertEqual(result.stdout.strip(), "FIREWALL_REGISTRY_OK")
 
     def test_stale_pid_is_removed_but_ambiguous_pid_fails_closed(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -43,6 +43,9 @@ if (-not $configValid) { $reasons.Add('CONFIG_TARGET_INVALID') }
 
 $postgresqlRunning = Test-AuraPostgreSQLServiceRunning
 if (-not $postgresqlRunning) { $reasons.Add('POSTGRESQL_NOT_RUNNING') }
+$postgresqlLoopback = Test-AuraPostgreSQLLoopbackListener
+if (-not $postgresqlLoopback) { $reasons.Add('POSTGRESQL_LISTENER_INVALID') }
+$databaseReady = $databaseReady -and $postgresqlLoopback
 if (-not $databaseReady) { $reasons.Add('DATABASE_NOT_READY') }
 
 try {
