@@ -1,5 +1,6 @@
 """Exact public route inventory and safety properties for the Funnel gateway."""
 
+import json
 from types import SimpleNamespace
 import unittest
 
@@ -84,6 +85,33 @@ class FunnelGatewayTests(unittest.TestCase):
             self.app.dependency_overrides.clear()
         self.assertEqual(response.status_code, 401)
         self.assertFalse(reached)
+
+    def test_session_boundary_logs_only_fixed_safe_diagnostics(self):
+        marker = "never-log-unauthenticated-header"
+        with self.assertLogs("AURA", level="INFO") as captured:
+            response = self.client.post(
+                "/internal/demo/sessions",
+                headers={"X-BFF-Service-Token": marker},
+            )
+        diagnostics = []
+        for record in captured.records:
+            try:
+                value = json.loads(record.getMessage())
+            except json.JSONDecodeError:
+                continue
+            if isinstance(value, dict) and value.get("route") == "session_create":
+                diagnostics.append(value)
+        self.assertEqual(response.status_code, 401)
+        self.assertEqual(len(diagnostics), 2)
+        self.assertEqual(diagnostics[0]["code"], "REQUEST_RECEIVED")
+        self.assertEqual(diagnostics[1]["code"], "RESPONSE_4XX")
+        for diagnostic in diagnostics:
+            self.assertEqual(
+                set(diagnostic), {"route", "stage", "elapsedMs", "code"}
+            )
+        rendered = "\n".join(record.getMessage() for record in captured.records)
+        self.assertNotIn(marker, rendered)
+        self.assertNotIn("/internal/demo/sessions", rendered)
 
 
 if __name__ == "__main__":
