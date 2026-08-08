@@ -212,5 +212,62 @@ class ExistingRestoreVerifierAssetTests(unittest.TestCase):
         self.assertNotIn("Write-Output $plainPassword", self.script)
 
 
+class RestoreTestCleanupAssetTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.script = (
+            WINDOWS_ROOT / "Remove-AuraRestoreTestDatabase.ps1"
+        ).read_text(encoding="utf-8")
+
+    def test_cleanup_is_exact_verified_and_non_forcing(self):
+        for expected in (
+            "DROP_AURA_RESTORE_TEST",
+            "$targetDatabase = 'aura_restore_test'",
+            "$migrationUser = 'aura_migration_owner'",
+            "pg_get_userbyid(datdba)",
+            "Invoke-AuraCleanupSchemaVerification",
+            "actualTableCount -ne 10",
+            "matchingColumnCount -ne 88",
+            "matchingPrimaryKeyCount -ne 10",
+            "matchingTableStructureCount -ne 10",
+            "--maintenance-db=postgres",
+            "AURA_RESTORE_TEST_CLEANUP_OK database=aura_restore_test",
+        ):
+            self.assertIn(expected, self.script)
+        self.assertNotIn("--force", self.script)
+        self.assertNotIn("--if-exists", self.script)
+        self.assertNotIn("aura_demo_public", self.script)
+        self.assertNotIn("aura_demo_staging", self.script)
+        self.assertNotIn("'aura_test'", self.script)
+
+    def test_cleanup_prompts_securely_and_always_removes_credential(self):
+        for expected in (
+            "Read-Host",
+            "-AsSecureString",
+            "SecureStringToBSTR",
+            "ZeroFreeBSTR",
+            "Set-AuraOperatorProtectedAcl -Path $tempPath",
+            "Remove-Item -LiteralPath $tempPath -Force",
+            "throw $failureCode",
+        ):
+            self.assertIn(expected, self.script)
+        self.assertNotIn("PGPASSWORD", self.script)
+        self.assertNotIn("Write-Output $standardError", self.script)
+        self.assertNotIn("Write-Output $plainPassword", self.script)
+
+    def test_cleanup_verifies_before_drop_and_postchecks_after(self):
+        schema = self.script.index("$verification = Invoke-AuraCleanupSchemaVerification")
+        drop = self.script.index("& $dropdb")
+        postcheck = self.script.index("$exists = & $psql", drop)
+        success = self.script.index("AURA_RESTORE_TEST_CLEANUP_OK", postcheck)
+        self.assertLess(schema, drop)
+        self.assertLess(drop, postcheck)
+        self.assertLess(postcheck, success)
+        self.assertIn(
+            "SetEnvironmentVariable('PGOPTIONS', $null, 'Process')",
+            self.script,
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
