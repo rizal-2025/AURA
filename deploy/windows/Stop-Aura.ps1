@@ -5,26 +5,56 @@ param(
 )
 
 . (Join-Path $PSScriptRoot 'AuraWindows.Common.ps1')
-$pidPath = Join-Path $script:AuraRunRoot "aura-$Profile.pid"
-if (-not (Test-Path -LiteralPath $pidPath -PathType Leaf)) {
+$port = Get-AuraProfilePort -Profile $Profile
+$ownership = Get-AuraOwnedProcessState -Kind aura -Profile $Profile `
+    -RepairStaleMetadata
+if ($ownership.State -in @('stale', 'absent')) {
+    if (-not (Test-AuraPortClosed -Port $port)) {
+        throw 'AURA_PROCESS_OWNERSHIP_UNCERTAIN'
+    }
     Write-Output 'AURA_NOT_RUNNING'
-    exit 0
+    return
 }
-$rawPid = (Get-Content -Raw -LiteralPath $pidPath).Trim()
-if ($rawPid -notmatch '^[1-9][0-9]*$') { throw 'AURA_PID_FILE_INVALID' }
-$pidValue = [int]$rawPid
-$processInfo = Get-CimInstance Win32_Process -Filter "ProcessId = $pidValue" -ErrorAction SilentlyContinue
-if ($null -eq $processInfo) {
-    Remove-Item -LiteralPath $pidPath -Force
-    Write-Output 'AURA_NOT_RUNNING'
-    exit 0
+if ($ownership.State -in @('ambiguous', 'uncertain')) {
+    throw 'AURA_PROCESS_OWNERSHIP_UNCERTAIN'
 }
-$marker = "app.self_host --profile $Profile"
-if ($processInfo.Name -notmatch '^python(?:\.exe)?$' -or $processInfo.CommandLine -notlike "*$marker*") {
-    throw 'AURA_PID_OWNERSHIP_INVALID'
+
+$gateway = Get-AuraGatewayListenerProcessInfo `
+    -OwnershipProcessInfo $ownership.ProcessInfo -Profile $Profile
+$target = if ($null -ne $gateway) { $gateway } else { $ownership.ProcessInfo }
+$current = Assert-AuraOwnedProcessStillMatches `
+    -OriginalProcessInfo $target -Kind aura -Profile $Profile
+if ($null -ne $current) {
+    Stop-Process -Id ([int]$current.ProcessId)
+    Wait-Process -Id ([int]$current.ProcessId) -Timeout 30 `
+        -ErrorAction SilentlyContinue
 }
-Stop-Process -Id $pidValue
-Wait-Process -Id $pidValue -Timeout 30 -ErrorAction SilentlyContinue
-if (Get-Process -Id $pidValue -ErrorAction SilentlyContinue) { throw 'AURA_STOP_TIMEOUT' }
-Remove-Item -LiteralPath $pidPath -Force
+$remaining = Assert-AuraOwnedProcessStillMatches `
+    -OriginalProcessInfo $target -Kind aura -Profile $Profile
+if ($null -ne $remaining) {
+    Stop-Process -Id ([int]$remaining.ProcessId) -Force
+    Wait-Process -Id ([int]$remaining.ProcessId) -Timeout 5 `
+        -ErrorAction SilentlyContinue
+}
+if ($null -ne (Assert-AuraOwnedProcessStillMatches `
+    -OriginalProcessInfo $target -Kind aura -Profile $Profile)) {
+    throw 'AURA_STOP_TIMEOUT'
+}
+
+# A Python venv redirector may be the recorded legacy parent. Once its exact
+# child gateway exits, it should exit too; terminate only that revalidated
+# parent if it remains after the bounded wait.
+if ([int]$target.ProcessId -ne [int]$ownership.ProcessInfo.ProcessId) {
+    Wait-Process -Id ([int]$ownership.ProcessInfo.ProcessId) -Timeout 5 `
+        -ErrorAction SilentlyContinue
+    $parent = Assert-AuraOwnedProcessStillMatches `
+        -OriginalProcessInfo $ownership.ProcessInfo -Kind aura -Profile $Profile
+    if ($null -ne $parent) {
+        Stop-Process -Id ([int]$parent.ProcessId) -Force
+        Wait-Process -Id ([int]$parent.ProcessId) -Timeout 5 `
+            -ErrorAction SilentlyContinue
+    }
+}
+if (-not (Test-AuraPortClosed -Port $port)) { throw 'AURA_PORT_STILL_OPEN' }
+Remove-Item -LiteralPath $ownership.Path -Force -ErrorAction SilentlyContinue
 Write-Output 'AURA_STOP_OK'

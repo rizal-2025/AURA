@@ -6,50 +6,101 @@ param(
 
 . (Join-Path $PSScriptRoot 'AuraWindows.Common.ps1')
 Initialize-AuraDataDirectories
-$tailscale = Get-TailscalePath
 $publicPort = Get-AuraFunnelPort -Profile $Profile
 $target = Get-AuraFunnelTarget -Profile $Profile
-$localPort = Get-AuraProfilePort -Profile $Profile
-$pidPath = Join-Path $script:AuraRunRoot "tailscale-funnel-$Profile.pid"
 $otherProfile = if ($Profile -eq 'production') { 'staging' } else { 'production' }
 
-if (-not (Get-NetTCPConnection -State Listen -LocalAddress 127.0.0.1 -LocalPort $localPort -ErrorAction SilentlyContinue)) {
-    throw 'AURA_GATEWAY_NOT_RUNNING'
-}
-if (Test-Path -LiteralPath $pidPath -PathType Leaf) {
-    $rawPid = (Get-Content -Raw -LiteralPath $pidPath).Trim()
-    if ($rawPid -match '^[1-9][0-9]*$' -and (Get-Process -Id ([int]$rawPid) -ErrorAction SilentlyContinue)) {
-        throw 'AURA_FUNNEL_ALREADY_RUNNING'
-    }
-    Remove-Item -LiteralPath $pidPath -Force
-}
-$existingStatus = Get-AuraTailscaleStatus
-if (Test-AuraFunnelStatusObject -Status $existingStatus -Profile $Profile) {
-    throw 'AURA_FUNNEL_ALREADY_ACTIVE'
-}
-if (Test-AuraFunnelStatusObject -Status $existingStatus -Profile $otherProfile) {
+$auraOwnership = Get-AuraOwnedProcessState -Kind aura -Profile $Profile
+$gatewayProcess = if ($auraOwnership.State -eq 'owned') {
+    Get-AuraGatewayListenerProcessInfo `
+        -OwnershipProcessInfo $auraOwnership.ProcessInfo -Profile $Profile
+} else { $null }
+if (
+    $auraOwnership.State -ne 'owned' `
+    -or $null -eq $gatewayProcess `
+    -or -not (Test-AuraLocalHealth -Profile $Profile)
+) { throw 'AURA_GATEWAY_NOT_READY' }
+
+$otherOwnership = Get-AuraOwnedProcessState -Kind funnel -Profile $otherProfile
+if ($otherOwnership.State -notin @('absent', 'stale')) {
     throw 'AURA_FUNNEL_OTHER_PROFILE_ACTIVE'
 }
+$ownership = Get-AuraOwnedProcessState -Kind funnel -Profile $Profile `
+    -RepairStaleMetadata
+if ($ownership.State -eq 'ambiguous') {
+    throw 'HUMAN_GATE_PROCESS_OWNERSHIP_AMBIGUOUS'
+}
+if ($ownership.State -eq 'owned') {
+    if (Test-AuraPublicHealth -Profile $Profile) {
+        if ($ownership.Legacy) {
+            Write-AuraOwnershipMetadata -Path $ownership.Path `
+                -ProcessInfo $ownership.ProcessInfo
+        }
+        Write-Output 'AURA_FUNNEL_ALREADY_READY'
+        return
+    }
+    & (Join-Path $PSScriptRoot 'Stop-TailscaleFunnel.ps1') `
+        -Profile $Profile | Out-Null
+}
 
-# No --bg: the detached foreground CLI session does not persist Funnel across
-# device or daemon restarts. Start-AuraPublicDemo.ps1 is the only orchestrator.
-$process = Start-Process -FilePath $tailscale -ArgumentList @('funnel', "--https=$publicPort", $target) -WindowStyle Hidden -PassThru
-Set-Content -LiteralPath $pidPath -Value ([string]$process.Id) -Encoding ascii -NoNewline
+$tailscale = Get-TailscalePath
+$ownershipPath = Get-AuraOwnershipPath -Kind funnel -Profile $Profile
+# Deliberately foreground: no persistent public exposure after reboot.
+$process = Start-Process -FilePath $tailscale `
+    -ArgumentList @('funnel', "--https=$publicPort", $target) `
+    -WindowStyle Hidden -PassThru
+$processInfo = $null
+for ($attempt = 0; $attempt -lt 20; $attempt++) {
+    $processInfo = Get-CimInstance Win32_Process `
+        -Filter "ProcessId = $($process.Id)" -ErrorAction SilentlyContinue
+    if ($null -ne $processInfo) { break }
+    Start-Sleep -Milliseconds 100
+}
+if (
+    $null -eq $processInfo `
+    -or -not (Test-AuraExpectedProcessInfo -ProcessInfo $processInfo `
+        -Kind funnel -Profile $Profile)
+) {
+    throw 'HUMAN_GATE_PROCESS_OWNERSHIP_AMBIGUOUS'
+}
+try {
+    Write-AuraOwnershipMetadata -Path $ownershipPath -ProcessInfo $processInfo
+} catch {
+    $verified = Assert-AuraOwnedProcessStillMatches `
+        -OriginalProcessInfo $processInfo -Kind funnel -Profile $Profile
+    if ($null -ne $verified) {
+        Stop-Process -Id ([int]$verified.ProcessId) -Force
+    }
+    Remove-Item -LiteralPath $ownershipPath -Force -ErrorAction SilentlyContinue
+    throw 'AURA_FUNNEL_METADATA_WRITE_FAILED'
+}
 
 $ready = $false
-for ($attempt = 0; $attempt -lt 20; $attempt++) {
+for ($attempt = 0; $attempt -lt 30; $attempt++) {
     if ($process.HasExited) { break }
-    try {
-        $status = Get-AuraTailscaleStatus
-        if (Test-AuraFunnelStatusObject -Status $status -Profile $Profile) { $ready = $true; break }
-    } catch { }
+    $current = Get-AuraOwnedProcessState -Kind funnel -Profile $Profile
+    if ($current.State -eq 'owned' -and (Test-AuraPublicHealth -Profile $Profile)) {
+        $ready = $true
+        break
+    }
     Start-Sleep -Seconds 1
 }
 if (-not $ready) {
-    & $tailscale funnel reset *> $null
-    if ($LASTEXITCODE -ne 0) { throw 'AURA_FUNNEL_RESET_FAILED' }
-    if (-not $process.HasExited) { Stop-Process -Id $process.Id -Force }
-    Remove-Item -LiteralPath $pidPath -Force -ErrorAction SilentlyContinue
+    $current = Get-AuraOwnedProcessState -Kind funnel -Profile $Profile
+    if ($current.State -eq 'owned') {
+        $verified = Assert-AuraOwnedProcessStillMatches `
+            -OriginalProcessInfo $current.ProcessInfo -Kind funnel -Profile $Profile
+        if ($null -ne $verified) {
+            Stop-Process -Id ([int]$verified.ProcessId) -Force
+        }
+        Remove-Item -LiteralPath $ownershipPath -Force `
+            -ErrorAction SilentlyContinue
+    } elseif ($current.State -eq 'stale') {
+        Remove-Item -LiteralPath $ownershipPath -Force `
+            -ErrorAction SilentlyContinue
+    } else {
+        throw 'HUMAN_GATE_PROCESS_OWNERSHIP_AMBIGUOUS'
+    }
     throw 'AURA_FUNNEL_START_FAILED'
 }
 Write-Output 'AURA_FUNNEL_START_OK'
