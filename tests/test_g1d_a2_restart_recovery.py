@@ -369,10 +369,12 @@ class WorkflowStateServiceTests(unittest.TestCase):
                 "update_reservation_stage": "input_value",
                 "reservation_reference": f"RSV_{7:032x}",
                 "editing_field": "people",
+                "update_reservation_candidate_references": [],
             },
             {
                 "cancel_reservation_stage": "confirm_cancellation",
                 "cancel_reservation_reference": f"RSV_{7:032x}",
+                "cancel_reservation_candidate_references": [],
             },
             {
                 RESERVATION_PERSISTENCE_STATE: {

@@ -60,8 +60,14 @@ RESERVATION_WORKFLOW_MEMORY_KEYS = frozenset(
         "editing_field",
         "asked_fields",
         "update_reservation_stage",
+        "update_reservation_candidate_references",
+        "update_reservation_page_cursor",
+        "update_reservation_page_has_more",
         "reservation_reference",
         "cancel_reservation_stage",
+        "cancel_reservation_candidate_references",
+        "cancel_reservation_page_cursor",
+        "cancel_reservation_page_has_more",
         "cancel_reservation_reference",
         "reservation_persistence_state",
     }
@@ -224,7 +230,13 @@ class MemoryManager:
             "completed": False,
             "editing_field": None,
             "reservation_reference": None,
+            "update_reservation_candidate_references": [],
+            "update_reservation_page_cursor": None,
+            "update_reservation_page_has_more": None,
             "cancel_reservation_reference": None,
+            "cancel_reservation_candidate_references": [],
+            "cancel_reservation_page_cursor": None,
+            "cancel_reservation_page_has_more": None,
         }
 
     def create_session(self, memory_key: str) -> dict[str, Any]:

@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.brain.indonesian_nlu import (
     normalize_indonesian_text,
+    parse_confirmation,
     parse_people_count,
     parse_target_field,
 )
@@ -14,11 +15,8 @@ from app.brain.memory_manager import MemoryManager
 from app.brain.reservation_entity_extractor import (
     REFERENCE_AMBIGUITY_GUIDANCE,
     REFERENCE_DATA_UNAVAILABLE_RESPONSE,
-    REFERENCE_INPUT_GUIDANCE,
     REFERENCE_NOT_FOUND_RESPONSE,
-    PublicReferenceParseStatus,
     normalize_natural_reservation_name,
-    parse_public_reservation_reference,
 )
 from app.brain.reservation_memory import (
     COMMITTED_OPERATION_FORMAT_FALLBACK_RESPONSE,
@@ -41,11 +39,17 @@ from app.core.transaction_errors import (
     TransactionSessionUnusableError,
 )
 from app.services.reservation.service import ReservationService
+from app.services.reservation.dto import ReservationSelectionPage
 from app.services.reservation.public_reference import (
     PublicReservationReferenceUnavailableError,
     require_canonical_public_reference,
 )
 from app.agents.result import ReservationOperationResult, ReservationOperationType
+from app.agents.reservation_selection import (
+    format_paginated_selection,
+    format_reservation_summary,
+    parse_reservation_selection,
+)
 from app.utils.datetime_parser import DatetimeParser
 
 
@@ -53,8 +57,10 @@ class UpdateReservationAgent:
     """Guide a user through updating an existing reservation."""
 
     SELECT_RESERVATION_REFERENCE = "select_reservation_reference"
+    CONFIRM_RESERVATION_SELECTION = "confirm_reservation_selection"
     SELECT_FIELD = "select_field"
     INPUT_VALUE = "input_value"
+    PAGE_SIZE = 5
     EDITABLE_FIELDS = ("name", "people", "date", "time")
 
     FIELD_ALIASES = {
@@ -113,6 +119,14 @@ class UpdateReservationAgent:
         if stage == self.SELECT_RESERVATION_REFERENCE:
             return self._select_reservation(db, session, user_message, owner_customer_id)
 
+        if stage == self.CONFIRM_RESERVATION_SELECTION:
+            return self._confirm_reservation_selection(
+                db,
+                session,
+                user_message,
+                owner_customer_id,
+            )
+
         if stage == self.SELECT_FIELD:
             selection = self._select_field(session, user_message)
             selected_field = session.get("editing_field")
@@ -156,10 +170,10 @@ class UpdateReservationAgent:
         owner_customer_id,
     ) -> dict[str, Any]:
         try:
-            reservations = self.reservation_service.list_recent_reservations(
+            page = self._list_selectable_reservation_page(
                 db,
                 owner_customer_id=owner_customer_id,
-                limit=5,
+                after_public_reference=None,
             )
         except PublicReservationReferenceUnavailableError:
             self._clear_update_state(session)
@@ -167,25 +181,51 @@ class UpdateReservationAgent:
                 "status": "reference_unavailable",
                 "response": REFERENCE_DATA_UNAVAILABLE_RESPONSE,
             }
-        recent_reservations = reservations[:5]
+        recent_reservations = tuple(page.reservations)
 
         self._clear_update_state(session)
         if not recent_reservations:
             return {
-                "status": "awaiting_update",
-                "response": "Belum ada reservasi yang dapat diubah.",
+                "status": "no_reservations",
+                "response": "Saya tidak menemukan reservasi aktif yang dapat diubah.",
             }
 
-        session["update_reservation_stage"] = self.SELECT_RESERVATION_REFERENCE
-        records = "\n\n".join(
-            self._format_reservation(reservation)
-            for reservation in recent_reservations
+        candidate_references = [
+            reservation.reference for reservation in recent_reservations
+        ]
+        session["update_reservation_candidate_references"] = candidate_references
+        if len(recent_reservations) == 1:
+            reservation = recent_reservations[0]
+            session.update(
+                {
+                    "reservation_reference": reservation.reference,
+                    "update_reservation_stage": self.CONFIRM_RESERVATION_SELECTION,
+                    "update_reservation_page_cursor": None,
+                    "update_reservation_page_has_more": False,
+                }
+            )
+            return {
+                "status": "awaiting_update",
+                "response": (
+                    f"Saya menemukan reservasi ini:\n\n"
+                    f"{format_reservation_summary(reservation)}\n\n"
+                    "Apakah ini reservasi yang ingin diubah? Ya / Tidak"
+                ),
+            }
+
+        session.update(
+            {
+                "update_reservation_stage": self.SELECT_RESERVATION_REFERENCE,
+                "update_reservation_page_cursor": None,
+                "update_reservation_page_has_more": page.has_more,
+            }
         )
         return {
             "status": "awaiting_update",
-            "response": (
-                f"Daftar reservasi terbaru:\n\n{records}\n\n"
-                "Pilih referensi reservasi yang ingin diubah."
+            "response": format_paginated_selection(
+                recent_reservations,
+                has_more=page.has_more,
+                is_later_page=False,
             ),
         }
 
@@ -196,46 +236,130 @@ class UpdateReservationAgent:
         user_message: str,
         owner_customer_id,
     ) -> dict[str, Any]:
-        parsed = parse_public_reservation_reference(user_message)
-        if parsed.status is PublicReferenceParseStatus.AMBIGUOUS:
+        candidate_references = tuple(
+            session.get("update_reservation_candidate_references") or ()
+        )
+        page_has_more = session.get("update_reservation_page_has_more")
+        if not 1 <= len(candidate_references) <= self.PAGE_SIZE or type(
+            page_has_more
+        ) is not bool:
+            self._clear_update_state(session)
+            return self._start_update(db, session, owner_customer_id)
+
+        selection = parse_reservation_selection(user_message, candidate_references)
+        if selection.status == "next_page":
+            return self._show_next_page(
+                db,
+                session,
+                candidate_references,
+                owner_customer_id,
+            )
+        if selection.status == "first_page":
+            return self._show_first_page(
+                db,
+                session,
+                owner_customer_id,
+            )
+        if selection.status == "ambiguous":
             return {
                 "status": "awaiting_update",
                 "response": REFERENCE_AMBIGUITY_GUIDANCE,
                 "invalid_input": True,
             }
-        if parsed.status is not PublicReferenceParseStatus.VALID:
+        if selection.status != "valid":
+            navigation = []
+            if page_has_more:
+                navigation.append('"berikutnya"')
+            if session.get("update_reservation_page_cursor") is not None:
+                navigation.append('"awal"')
+            navigation_guidance = (
+                f", atau ketik {' / '.join(navigation)}."
+                if navigation
+                else "."
+            )
             return {
                 "status": "awaiting_update",
-                "response": REFERENCE_INPUT_GUIDANCE,
+                "response": (
+                    f"Pilihan tidak valid. Masukkan angka 1 sampai "
+                    f"{len(candidate_references)}{navigation_guidance}"
+                ),
                 "invalid_input": True,
             }
-        reservation_reference = parsed.reference
+        reservation_reference = selection.reference
 
-        reservation = self.reservation_service.get_reservation_by_reference(
+        reservation = self._get_selectable_reservation_by_reference(
             db,
             reservation_reference,
             owner_customer_id=owner_customer_id,
         )
         if reservation is None:
-            return {
-                "status": "awaiting_update",
-                "response": REFERENCE_NOT_FOUND_RESPONSE,
-                "invalid_input": True,
-            }
+            if reservation_reference not in candidate_references:
+                return {
+                    "status": "awaiting_update",
+                    "response": REFERENCE_NOT_FOUND_RESPONSE,
+                    "invalid_input": True,
+                }
+            return self._restart_after_stale(db, session, owner_customer_id)
 
         session.update(
             {
                 "reservation_reference": reservation_reference,
                 "editing_field": None,
                 "update_reservation_stage": self.SELECT_FIELD,
+                "update_reservation_candidate_references": [],
+                "update_reservation_page_cursor": None,
+                "update_reservation_page_has_more": False,
             }
         )
         return {
             "status": "awaiting_update",
             "response": (
-                f"Reservasi dipilih:\n\n{self._format_reservation(reservation)}\n\n"
+                f"Reservasi dipilih:\n\n{format_reservation_summary(reservation)}\n\n"
                 "Field mana yang ingin diubah? Pilih: name, people, date, atau time."
             ),
+        }
+
+    def _confirm_reservation_selection(
+        self,
+        db: Session,
+        session: dict[str, Any],
+        user_message: str,
+        owner_customer_id,
+    ) -> dict[str, Any]:
+        confirmation = parse_confirmation(user_message)
+        if confirmation == "reject":
+            self._clear_update_state(session)
+            return {
+                "status": "update_rejected",
+                "response": "Baik, proses perubahan reservasi dihentikan. Tidak ada perubahan.",
+            }
+        if confirmation != "confirm":
+            return {
+                "status": "awaiting_update",
+                "response": "Mohon jawab Ya atau Tidak. Apakah ini reservasi yang ingin diubah?",
+                "invalid_input": True,
+            }
+
+        reservation_reference = session.get("reservation_reference")
+        reservation = self._get_selectable_reservation_by_reference(
+            db,
+            reservation_reference,
+            owner_customer_id=owner_customer_id,
+        )
+        if reservation is None:
+            return self._restart_after_stale(db, session, owner_customer_id)
+        session.update(
+            {
+                "editing_field": None,
+                "update_reservation_stage": self.SELECT_FIELD,
+                "update_reservation_candidate_references": [],
+                "update_reservation_page_cursor": None,
+                "update_reservation_page_has_more": False,
+            }
+        )
+        return {
+            "status": "awaiting_update",
+            "response": "Field mana yang ingin diubah? Pilih: name, people, date, atau time.",
         }
 
     def _select_field(self, session: dict[str, Any], user_message: str) -> dict[str, Any]:
@@ -293,6 +417,16 @@ class UpdateReservationAgent:
                 "response": self._invalid_value_response(field_name),
                 "invalid_input": True,
             }
+
+        current_reservation = (
+            self._get_selectable_reservation_by_reference(
+                db,
+                reservation_reference,
+                owner_customer_id=owner_customer_id,
+            )
+        )
+        if current_reservation is None:
+            return self._restart_after_stale(db, session, owner_customer_id)
 
         if self.workflow_state_service is not None:
             self.workflow_state_service.begin_mutation(
@@ -397,6 +531,182 @@ class UpdateReservationAgent:
         session["update_reservation_stage"] = None
         session["reservation_reference"] = None
         session["editing_field"] = None
+        session["update_reservation_candidate_references"] = []
+        session["update_reservation_page_cursor"] = None
+        session["update_reservation_page_has_more"] = None
+
+    def _show_next_page(
+        self,
+        db: Session,
+        session: dict[str, Any],
+        candidate_references: tuple[str, ...],
+        owner_customer_id,
+    ) -> dict[str, Any]:
+        if not session.get("update_reservation_page_has_more"):
+            return_guidance = (
+                ' atau ketik "awal" untuk kembali ke daftar awal'
+                if session.get("update_reservation_page_cursor") is not None
+                else ""
+            )
+            return {
+                "status": "awaiting_update",
+                "response": (
+                    "Tidak ada reservasi berikutnya. Pilih nomor pada halaman "
+                    f"ini{return_guidance}."
+                ),
+                "invalid_input": True,
+            }
+        cursor = candidate_references[-1]
+        try:
+            page = self._list_selectable_reservation_page(
+                db,
+                owner_customer_id=owner_customer_id,
+                after_public_reference=cursor,
+            )
+        except PublicReservationReferenceUnavailableError:
+            self._clear_update_state(session)
+            return {
+                "status": "reference_unavailable",
+                "response": REFERENCE_DATA_UNAVAILABLE_RESPONSE,
+            }
+        if not page.reservations:
+            return self._restart_after_stale(db, session, owner_customer_id)
+        self._store_update_page(
+            session,
+            page.reservations,
+            cursor=cursor,
+            has_more=page.has_more,
+        )
+        return {
+            "status": "awaiting_update",
+            "response": format_paginated_selection(
+                page.reservations,
+                has_more=page.has_more,
+                is_later_page=True,
+            ),
+        }
+
+    def _show_first_page(
+        self,
+        db: Session,
+        session: dict[str, Any],
+        owner_customer_id,
+    ) -> dict[str, Any]:
+        if session.get("update_reservation_page_cursor") is None:
+            return {
+                "status": "awaiting_update",
+                "response": "Anda sudah berada di daftar awal. Pilih nomor reservasi.",
+                "invalid_input": True,
+            }
+        return self._start_update(db, session, owner_customer_id)
+
+    def _store_update_page(
+        self,
+        session: dict[str, Any],
+        reservations,
+        *,
+        cursor: str | None,
+        has_more: bool,
+    ) -> None:
+        session.update(
+            {
+                "update_reservation_stage": self.SELECT_RESERVATION_REFERENCE,
+                "update_reservation_candidate_references": [
+                    reservation.reference for reservation in reservations
+                ],
+                "update_reservation_page_cursor": cursor,
+                "update_reservation_page_has_more": has_more,
+                "reservation_reference": None,
+                "editing_field": None,
+            }
+        )
+
+    def _restart_after_stale(
+        self,
+        db: Session,
+        session: dict[str, Any],
+        owner_customer_id,
+    ) -> dict[str, Any]:
+        refreshed = self._start_update(db, session, owner_customer_id)
+        refreshed["response"] = (
+            "Reservasi yang dipilih tidak lagi tersedia untuk diubah.\n\n"
+            + refreshed["response"]
+        )
+        return refreshed
+
+    def _list_selectable_reservation_page(
+        self,
+        db: Session,
+        owner_customer_id,
+        *,
+        after_public_reference: str | None,
+    ):
+        page_selector = getattr(
+            self.reservation_service,
+            "list_selectable_reservation_page",
+            None,
+        )
+        if page_selector is not None:
+            return page_selector(
+                db,
+                owner_customer_id=owner_customer_id,
+                after_public_reference=after_public_reference,
+                page_size=self.PAGE_SIZE,
+            )
+        selector = getattr(
+            self.reservation_service,
+            "list_selectable_reservations",
+            None,
+        )
+        if selector is not None and after_public_reference is None:
+            reservations = selector(
+                db,
+                owner_customer_id=owner_customer_id,
+                limit=self.PAGE_SIZE,
+            )
+            return ReservationSelectionPage(
+                reservations=tuple(reservations[: self.PAGE_SIZE]),
+                has_more=False,
+            )
+        if after_public_reference is not None:
+            return ReservationSelectionPage(reservations=(), has_more=False)
+        reservations = self.reservation_service.list_recent_reservations(
+            db,
+            owner_customer_id=owner_customer_id,
+            limit=self.PAGE_SIZE,
+        )
+        filtered = tuple(
+            reservation
+            for reservation in reservations
+            if str(getattr(reservation, "status", "")).lower() != "cancelled"
+        )
+        return ReservationSelectionPage(reservations=filtered, has_more=False)
+
+    def _get_selectable_reservation_by_reference(
+        self,
+        db: Session,
+        reservation_reference: str,
+        owner_customer_id,
+    ):
+        selector = getattr(
+            self.reservation_service,
+            "get_selectable_reservation_by_reference",
+            None,
+        )
+        if selector is not None:
+            return selector(
+                db,
+                reservation_reference,
+                owner_customer_id=owner_customer_id,
+            )
+        reservation = self.reservation_service.get_reservation_by_reference(
+            db,
+            reservation_reference,
+            owner_customer_id=owner_customer_id,
+        )
+        if str(getattr(reservation, "status", "")).lower() == "cancelled":
+            return None
+        return reservation
 
     def _resolve_field(self, user_message: str) -> str | None:
         return parse_target_field(user_message)

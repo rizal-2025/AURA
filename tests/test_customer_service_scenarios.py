@@ -228,8 +228,8 @@ class TestCustomerServiceScenarios(unittest.TestCase):
         key_a = build_authenticated_memory_key(self.customer_a.id, "shared-scenario-session")
         key_b = build_authenticated_memory_key(self.customer_b.id, "shared-scenario-session")
         self.assertNotEqual(key_a, key_b)
-        self.assertEqual(result_a.state["update_reservation_stage"], "select_reservation_reference")
-        self.assertEqual(result_b.state["update_reservation_stage"], "select_reservation_reference")
+        self.assertEqual(result_a.state["update_reservation_stage"], "confirm_reservation_selection")
+        self.assertEqual(result_b.state["update_reservation_stage"], "confirm_reservation_selection")
         self.assertIn("Customer B", result_b.replies[-1])
         self.assertNotIn("shared-scenario-session", chat_agent.memory_manager._sessions)
 
@@ -328,7 +328,7 @@ class TestCustomerServiceScenarios(unittest.TestCase):
             "customer_messages": [
                 "ubah reservasi saya",
                 "abc",
-                "RSV_11111111111111111111111111111111",
+                "Ya",
                 "bukan field",
             ],
         }

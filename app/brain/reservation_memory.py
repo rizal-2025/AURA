@@ -140,6 +140,9 @@ def publish_update_success(
 ) -> None:
     state = snapshot.materialize()
     state["update_reservation_stage"] = None
+    state["update_reservation_candidate_references"] = []
+    state["update_reservation_page_cursor"] = None
+    state["update_reservation_page_has_more"] = None
     state["reservation_reference"] = None
     state["editing_field"] = None
     state.pop(RESERVATION_PERSISTENCE_STATE, None)
@@ -154,6 +157,9 @@ def publish_cancel_success(
 ) -> None:
     state = snapshot.materialize()
     state["cancel_reservation_stage"] = None
+    state["cancel_reservation_candidate_references"] = []
+    state["cancel_reservation_page_cursor"] = None
+    state["cancel_reservation_page_has_more"] = None
     state["cancel_reservation_reference"] = None
     state.pop(RESERVATION_PERSISTENCE_STATE, None)
     memory_manager.replace_conversation(memory_key, state)
@@ -184,10 +190,16 @@ def publish_reservation_persistence_blocker(
         state["editing_field"] = None
     elif operation == "update":
         state["update_reservation_stage"] = None
+        state["update_reservation_candidate_references"] = []
+        state["update_reservation_page_cursor"] = None
+        state["update_reservation_page_has_more"] = None
         state["reservation_reference"] = None
         state["editing_field"] = None
     else:
         state["cancel_reservation_stage"] = None
+        state["cancel_reservation_candidate_references"] = []
+        state["cancel_reservation_page_cursor"] = None
+        state["cancel_reservation_page_has_more"] = None
         state["cancel_reservation_reference"] = None
 
     state[RESERVATION_PERSISTENCE_STATE] = {

@@ -208,7 +208,7 @@ class TestUpdateReservation(unittest.TestCase):
         )
 
         self.assertNotIn(str(SEEDED_UPDATE_RESERVATION_ID), boundary_text)
-        self.assertIn(seeded_reference, selection["response"])
+        self.assertNotIn("RSV_", selection["response"])
         self.assertIn(seeded_reference, success["response"])
         self.assertEqual(operation.operation, ReservationOperationType.UPDATED)
         self.assertEqual(operation.reference, seeded_reference)
@@ -219,13 +219,13 @@ class TestUpdateReservation(unittest.TestCase):
         self.assertNotIn("reservation_id", snapshot)
         self.assertNotIn("reservation_id", memory_state)
 
-    def test_numeric_reservation_selector_is_rejected(self):
+    def test_out_of_range_numeric_reservation_selector_is_rejected(self):
         self._send("ubah reservasi saya")
 
         result = self._send("999")
 
         session = self.memory.get_session(self.session_id)
-        self.assertIn("format RSV_", result["response"])
+        self.assertIn("angka 1 sampai 2", result["response"])
         self.assertEqual(
             session["update_reservation_stage"],
             UpdateReservationAgent.SELECT_RESERVATION_REFERENCE,
@@ -243,8 +243,8 @@ class TestUpdateReservation(unittest.TestCase):
 
         for index, (message, expected) in enumerate(
             (
-                ("referensinya belum ada", "Gunakan referensi reservasi"),
-                ("RSV_not-valid", "Gunakan referensi reservasi"),
+                ("referensinya belum ada", "angka 1 sampai 2"),
+                ("RSV_not-valid", "angka 1 sampai 2"),
                 (
                     f"{reference_for(1)} dan {reference_for(2)}",
                     "Kirim tepat satu referensi reservasi.",

@@ -215,6 +215,36 @@ class AgentOrchestrator:
             session.get("cancel_reservation_stage"),
         )
 
+        detected_reservation_intent = IntentClassifier.detect_reservation_intent(
+            message
+        )
+        if (
+            self._is_update_reservation_active(session_payload)
+            and detected_reservation_intent == "cancel_reservation"
+            and not reservation_mutations_blocked
+        ):
+            self._clear_update_selection_state(session)
+            self._reset_intent_attempts(session_id)
+            return await self._cancel_reservation(
+                db,
+                session_id,
+                message,
+                owner_customer_id,
+            )
+        if (
+            self._is_cancel_reservation_active(session_payload)
+            and detected_reservation_intent == "update_reservation"
+            and not reservation_mutations_blocked
+        ):
+            self._clear_cancel_selection_state(session)
+            self._reset_intent_attempts(session_id)
+            return await self._update_reservation(
+                db,
+                session_id,
+                message,
+                owner_customer_id,
+            )
+
         if (
             self._is_update_reservation_active(session_payload)
             and not reservation_mutations_blocked
@@ -498,6 +528,23 @@ class AgentOrchestrator:
             IntentClassifier.detect_reservation_intent(message)
             == "cancel_reservation"
         )
+
+    @staticmethod
+    def _clear_update_selection_state(session: dict) -> None:
+        session["update_reservation_stage"] = None
+        session["update_reservation_candidate_references"] = []
+        session["update_reservation_page_cursor"] = None
+        session["update_reservation_page_has_more"] = None
+        session["reservation_reference"] = None
+        session["editing_field"] = None
+
+    @staticmethod
+    def _clear_cancel_selection_state(session: dict) -> None:
+        session["cancel_reservation_stage"] = None
+        session["cancel_reservation_candidate_references"] = []
+        session["cancel_reservation_page_cursor"] = None
+        session["cancel_reservation_page_has_more"] = None
+        session["cancel_reservation_reference"] = None
 
     async def _view_reservations(
         self,
