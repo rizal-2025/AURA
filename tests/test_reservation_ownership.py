@@ -321,7 +321,7 @@ class TestReservationOwnership(unittest.TestCase):
             agent.run(
                 db,
                 "session-a",
-                "RSV_22222222222222222222222222222222",
+                "Ya",
                 "customer-a",
             )
         )
@@ -329,22 +329,20 @@ class TestReservationOwnership(unittest.TestCase):
             agent.run(
                 db,
                 "session-b",
-                "RSV_22222222222222222222222222222222",
+                "Ya",
                 "customer-b",
             )
         )
 
-        self.assertIn("Reservasi dipilih", selected["response"])
-        self.assertEqual(
-            foreign_selection["response"],
-            "Referensi reservasi tidak ditemukan.",
-        )
+        self.assertIn("Field mana", selected["response"])
+        self.assertIn("Field mana", foreign_selection["response"])
         self.assertEqual(
             memory.get_session("session-a")["reservation_reference"],
             "RSV_22222222222222222222222222222222",
         )
-        self.assertIsNone(
-            memory.get_session("session-b").get("reservation_reference")
+        self.assertEqual(
+            memory.get_session("session-b").get("reservation_reference"),
+            "RSV_33333333333333333333333333333333",
         )
 
     def test_legacy_null_record_is_not_exposed_to_view(self):

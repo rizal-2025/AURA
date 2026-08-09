@@ -77,6 +77,35 @@ class ReservationService:
             unit.commit()
         return result
 
+    def list_selectable_reservations(
+        self,
+        db: Session,
+        owner_customer_id,
+        limit: int = 5,
+    ):
+        require_owner_customer_id(owner_customer_id)
+        with UnitOfWork(db) as unit:
+            list_active = getattr(self.repository, "list_active_recent", None)
+            if list_active is None:
+                rows = tuple(
+                    row
+                    for row in self.repository.list_recent(
+                        db,
+                        owner_customer_id=owner_customer_id,
+                        limit=limit,
+                    )
+                    if str(getattr(row, "status", "")).lower() != "cancelled"
+                )
+            else:
+                rows = list_active(
+                    db,
+                    owner_customer_id=owner_customer_id,
+                    limit=limit,
+                )
+            result = tuple(self._dto(row) for row in rows)
+            unit.commit()
+        return result
+
     def list_owner_reservations(
         self,
         db: Session,
@@ -111,6 +140,37 @@ class ReservationService:
                 public_reference,
                 owner_customer_id,
             )
+            result = self._dto(row)
+            unit.commit()
+        return result
+
+    def get_selectable_reservation_by_reference(
+        self,
+        db: Session,
+        public_reference: str,
+        owner_customer_id,
+    ):
+        require_owner_customer_id(owner_customer_id)
+        with UnitOfWork(db) as unit:
+            get_active = getattr(
+                self.repository,
+                "get_active_by_public_reference",
+                None,
+            )
+            if get_active is None:
+                row = self.repository.get_by_public_reference(
+                    db,
+                    public_reference,
+                    owner_customer_id,
+                )
+                if str(getattr(row, "status", "")).lower() == "cancelled":
+                    row = None
+            else:
+                row = get_active(
+                    db,
+                    public_reference,
+                    owner_customer_id,
+                )
             result = self._dto(row)
             unit.commit()
         return result

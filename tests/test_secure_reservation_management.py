@@ -241,16 +241,10 @@ class TestSecureReservationManagement(unittest.TestCase):
 
         self.assertEqual(update_start.status_code, 200)
         self.assertIn("Customer B", update_start.json()["reply"])
-        self.assertEqual(
-            update_attempt.json()["reply"],
-            "Referensi reservasi tidak ditemukan.",
-        )
+        self.assertIn("jawab Ya atau Tidak", update_attempt.json()["reply"])
         self.assertEqual(cancel_start.status_code, 200)
         self.assertIn("Customer B", cancel_start.json()["reply"])
-        self.assertEqual(
-            cancel_attempt.json()["reply"],
-            "Referensi reservasi tidak ditemukan.",
-        )
+        self.assertIn("jawab Ya atau Tidak", cancel_attempt.json()["reply"])
         self.assertEqual(self.service.reservations[1].people, 4)
         self.assertEqual(self.service.reservations[1].status, "pending")
         self.assertEqual(self.service.update_calls, [])
@@ -263,13 +257,13 @@ class TestSecureReservationManagement(unittest.TestCase):
         select_a = self._chat(
             self.customer_a,
             shared_session_id,
-            "RSV_11111111111111111111111111111111",
+            "Ya",
         )
         self._chat(self.customer_b, shared_session_id, "ubah reservasi saya")
         select_b = self._chat(
             self.customer_b,
             shared_session_id,
-            "RSV_22222222222222222222222222222222",
+            "Ya",
         )
 
         state_a = chat_agent.memory_manager.get_session(
@@ -298,7 +292,7 @@ class TestSecureReservationManagement(unittest.TestCase):
         self._chat(
             self.customer_a,
             "shared-update",
-            "RSV_11111111111111111111111111111111",
+            "Ya",
         )
         self._chat(self.customer_a, "separate-update", "ubah reservasi saya")
 
@@ -313,7 +307,10 @@ class TestSecureReservationManagement(unittest.TestCase):
             first_state["reservation_reference"],
             "RSV_11111111111111111111111111111111",
         )
-        self.assertIsNone(second_state.get("reservation_reference"))
+        self.assertEqual(
+            second_state.get("reservation_reference"),
+            "RSV_11111111111111111111111111111111",
+        )
         self.assertNotEqual(
             first_state["update_reservation_stage"],
             second_state["update_reservation_stage"],
@@ -333,11 +330,11 @@ class TestSecureReservationManagement(unittest.TestCase):
 
         self.assertEqual(
             state_a["cancel_reservation_stage"],
-            "select_reservation_reference",
+            "confirm_reservation_selection",
         )
         self.assertEqual(
             state_b["cancel_reservation_stage"],
-            "select_reservation_reference",
+            "confirm_reservation_selection",
         )
         self.assertNotEqual(
             self._memory_key(self.customer_a, shared_session_id),

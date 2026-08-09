@@ -842,6 +842,10 @@ class UpdatePublicationTests(unittest.TestCase):
         )
 
     def _run(self, service):
+        if not hasattr(service, "get_selectable_reservation_by_reference"):
+            service.get_selectable_reservation_by_reference = (
+                lambda *_args, **_kwargs: persisted(51)
+            )
         agent = UpdateReservationAgent(self.memory, service)
         return asyncio.run(agent.run(object(), self.key, "7 orang", self.owner))
 
@@ -860,6 +864,9 @@ class UpdatePublicationTests(unittest.TestCase):
 
     def test_unknown_outcome_clears_actionable_stage_and_preserves_handoff(self):
         class Service:
+            def get_selectable_reservation_by_reference(self, *_args, **_kwargs):
+                return persisted(51)
+
             def update_reservation_field_by_reference(self, *_args, **_kwargs):
                 raise PersistenceOutcomeUnknownError()
 
@@ -890,6 +897,9 @@ class UpdatePublicationTests(unittest.TestCase):
 
     def test_response_failure_after_success_does_not_restore_update_stage(self):
         class Service:
+            def get_selectable_reservation_by_reference(self, *_args, **_kwargs):
+                return persisted(51)
+
             def update_reservation_field_by_reference(self, *_args, **_kwargs):
                 return persisted(51, people=7)
 
@@ -989,6 +999,10 @@ class CancelPublicationTests(unittest.TestCase):
         )
 
     def _run(self, service):
+        if not hasattr(service, "get_selectable_reservation_by_reference"):
+            service.get_selectable_reservation_by_reference = (
+                lambda *_args, **_kwargs: persisted(63)
+            )
         agent = CancelReservationAgent(self.memory, service)
         return asyncio.run(agent.run(object(), self.key, "Ya", self.owner))
 
@@ -1024,12 +1038,18 @@ class CancelPublicationTests(unittest.TestCase):
     def test_success_and_terminal_reconciliation_clear_only_cancel_state(self):
         cases = (
             SimpleNamespace(
+                get_selectable_reservation_by_reference=(
+                    lambda *_args, **_kwargs: persisted(63)
+                ),
                 cancel_reservation_by_reference=lambda *_args, **_kwargs: persisted(
                     63,
                     status="cancelled",
                 )
             ),
             SimpleNamespace(
+                get_selectable_reservation_by_reference=(
+                    lambda *_args, **_kwargs: persisted(63)
+                ),
                 cancel_reservation_by_reference=lambda *_args, **_kwargs: None,
                 get_reservation_by_reference=lambda *_args, **_kwargs: persisted(
                     63,

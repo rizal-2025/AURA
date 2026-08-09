@@ -368,6 +368,7 @@ class PersistedReservationDTOTests(unittest.TestCase):
         )
         service = MagicMock()
         service.list_recent_reservations.return_value = (row,)
+        service.list_selectable_reservations.return_value = (row,)
         owner = uuid4()
 
         view = asyncio.run(
@@ -403,12 +404,22 @@ class CancelReconciliationBoundaryTests(unittest.TestCase):
         )
 
         class Repository:
+            def get_active_by_public_reference(self, db, *_args, **_kwargs):
+                observations.append(("active", db.in_transaction()))
+                db.transaction_active = True
+                return SimpleNamespace(
+                    **{
+                        **vars(cancelled),
+                        "status": "pending",
+                    }
+                )
+
             def cancel_reservation_by_public_reference(self, db, *_args, **_kwargs):
                 db.transaction_active = True
                 return None
 
             def get_by_public_reference(self, db, *_args, **_kwargs):
-                observations.append(db.in_transaction())
+                observations.append(("current", db.in_transaction()))
                 db.transaction_active = True
                 return cancelled
 
@@ -426,12 +437,23 @@ class CancelReconciliationBoundaryTests(unittest.TestCase):
             ReservationService(Repository()),
         )
         result = asyncio.run(agent.run(db, "cancel-key", "Ya", uuid4()))
-        self.assertEqual(observations, [False])
+        self.assertEqual(observations, [("active", False), ("current", False)])
         self.assertIn("sudah dibatalkan", result["response"])
-        self.assertEqual(db.commits, 2)
+        self.assertEqual(db.commits, 3)
 
     def test_secondary_read_persistence_failure_is_not_mapped_to_not_found(self):
         class Repository:
+            def get_active_by_public_reference(self, _db, *_args, **_kwargs):
+                return SimpleNamespace(
+                    id=12,
+                    name="Rizal",
+                    people=4,
+                    date="2026-08-01",
+                    time="19:00",
+                    status="pending",
+                    public_reference="RSV_12121212121212121212121212121212",
+                )
+
             def cancel_reservation_by_public_reference(self, db, *_args, **_kwargs):
                 db.transaction_active = True
                 return None

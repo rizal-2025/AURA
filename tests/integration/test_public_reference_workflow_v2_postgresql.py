@@ -717,12 +717,12 @@ class WorkflowSnapshotV2PostgreSQLTests(unittest.TestCase):
                         blocked = True
                         break
                     poll_pause.wait(timeout=0.01)
-                self.assertTrue(blocked)
             finally:
                 release_holder.set()
             holder_outcome = holder_future.result(timeout=10)
             waiter_outcome = waiter_future.result(timeout=10)
 
+        self.assertTrue(blocked)
         self.assertEqual(holder_outcome, WorkflowV1ConversionOutcome.CONVERTED)
         self.assertEqual(
             waiter_outcome,
@@ -742,6 +742,46 @@ class WorkflowSnapshotV2PostgreSQLTests(unittest.TestCase):
             self.assertEqual(row.payload["reservation_reference"], REFERENCE)
             self.assertNotIn("reservation_id", row.payload)
             self.assertEqual(db.scalar(text("SELECT 1")), 1)
+
+    def test_11_candidate_order_survives_publish_and_restart_restore(self):
+        owner = self._owner()
+        memory_key = f"candidate-order-{uuid4().hex}"
+        candidate_references = [
+            "RSV_" + ("2" * 32),
+            "RSV_" + ("1" * 32),
+        ]
+        first_memory = MemoryManager()
+        first_memory.get_session(memory_key).update(
+            {
+                "update_reservation_stage": "select_reservation_reference",
+                "update_reservation_candidate_references": candidate_references,
+                "reservation_reference": None,
+                "editing_field": None,
+            }
+        )
+        with self.Session() as db:
+            ConversationWorkflowStateService(first_memory).publish(
+                db,
+                owner_customer_id=owner,
+                memory_key=memory_key,
+            )
+
+        restarted_memory = MemoryManager()
+        with self.Session() as db:
+            ConversationWorkflowStateService(restarted_memory).restore(
+                db,
+                owner_customer_id=owner,
+                memory_key=memory_key,
+            )
+        restored = restarted_memory.get_session(memory_key)
+        self.assertEqual(
+            restored["update_reservation_candidate_references"],
+            candidate_references,
+        )
+        self.assertEqual(
+            restored["update_reservation_stage"],
+            "select_reservation_reference",
+        )
 
 
 if __name__ == "__main__":
