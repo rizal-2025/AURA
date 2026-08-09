@@ -1194,6 +1194,38 @@ function Write-AuraOperationLog {
         -Filter 'operations-*.log' -RetentionDays 14 -PreservePath $path
 }
 
+function Assert-AuraSystemReadAccess {
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [switch]$RequireModify
+    )
+    $acl = Get-Acl -LiteralPath $Path
+    $systemAllowed = $false
+    foreach ($rule in $acl.Access) {
+        try {
+            $sid = $rule.IdentityReference.Translate(
+                [Security.Principal.SecurityIdentifier]
+            ).Value
+        } catch { continue }
+        if ($sid -cne 'S-1-5-18') { continue }
+        if ($rule.AccessControlType -eq [Security.AccessControl.AccessControlType]::Deny) {
+            throw 'AURA_SYSTEM_ACCESS_DENIED'
+        }
+        $required = if ($RequireModify) {
+            [Security.AccessControl.FileSystemRights]::Modify
+        } else {
+            [Security.AccessControl.FileSystemRights]::ReadAndExecute
+        }
+        if (($rule.FileSystemRights -band $required) -eq $required) {
+            $systemAllowed = $true
+        }
+    }
+    if (-not $systemAllowed) {
+        if ($RequireModify) { throw 'AURA_SYSTEM_MODIFY_ACCESS_MISSING' }
+        throw 'AURA_SYSTEM_READ_ACCESS_MISSING'
+    }
+}
+
 function Write-AuraCleanupOperationLog {
     param(
         [Parameter(Mandatory)][string]$Profile,
@@ -1223,6 +1255,365 @@ function Write-AuraCleanupOperationLog {
         -Filter 'operations-*.log' -RetentionDays 14 -PreservePath $path
 }
 
+function Get-AuraCleanupActivationPath {
+    param([string]$Profile = 'production')
+    Assert-AuraProfile -Profile $Profile
+    return Join-Path $script:AuraRunRoot "cleanup-activation-$Profile.json"
+}
+
+function Read-AuraCleanupActivationMarker {
+    param([string]$Profile = 'production')
+    $path = Get-AuraCleanupActivationPath -Profile $Profile
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { return $null }
+    $safePath = Assert-AuraPathWithin -Path $path -Root $script:AuraRunRoot
+    Assert-AuraOperatorSecretAcl -Path $safePath
+    $item = Get-Item -LiteralPath $safePath -Force
+    if (
+        $item.Length -lt 1 -or $item.Length -gt 2048 `
+        -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0
+    ) { throw 'AURA_CLEANUP_ACTIVATION_MARKER_INVALID' }
+    try { $document = Get-Content -Raw -LiteralPath $safePath | ConvertFrom-Json } catch {
+        throw 'AURA_CLEANUP_ACTIVATION_MARKER_INVALID'
+    }
+    $expectedProperties = @('activatedAtUtc', 'profile', 'state', 'taskName', 'version')
+    $actualProperties = @($document.PSObject.Properties.Name | Sort-Object)
+    if (
+        (@($actualProperties).Count -ne $expectedProperties.Count) `
+        -or (@(Compare-Object $actualProperties $expectedProperties).Count -ne 0) `
+        -or [string]$document.version -cne '1' `
+        -or [string]$document.profile -cne $Profile `
+        -or [string]$document.state -cne 'active' `
+        -or [string]$document.taskName -cne 'AURA Demo Cleanup'
+    ) { throw 'AURA_CLEANUP_ACTIVATION_MARKER_INVALID' }
+    $activatedAt = [DateTimeOffset]::MinValue
+    if (-not [DateTimeOffset]::TryParseExact(
+        [string]$document.activatedAtUtc,
+        'o',
+        [Globalization.CultureInfo]::InvariantCulture,
+        [Globalization.DateTimeStyles]::RoundtripKind,
+        [ref]$activatedAt
+    )) { throw 'AURA_CLEANUP_ACTIVATION_MARKER_INVALID' }
+    return [PSCustomObject]@{
+        Version = 1
+        Profile = $Profile
+        State = 'active'
+        ActivatedAtUtc = $activatedAt.UtcDateTime
+        TaskName = 'AURA Demo Cleanup'
+        Path = $safePath
+    }
+}
+
+function Write-AuraCleanupActivationMarker {
+    param(
+        [string]$Profile = 'production',
+        [DateTime]$ActivatedAtUtc = [DateTime]::UtcNow
+    )
+    Assert-AuraProductionProfile -Profile $Profile
+    Initialize-AuraDataDirectories
+    Set-AuraOperatorProtectedAcl -Path $script:AuraRunRoot -Container
+    $path = Assert-AuraPathWithin `
+        -Path (Get-AuraCleanupActivationPath -Profile $Profile) `
+        -Root $script:AuraRunRoot
+    if (Test-Path -LiteralPath $path) {
+        throw 'AURA_CLEANUP_ACTIVATION_MARKER_EXISTS'
+    }
+    $tempPath = "$path.$([Guid]::NewGuid().ToString('N')).partial"
+    $payload = [ordered]@{
+        version = 1
+        profile = $Profile
+        state = 'active'
+        activatedAtUtc = $ActivatedAtUtc.ToUniversalTime().ToString('o')
+        taskName = 'AURA Demo Cleanup'
+    } | ConvertTo-Json -Compress
+    $installed = $false
+    try {
+        [IO.File]::WriteAllText($tempPath, $payload, [Text.Encoding]::ASCII)
+        Set-AuraOperatorProtectedAcl -Path $tempPath
+        [IO.File]::Move($tempPath, $path)
+        $installed = $true
+        Assert-AuraOperatorSecretAcl -Path $path
+        return Read-AuraCleanupActivationMarker -Profile $Profile
+    } catch {
+        if ($installed) {
+            Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
+        }
+        throw
+    } finally {
+        Remove-Item -LiteralPath $tempPath -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Remove-AuraCleanupActivationMarker {
+    param([string]$Profile = 'production')
+    $marker = Read-AuraCleanupActivationMarker -Profile $Profile
+    if ($null -eq $marker) { return }
+    Remove-Item -LiteralPath $marker.Path -Force
+    if (Test-Path -LiteralPath $marker.Path) {
+        throw 'AURA_CLEANUP_ACTIVATION_MARKER_REMOVE_FAILED'
+    }
+}
+
+function Get-AuraCleanupTaskArguments {
+    param([Parameter(Mandatory)][string]$CleanupScript)
+    return "-NoProfile -NonInteractive -File `"$CleanupScript`" -Profile production -Mode Execute -Confirmation RUN_AURA_DEMO_CLEANUP"
+}
+
+function New-AuraCleanupTaskXml {
+    param(
+        [Parameter(Mandatory)][string]$PowerShellPath,
+        [Parameter(Mandatory)][string]$CleanupScript,
+        [Parameter(Mandatory)][string]$RepositoryRoot,
+        [bool]$Enabled = $false
+    )
+    $command = [Security.SecurityElement]::Escape([string]$PowerShellPath)
+    $arguments = [Security.SecurityElement]::Escape(
+        (Get-AuraCleanupTaskArguments -CleanupScript $CleanupScript)
+    )
+    $workingDirectory = [Security.SecurityElement]::Escape([string]$RepositoryRoot)
+    $enabledText = ([string]$Enabled).ToLowerInvariant()
+    return @"
+<?xml version="1.0" encoding="UTF-16"?>
+<Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo><Description>Hourly bounded demo cleanup at minute 17.</Description></RegistrationInfo>
+  <Triggers>
+    <CalendarTrigger>
+      <Repetition><Interval>PT1H</Interval><Duration>P1D</Duration><StopAtDurationEnd>false</StopAtDurationEnd></Repetition>
+      <StartBoundary>2024-01-01T00:17:00</StartBoundary>
+      <Enabled>true</Enabled>
+      <ScheduleByDay><DaysInterval>1</DaysInterval></ScheduleByDay>
+    </CalendarTrigger>
+  </Triggers>
+  <Principals>
+    <Principal id="System"><UserId>S-1-5-18</UserId><RunLevel>LeastPrivilege</RunLevel></Principal>
+  </Principals>
+  <Settings>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <StartWhenAvailable>false</StartWhenAvailable>
+    <Enabled>$enabledText</Enabled>
+    <ExecutionTimeLimit>PT20M</ExecutionTimeLimit>
+  </Settings>
+  <Actions Context="System">
+    <Exec><Command>$command</Command><Arguments>$arguments</Arguments><WorkingDirectory>$workingDirectory</WorkingDirectory></Exec>
+  </Actions>
+</Task>
+"@
+}
+
+function Test-AuraCleanupTaskXml {
+    param(
+        [Parameter(Mandatory)][string]$Xml,
+        [Parameter(Mandatory)][string]$PowerShellPath,
+        [Parameter(Mandatory)][string]$CleanupScript,
+        [Parameter(Mandatory)][string]$RepositoryRoot,
+        [Parameter(Mandatory)][bool]$Enabled
+    )
+    try {
+        [xml]$document = $Xml
+        $manager = [Xml.XmlNamespaceManager]::new($document.NameTable)
+        $manager.AddNamespace('t', 'http://schemas.microsoft.com/windows/2004/02/mit/task')
+        function Get-TaskValue([string]$XPath) {
+            $node = $document.SelectSingleNode($XPath, $manager)
+            if ($null -eq $node) { return $null }
+            return [string]$node.InnerText
+        }
+        $expectedEnabled = ([string]$Enabled).ToLowerInvariant()
+        return (
+            (Get-TaskValue '/t:Task/t:Triggers/t:CalendarTrigger/t:Repetition/t:Interval') -ceq 'PT1H' `
+            -and (Get-TaskValue '/t:Task/t:Triggers/t:CalendarTrigger/t:Repetition/t:Duration') -ceq 'P1D' `
+            -and (Get-TaskValue '/t:Task/t:Triggers/t:CalendarTrigger/t:StartBoundary') -ceq '2024-01-01T00:17:00' `
+            -and (Get-TaskValue '/t:Task/t:Triggers/t:CalendarTrigger/t:ScheduleByDay/t:DaysInterval') -ceq '1' `
+            -and (Get-TaskValue '/t:Task/t:Principals/t:Principal/t:UserId') -ceq 'S-1-5-18' `
+            -and $null -eq (Get-TaskValue '/t:Task/t:Principals/t:Principal/t:LogonType') `
+            -and (Get-TaskValue '/t:Task/t:Principals/t:Principal/t:RunLevel') -ceq 'LeastPrivilege' `
+            -and (Get-TaskValue '/t:Task/t:Settings/t:MultipleInstancesPolicy') -ceq 'IgnoreNew' `
+            -and (Get-TaskValue '/t:Task/t:Settings/t:StartWhenAvailable') -ceq 'false' `
+            -and (Get-TaskValue '/t:Task/t:Settings/t:Enabled') -ceq $expectedEnabled `
+            -and (Get-TaskValue '/t:Task/t:Settings/t:ExecutionTimeLimit') -ceq 'PT20M' `
+            -and (Get-TaskValue '/t:Task/t:Actions/t:Exec/t:Command') -ceq $PowerShellPath `
+            -and (Get-TaskValue '/t:Task/t:Actions/t:Exec/t:Arguments') -ceq (Get-AuraCleanupTaskArguments -CleanupScript $CleanupScript) `
+            -and (Get-TaskValue '/t:Task/t:Actions/t:Exec/t:WorkingDirectory') -ceq $RepositoryRoot
+        )
+    } catch { return $false }
+}
+
+function Get-AuraCleanupTaskSnapshot {
+    param(
+        [string]$TaskName = 'AURA Demo Cleanup',
+        [Parameter(Mandatory)][string]$PowerShellPath,
+        [Parameter(Mandatory)][string]$CleanupScript,
+        [Parameter(Mandatory)][string]$RepositoryRoot
+    )
+    $tasks = @(Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue)
+    if ($tasks.Count -eq 0) { return $null }
+    if ($tasks.Count -ne 1) { throw 'AURA_CLEANUP_TASK_IDENTITY_AMBIGUOUS' }
+    $xml = [string](Export-ScheduledTask -TaskName $TaskName -ErrorAction Stop)
+    $disabled = [string]$tasks[0].State -ceq 'Disabled'
+    $matches = Test-AuraCleanupTaskXml -Xml $xml -PowerShellPath $PowerShellPath `
+        -CleanupScript $CleanupScript -RepositoryRoot $RepositoryRoot `
+        -Enabled (-not $disabled)
+    return [PSCustomObject]@{
+        State = [string]$tasks[0].State
+        Disabled = $disabled
+        DefinitionMatches = $matches
+        Xml = $xml
+    }
+}
+
+function Register-AuraCleanupTaskStaged {
+    param(
+        [Parameter(Mandatory)][string]$PowerShellPath,
+        [Parameter(Mandatory)][string]$CleanupScript,
+        [Parameter(Mandatory)][string]$RepositoryRoot,
+        [string]$TaskName = 'AURA Demo Cleanup'
+    )
+    $marker = Read-AuraCleanupActivationMarker -Profile production
+    $existing = Get-AuraCleanupTaskSnapshot -TaskName $TaskName `
+        -PowerShellPath $PowerShellPath -CleanupScript $CleanupScript `
+        -RepositoryRoot $RepositoryRoot
+    if ($null -ne $existing) {
+        if (-not $existing.DefinitionMatches) { throw 'AURA_CLEANUP_TASK_DEFINITION_MISMATCH' }
+        if ($null -ne $marker -and -not $existing.Disabled) {
+            return 'AURA_CLEANUP_TASK_ALREADY_ACTIVE'
+        }
+        if ($null -eq $marker -and $existing.Disabled) {
+            return 'AURA_CLEANUP_TASK_ALREADY_STAGED'
+        }
+        throw 'AURA_CLEANUP_TASK_STATE_MISMATCH'
+    }
+    if ($null -ne $marker) { throw 'AURA_CLEANUP_TASK_EXPECTED_MISSING' }
+
+    $created = $false
+    try {
+        $xml = New-AuraCleanupTaskXml -PowerShellPath $PowerShellPath `
+            -CleanupScript $CleanupScript -RepositoryRoot $RepositoryRoot `
+            -Enabled $false
+        Register-ScheduledTask -TaskName $TaskName -Xml $xml `
+            -ErrorAction Stop | Out-Null
+        $created = $true
+        $staged = Get-AuraCleanupTaskSnapshot -TaskName $TaskName `
+            -PowerShellPath $PowerShellPath -CleanupScript $CleanupScript `
+            -RepositoryRoot $RepositoryRoot
+        if (
+            $null -eq $staged -or -not $staged.Disabled `
+            -or -not $staged.DefinitionMatches
+        ) { throw 'AURA_CLEANUP_TASK_VALIDATION_FAILED' }
+        return 'AURA_CLEANUP_TASK_STAGED_DISABLED'
+    } catch {
+        $failure = $_
+        $removeAttributedArtifact = $created
+        if (-not $removeAttributedArtifact) {
+            try {
+                $partialTask = @(Get-ScheduledTask -TaskName $TaskName `
+                    -ErrorAction SilentlyContinue)
+                if ($partialTask.Count -eq 1) {
+                    $partialXml = [string](Export-ScheduledTask `
+                        -TaskName $TaskName -ErrorAction Stop)
+                    $removeAttributedArtifact = Test-AuraCleanupTaskXml `
+                        -Xml $partialXml -PowerShellPath $PowerShellPath `
+                        -CleanupScript $CleanupScript `
+                        -RepositoryRoot $RepositoryRoot -Enabled $false
+                }
+            } catch { $removeAttributedArtifact = $false }
+        }
+        if ($removeAttributedArtifact) {
+            try {
+                Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false `
+                    -ErrorAction Stop
+            } catch { throw 'AURA_CLEANUP_TASK_REGISTRATION_ROLLBACK_FAILED' }
+        }
+        throw $failure
+    }
+}
+
+function Assert-AuraCleanupActivationWindow {
+    param([DateTime]$NowLocal = [DateTime]::Now)
+    $now = $NowLocal.ToLocalTime()
+    if ($now.Minute -eq 17) { throw 'AURA_CLEANUP_ACTIVATION_WINDOW_UNSAFE' }
+    $next = [DateTime]::new(
+        $now.Year, $now.Month, $now.Day, $now.Hour, 17, 0, $now.Kind
+    )
+    if ($next -le $now) { $next = $next.AddHours(1) }
+    if (($next - $now).TotalMinutes -lt 2) {
+        throw 'AURA_CLEANUP_ACTIVATION_WINDOW_UNSAFE'
+    }
+}
+
+function Enable-AuraCleanupTaskActivation {
+    param(
+        [Parameter(Mandatory)][string]$PowerShellPath,
+        [Parameter(Mandatory)][string]$CleanupScript,
+        [Parameter(Mandatory)][string]$RepositoryRoot,
+        [string]$TaskName = 'AURA Demo Cleanup'
+    )
+    if ($null -ne (Read-AuraCleanupActivationMarker -Profile production)) {
+        throw 'AURA_CLEANUP_ALREADY_ACTIVATED'
+    }
+    $staged = Get-AuraCleanupTaskSnapshot -TaskName $TaskName `
+        -PowerShellPath $PowerShellPath -CleanupScript $CleanupScript `
+        -RepositoryRoot $RepositoryRoot
+    if ($null -eq $staged) { throw 'AURA_CLEANUP_TASK_MISSING' }
+    if (-not $staged.DefinitionMatches -or -not $staged.Disabled) {
+        throw 'AURA_CLEANUP_TASK_NOT_EXACTLY_STAGED'
+    }
+    $enabledByThisAttempt = $false
+    try {
+        Assert-AuraCleanupActivationWindow
+        Enable-ScheduledTask -TaskName $TaskName -ErrorAction Stop | Out-Null
+        $enabledByThisAttempt = $true
+        $enabled = Get-AuraCleanupTaskSnapshot -TaskName $TaskName `
+            -PowerShellPath $PowerShellPath -CleanupScript $CleanupScript `
+            -RepositoryRoot $RepositoryRoot
+        if ($null -eq $enabled -or $enabled.Disabled -or -not $enabled.DefinitionMatches) {
+            throw 'AURA_CLEANUP_TASK_ENABLE_VALIDATION_FAILED'
+        }
+        $null = Write-AuraCleanupActivationMarker -Profile production
+        return 'AURA_CLEANUP_ACTIVATED'
+    } catch {
+        $failure = $_
+        if ($enabledByThisAttempt) {
+            try {
+                Disable-ScheduledTask -TaskName $TaskName -ErrorAction Stop | Out-Null
+                $rolledBack = Get-AuraCleanupTaskSnapshot -TaskName $TaskName `
+                    -PowerShellPath $PowerShellPath -CleanupScript $CleanupScript `
+                    -RepositoryRoot $RepositoryRoot
+                if ($null -eq $rolledBack -or -not $rolledBack.Disabled) {
+                    throw 'AURA_CLEANUP_ACTIVATION_ROLLBACK_FAILED'
+                }
+            } catch { throw 'AURA_CLEANUP_ACTIVATION_ROLLBACK_FAILED' }
+        }
+        throw $failure
+    }
+}
+
+function Disable-AuraCleanupTaskActivation {
+    param(
+        [Parameter(Mandatory)][string]$PowerShellPath,
+        [Parameter(Mandatory)][string]$CleanupScript,
+        [Parameter(Mandatory)][string]$RepositoryRoot,
+        [string]$TaskName = 'AURA Demo Cleanup'
+    )
+    if ($null -eq (Read-AuraCleanupActivationMarker -Profile production)) {
+        throw 'AURA_CLEANUP_NOT_ACTIVATED'
+    }
+    $active = Get-AuraCleanupTaskSnapshot -TaskName $TaskName `
+        -PowerShellPath $PowerShellPath -CleanupScript $CleanupScript `
+        -RepositoryRoot $RepositoryRoot
+    if ($null -eq $active -or $active.Disabled -or -not $active.DefinitionMatches) {
+        throw 'AURA_CLEANUP_TASK_ACTIVE_STATE_INVALID'
+    }
+    Disable-ScheduledTask -TaskName $TaskName -ErrorAction Stop | Out-Null
+    $disabled = Get-AuraCleanupTaskSnapshot -TaskName $TaskName `
+        -PowerShellPath $PowerShellPath -CleanupScript $CleanupScript `
+        -RepositoryRoot $RepositoryRoot
+    if ($null -eq $disabled -or -not $disabled.Disabled -or -not $disabled.DefinitionMatches) {
+        throw 'AURA_CLEANUP_TASK_DISABLE_VALIDATION_FAILED'
+    }
+    Remove-AuraCleanupActivationMarker -Profile production
+    return 'AURA_CLEANUP_DEACTIVATED'
+}
+
 function Get-AuraCleanupHealth {
     param(
         [string]$Profile = 'production',
@@ -1231,23 +1622,55 @@ function Get-AuraCleanupHealth {
         [ValidateRange(1, 168)][int]$StaleAfterHours = 3
     )
     Assert-AuraProfile -Profile $Profile
-    try {
-        $task = Get-ScheduledTask -TaskName $TaskName `
-            -ErrorAction SilentlyContinue
-    } catch {
-        $task = $null
+    $base = [ordered]@{
+        Status = 'CLEANUP_NOT_CONFIGURED'
+        Activated = $false
+        ReadyCompatible = $true
+        LastAttemptAge = 'never'
+        LastDryRunAge = 'never'
+        LastSuccessAge = 'never'
     }
-    if ($null -eq $task -or [string]$task.State -eq 'Disabled') {
-        return [PSCustomObject]@{
-            Status = 'CLEANUP_NOT_CONFIGURED'
-            LastSuccessAge = 'never'
+    try { $marker = Read-AuraCleanupActivationMarker -Profile $Profile } catch {
+        $base.Status = 'CLEANUP_ACTIVATION_INVALID'
+        $base.ReadyCompatible = $false
+        return [PSCustomObject]$base
+    }
+    try {
+        $repositoryRoot = Assert-AuraRepositoryLayout
+        $cleanupScript = Join-Path $PSScriptRoot 'Run-DemoCleanup.ps1'
+        $powerShell = (Get-Command powershell.exe -ErrorAction Stop).Source
+        $task = Get-AuraCleanupTaskSnapshot -TaskName $TaskName `
+            -PowerShellPath $powerShell -CleanupScript $cleanupScript `
+            -RepositoryRoot $repositoryRoot
+    } catch {
+        $task = [PSCustomObject]@{ Disabled = $false; DefinitionMatches = $false }
+    }
+    if ($null -eq $marker) {
+        if ($null -ne $task -and -not $task.Disabled) {
+            $base.Status = 'CLEANUP_ACTIVATION_INCONSISTENT'
+            $base.ReadyCompatible = $false
         }
+        return [PSCustomObject]$base
+    }
+    $base.Activated = $true
+    $base.ReadyCompatible = $false
+    if ($null -eq $task) {
+        $base.Status = 'CLEANUP_TASK_MISSING'
+        return [PSCustomObject]$base
+    }
+    if (-not $task.DefinitionMatches) {
+        $base.Status = 'CLEANUP_TASK_INVALID'
+        return [PSCustomObject]$base
+    }
+    if ($task.Disabled) {
+        $base.Status = 'CLEANUP_TASK_DISABLED'
+        return [PSCustomObject]$base
     }
 
     $records = [System.Collections.Generic.List[object]]::new()
     $pattern = (
         '^timestamp=(?<timestamp>\S+) profile=(?<profile>staging|production) ' +
-        'stage=CLEANUP mode=execute eligible_sessions=\d+ attempted_sessions=\d+ ' +
+        'stage=CLEANUP mode=(?<mode>dry-run|execute) eligible_sessions=\d+ attempted_sessions=\d+ ' +
         'successful_cleanup_count=\d+ failed_cleanup_count=\d+ ' +
         'result=(?<result>success|partial_failure|failure) elapsed_ms=\d+$'
     )
@@ -1266,39 +1689,44 @@ function Get-AuraCleanupHealth {
                 [Globalization.DateTimeStyles]::RoundtripKind,
                 [ref]$timestamp
             )) { continue }
+            if ($timestamp.UtcDateTime -lt $marker.ActivatedAtUtc) { continue }
             $records.Add([PSCustomObject]@{
                 Timestamp = $timestamp.UtcDateTime
+                Mode = $match.Groups['mode'].Value
                 Result = $match.Groups['result'].Value
             })
         }
     }
-    if ($records.Count -eq 0) {
-        return [PSCustomObject]@{
-            Status = 'CLEANUP_NEVER_RAN'
-            LastSuccessAge = 'never'
+    $latestDryRun = $records | Where-Object Mode -eq 'dry-run' |
+        Sort-Object Timestamp -Descending | Select-Object -First 1
+    $executeRecords = @($records | Where-Object Mode -eq 'execute')
+    $latest = $executeRecords | Sort-Object Timestamp -Descending | Select-Object -First 1
+    $latestSuccess = $executeRecords | Where-Object Result -eq 'success' |
+        Sort-Object Timestamp -Descending | Select-Object -First 1
+    function Get-CleanupAge($Record) {
+        if ($null -eq $Record) { return 'never' }
+        if (($NowUtc.ToUniversalTime() - $Record.Timestamp).TotalHours -gt $StaleAfterHours) {
+            return 'stale'
         }
+        return 'fresh'
     }
-
-    $latest = $records | Sort-Object Timestamp -Descending |
-        Select-Object -First 1
+    $base.LastAttemptAge = Get-CleanupAge $latest
+    $base.LastDryRunAge = Get-CleanupAge $latestDryRun
+    $base.LastSuccessAge = Get-CleanupAge $latestSuccess
+    if ($null -eq $latestSuccess) {
+        $base.Status = if ($null -ne $latest) { 'CLEANUP_FAILED' } else { 'CLEANUP_NEVER_RAN' }
+        return [PSCustomObject]$base
+    }
     if ($latest.Result -ne 'success') {
-        $lastSuccessAge = if (
-            @($records | Where-Object Result -eq 'success').Count -eq 0
-        ) { 'never' } else { 'recorded' }
-        return [PSCustomObject]@{
-            Status = 'CLEANUP_FAILED'
-            LastSuccessAge = $lastSuccessAge
-        }
+        $base.Status = 'CLEANUP_FAILED'
+        return [PSCustomObject]$base
     }
-    $age = $NowUtc.ToUniversalTime() - $latest.Timestamp
+    $age = $NowUtc.ToUniversalTime() - $latestSuccess.Timestamp
     if ($age.TotalHours -gt $StaleAfterHours) {
-        return [PSCustomObject]@{
-            Status = 'CLEANUP_STALE'
-            LastSuccessAge = 'stale'
-        }
+        $base.Status = 'CLEANUP_STALE'
+        return [PSCustomObject]$base
     }
-    return [PSCustomObject]@{
-        Status = 'CLEANUP_HEALTHY'
-        LastSuccessAge = 'fresh'
-    }
+    $base.Status = 'CLEANUP_HEALTHY'
+    $base.ReadyCompatible = $true
+    return [PSCustomObject]$base
 }

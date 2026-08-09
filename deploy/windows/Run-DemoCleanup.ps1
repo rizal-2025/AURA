@@ -14,6 +14,7 @@ $attemptedSessions = 0
 $successfulCleanupCount = 0
 $failedCleanupCount = 0
 $operationResult = 'failure'
+$finalExitCode = 1
 $previous = $null
 $dotenvPrevious = [Environment]::GetEnvironmentVariable(
     'AURA_DISABLE_DOTENV',
@@ -86,32 +87,60 @@ try {
     } catch {
         throw 'AURA_CLEANUP_OUTPUT_INVALID'
     }
-    if ($exitCode -ne 0) {
-        if ($payload.code -eq 'DEMO_CLEANUP_PARTIAL_FAILURE') {
-            $operationResult = 'partial_failure'
-            throw 'AURA_CLEANUP_PARTIAL_FAILURE'
-        }
-        throw 'AURA_CLEANUP_FAILED'
-    }
-    if ($payload.status -ne 'ok' -or $payload.mode -ne $operationMode) {
+    if ($exitCode -notin @(0, 1, 2)) {
         throw 'AURA_CLEANUP_OUTPUT_INVALID'
     }
-    $operationResult = 'success'
+    if ($exitCode -eq 0) {
+        if ($payload.status -ne 'ok' -or $payload.mode -ne $operationMode) {
+            throw 'AURA_CLEANUP_OUTPUT_INVALID'
+        }
+        $operationResult = 'success'
+    } elseif ($exitCode -eq 2) {
+        if (
+            $payload.status -cne 'error' `
+            -or $payload.mode -cne $operationMode `
+            -or $payload.code -cne 'DEMO_CLEANUP_PARTIAL_FAILURE'
+        ) {
+            throw 'AURA_CLEANUP_OUTPUT_INVALID'
+        }
+        $operationResult = 'partial_failure'
+    } else {
+        if ($payload.status -cne 'error' -or $payload.mode -cne $operationMode) {
+            throw 'AURA_CLEANUP_OUTPUT_INVALID'
+        }
+        $operationResult = 'failure'
+    }
+    $finalExitCode = $exitCode
+} catch {
+    Write-Error 'AURA_CLEANUP_WRAPPER_FAILED' -ErrorAction Continue
+    $finalExitCode = 1
 } finally {
     $startedAt.Stop()
-    if ($null -ne $previous) {
-        Restore-AuraProcessEnvironment -Previous $previous
+    try {
+        if ($null -ne $previous) {
+            Restore-AuraProcessEnvironment -Previous $previous
+        }
+    } catch { if ($finalExitCode -eq 0) { $finalExitCode = 1 } }
+    try {
+        [Environment]::SetEnvironmentVariable(
+            'AURA_DISABLE_DOTENV',
+            $dotenvPrevious,
+            'Process'
+        )
+    } catch { if ($finalExitCode -eq 0) { $finalExitCode = 1 } }
+    try {
+        if ($locationPushed) { Pop-Location }
+    } catch { if ($finalExitCode -eq 0) { $finalExitCode = 1 } }
+    try {
+        Write-AuraCleanupOperationLog -Profile production `
+            -Mode $operationMode -EligibleSessions $eligibleSessions `
+            -AttemptedSessions $attemptedSessions `
+            -SuccessfulCleanupCount $successfulCleanupCount `
+            -FailedCleanupCount $failedCleanupCount -Result $operationResult `
+            -ElapsedMs ([Math]::Min([int]$startedAt.ElapsedMilliseconds, 3600000))
+    } catch {
+        Write-Error 'AURA_CLEANUP_OPERATION_LOG_FAILED' -ErrorAction Continue
+        if ($finalExitCode -eq 0) { $finalExitCode = 1 }
     }
-    [Environment]::SetEnvironmentVariable(
-        'AURA_DISABLE_DOTENV',
-        $dotenvPrevious,
-        'Process'
-    )
-    if ($locationPushed) { Pop-Location }
-    Write-AuraCleanupOperationLog -Profile production `
-        -Mode $operationMode -EligibleSessions $eligibleSessions `
-        -AttemptedSessions $attemptedSessions `
-        -SuccessfulCleanupCount $successfulCleanupCount `
-        -FailedCleanupCount $failedCleanupCount -Result $operationResult `
-        -ElapsedMs ([Math]::Min([int]$startedAt.ElapsedMilliseconds, 3600000))
 }
+exit $finalExitCode

@@ -20,6 +20,8 @@ EXPECTED_SCRIPTS = {
     "Invoke-AuraProductionBackup.ps1",
     "Test-AuraReadiness.ps1",
     "Run-DemoCleanup.ps1",
+    "Activate-AuraDemoCleanup.ps1",
+    "Deactivate-AuraDemoCleanup.ps1",
     "Backup-DemoDatabase.ps1",
     "Protect-AuraBackup.ps1",
     "Restore-DemoDatabase-Test.ps1",
@@ -134,12 +136,13 @@ class WindowsSelfHostAssetTests(unittest.TestCase):
 
     def test_task_and_firewall_contracts_are_fixed(self):
         tasks = (WINDOWS_ROOT / "Register-AuraTasks.ps1").read_text(encoding="utf-8")
+        common = (WINDOWS_ROOT / "AuraWindows.Common.ps1").read_text(encoding="utf-8")
         firewall = (WINDOWS_ROOT / "Install-AuraFirewallRules.ps1").read_text(encoding="utf-8")
-        self.assertIn("MultipleInstances IgnoreNew", tasks)
+        self.assertIn("<MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>", common)
         self.assertNotIn("AtLogOn", tasks)
         self.assertNotIn("AURA API Production", tasks)
         self.assertNotIn("Start-Aura", tasks)
-        self.assertIn("'00:17'", tasks)
+        self.assertIn("<StartBoundary>2024-01-01T00:17:00</StartBoundary>", common)
         for port in (8000, 8001, 5432):
             self.assertIn(f"-LocalPort {port}", firewall)
         self.assertNotIn("-Action Allow -Protocol TCP -LocalPort", firewall)

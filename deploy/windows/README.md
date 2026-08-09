@@ -29,16 +29,19 @@ five internal demo operations. The full AURA app is never the Funnel target.
    .\Install-AuraFirewallRules.ps1 -Confirmation INSTALL_AURA_FIREWALL_RULES
    ```
 
-5. Maintenance registration is a separate activation gate. Do not run this
+5. Maintenance registration is a separate staging gate. Do not run this
    command during cleanup hardening or dry-run validation:
 
    ```powershell
    .\Register-AuraTasks.ps1
    ```
 
-   When separately authorized, this registers hourly cleanup and daily backup.
-   It does not register AURA or Funnel startup. The cleanup action uses the
-   verified repository root as its explicit Task Scheduler working directory.
+   When separately authorized, this registers daily backup and stages hourly
+   cleanup **disabled**. It does not activate cleanup or register AURA/Funnel
+   startup. The cleanup definition uses Task Scheduler XML, repeats every hour
+   from the fixed local `2024-01-01T00:17:00` boundary, runs as the built-in
+   SYSTEM service account, uses the verified repository root as its working
+   directory, and ignores a new invocation while one is already running.
 
 ## Cleanup hardening contract
 
@@ -70,11 +73,41 @@ operation records for dry-run, success, partial failure, and failure.
 This hardening does not change the two-hour idle expiry, 24-hour absolute
 expiry, revocation eligibility, or the absence of a post-expiry grace period.
 
-`Get-AuraPublicDemoStatus.ps1` reports one of `CLEANUP_NOT_CONFIGURED`,
-`CLEANUP_NEVER_RAN`, `CLEANUP_HEALTHY`, `CLEANUP_STALE`, or `CLEANUP_FAILED`.
-An absent task is intentionally informational and does not degrade status.
-Once installed, an execute success older than three hours is stale, and a later
-failed execute is failed. Dry-runs do not count as successful retention runs.
+`Get-AuraPublicDemoStatus.ps1` reports cleanup activation and health. Before
+activation, no marker plus no task (or the correctly disabled staged task) is
+`CLEANUP_NOT_CONFIGURED` and does not degrade readiness. Activation is a
+separate elevated, exact-confirmation operation:
+
+```powershell
+.\Activate-AuraDemoCleanup.ps1 -Profile production `
+  -Confirmation ACTIVATE_AURA_DEMO_CLEANUP
+```
+
+It verifies the exact disabled definition, SYSTEM access, Production config,
+loopback PostgreSQL, and database readiness; enables and revalidates the task;
+then atomically creates
+`C:\ProgramData\AURA\run\cleanup-activation-production.json`. The marker is
+non-secret schema version 1 metadata containing only profile, active state,
+UTC activation time, and expected task name. If marker creation fails, the
+just-enabled task is disabled again.
+Activation also refuses the scheduled minute and the final two minutes before
+it, leaving enough bounded time to verify enablement and persist the marker
+before the next trigger can start.
+
+After activation, a missing/disabled/mismatched task, no successful execute,
+latest failed execute, or successful execute older than three hours makes
+Production not ready. Status separately reports last execute attempt, last dry-run,
+and last successful execute age; a dry-run never satisfies execute health.
+Intentional deactivation is also explicit and disables/verifies the task before
+removing the marker:
+
+```powershell
+.\Deactivate-AuraDemoCleanup.ps1 -Profile production `
+  -Confirmation DEACTIVATE_AURA_DEMO_CLEANUP
+```
+
+Unexpected task deletion leaves the marker in place and therefore remains an
+actionable `CLEANUP_TASK_MISSING` drift condition.
 
 ## Local PostgreSQL integration tests
 

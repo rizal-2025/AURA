@@ -120,21 +120,34 @@ evidence, and contact the deployment owner.
 ## Manual cleanup
 
 Production cleanup is never part of start. Status reports cleanup configuration
-and health but never invokes cleanup or queries session data. During hardening,
-the scheduled task remains absent and `CLEANUP_NOT_CONFIGURED` is informational.
+and health but never invokes cleanup or queries session data. Before activation,
+no activation marker plus no task (or a correctly staged disabled task) is
+`CLEANUP_NOT_CONFIGURED` and is informational.
 
 Use `Run-DemoCleanup.ps1 -Profile production -Mode DryRun` for the approved
 zero-mutation preview. It reports bounded aggregate eligible-row counts without
 identifiers. Execute mode requires `-Mode Execute -Confirmation
-RUN_AURA_DEMO_CLEANUP`, returns non-zero for any partial or total failure, and
+RUN_AURA_DEMO_CLEANUP`, preserves CLI exits 0/1/2 exactly, and
 must not be used until a separate activation gate authorizes it.
 
 Protected operation logs record timestamp, profile, mode, aggregate session
 eligibility/attempt/success/failure counts, final result, and elapsed time.
-After future task activation, status
-classifies a missing successful execute as `CLEANUP_NEVER_RAN`, a success older
-than three hours as `CLEANUP_STALE`, and the latest failed execute as
-`CLEANUP_FAILED`. Dry-run success does not satisfy execute freshness.
+An authorized `Register-AuraTasks.ps1` run only stages cleanup disabled. Its
+fixed XML definition uses an hourly `PT1H` repetition from local minute 17,
+SYSTEM/ServiceAccount/LeastPrivilege, and `IgnoreNew` overlap handling. A
+separate elevated `Activate-AuraDemoCleanup.ps1` confirmation validates the
+task and prerequisites, enables and revalidates it, then atomically writes the
+non-secret version-1 activation marker under `C:\ProgramData\AURA\run`. Marker
+write failure rolls the enable back. `Deactivate-AuraDemoCleanup.ps1` disables
+and validates first, then removes the marker.
+
+After activation, status classifies task drift as `CLEANUP_TASK_MISSING`,
+`CLEANUP_TASK_DISABLED`, or `CLEANUP_TASK_INVALID`; no successful execute as
+`CLEANUP_NEVER_RAN`; a success older than three hours as `CLEANUP_STALE`; and
+the latest failed/partial execute as `CLEANUP_FAILED`. Each is not-ready.
+The last execute attempt, last dry-run, and last successful execute are tracked
+separately; dry-run success never satisfies execute freshness.
+Unexpected task removal never clears the marker.
 
 Do not register, enable, or execute scheduled cleanup as part of the normal
 start/stop lifecycle.
