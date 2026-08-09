@@ -136,10 +136,13 @@ An authorized `Register-AuraTasks.ps1` run only stages cleanup disabled. Its
 fixed XML definition uses an hourly `PT1H` repetition from local minute 17,
 SYSTEM/ServiceAccount/LeastPrivilege, and `IgnoreNew` overlap handling. A
 separate elevated `Activate-AuraDemoCleanup.ps1` confirmation validates the
-task and prerequisites, enables and revalidates it, then atomically writes the
-non-secret version-1 activation marker under `C:\ProgramData\AURA\run`. Marker
-write failure rolls the enable back. `Deactivate-AuraDemoCleanup.ps1` disables
-and validates first, then removes the marker.
+task and prerequisites, writes a non-secret version-2 `activating` marker under
+`C:\ProgramData\AURA\run`, enables and revalidates the task, then atomically
+transitions the marker to `active`. Execute mode refuses to invoke Python unless
+the marker is `active` and the exact task is enabled, so a scheduled launch
+during transition cannot mutate cleanup data. Enable, validation, or transition
+failure disables the task before removing the marker. `Deactivate-AuraDemoCleanup.ps1`
+disables and validates first, then removes either valid marker state.
 
 After activation, status classifies task drift as `CLEANUP_TASK_MISSING`,
 `CLEANUP_TASK_DISABLED`, or `CLEANUP_TASK_INVALID`; no successful execute as
@@ -148,6 +151,8 @@ the latest failed/partial execute as `CLEANUP_FAILED`. Each is not-ready.
 The last execute attempt, last dry-run, and last successful execute are tracked
 separately; dry-run success never satisfies execute freshness.
 Unexpected task removal never clears the marker.
+An incomplete `activating` state is reported as
+`CLEANUP_ACTIVATION_INCOMPLETE` and is never readiness-compatible.
 
 Do not register, enable, or execute scheduled cleanup as part of the normal
 start/stop lifecycle.

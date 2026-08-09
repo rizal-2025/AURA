@@ -7,7 +7,12 @@ from pathlib import Path
 import shutil
 import subprocess
 import tempfile
+from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
+
+from app.jobs import demo_cleanup
+from app.services.demo_cleanup_service import DemoCleanupSummary
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -24,6 +29,44 @@ def read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
+class _CleanupSuccessService:
+    def __init__(self, **_values):
+        pass
+
+    async def run_once(self, *, batch_size: int) -> DemoCleanupSummary:
+        return DemoCleanupSummary(batch_size, batch_size, 0, 0, 0, 0)
+
+
+class _CleanupTotalFailureService(_CleanupSuccessService):
+    async def run_once(self, *, batch_size: int) -> DemoCleanupSummary:
+        return DemoCleanupSummary(batch_size, 0, 0, 0, batch_size, 0)
+
+
+class _CleanupPartialFailureService(_CleanupSuccessService):
+    async def run_once(self, *, batch_size: int) -> DemoCleanupSummary:
+        return DemoCleanupSummary(batch_size, batch_size - 1, 0, 0, 1, 0)
+
+
+def real_cleanup_payload(service_type: type[_CleanupSuccessService]) -> tuple[int, str]:
+    with (
+        patch.dict(
+            "sys.modules",
+            {"app.db.database": SimpleNamespace(SessionLocal=object())},
+        ),
+        patch(
+            "app.core.config.get_environment_settings",
+            return_value=SimpleNamespace(APP_ENV="demo"),
+        ),
+        patch(
+            "app.services.demo_cleanup_service.DemoCleanupService",
+            service_type,
+        ),
+        patch("builtins.print") as output,
+    ):
+        exit_code = demo_cleanup.main(["--once", "--batch-size", "3"])
+    return exit_code, output.call_args.args[0]
+
+
 class DemoCleanupWindowsStaticTests(unittest.TestCase):
     def test_task_action_has_deterministic_repository_working_directory(self):
         combined = read(TASKS) + read(COMMON)
@@ -38,6 +81,7 @@ class DemoCleanupWindowsStaticTests(unittest.TestCase):
         ordered = (
             "Assert-AuraProductionProfile",
             "AURA_CLEANUP_CONFIRMATION_REQUIRED",
+            "Assert-AuraCleanupExecutionActivated",
             "Assert-AuraRepositoryLayout",
             "Push-Location -LiteralPath $repositoryRoot",
             "Assert-AuraOperatorSecretAcl -Path $configPath",
@@ -74,6 +118,7 @@ class DemoCleanupWindowsStaticTests(unittest.TestCase):
             "CLEANUP_HEALTHY",
             "CLEANUP_STALE",
             "CLEANUP_FAILED",
+            "CLEANUP_ACTIVATION_INCOMPLETE",
             "CLEANUP_TASK_MISSING",
             "CLEANUP_TASK_DISABLED",
         ):
@@ -178,12 +223,17 @@ function Set-AuraOperatorProtectedAcl { param($Path,[switch]$Container) }
 function Assert-AuraOperatorSecretAcl { param($Path) }
 $expected = Join-Path $script:AuraRunRoot 'cleanup-activation-production.json'
 if (Test-Path -LiteralPath $expected) { throw 'preexisting' }
-$written = Write-AuraCleanupActivationMarker -ActivatedAtUtc ([DateTime]'2026-08-09T01:02:03Z')
-if ($written.State -cne 'active' -or $written.TaskName -cne 'AURA Demo Cleanup') { throw 'contents' }
+$written = Write-AuraCleanupActivationMarker -State activating -ActivatedAtUtc ([DateTime]'2026-08-09T01:02:03Z')
+if ($written.Version -ne 2 -or $written.State -cne 'activating' -or $written.TaskName -cne 'AURA Demo Cleanup') { throw 'contents' }
 $raw = Get-Content -Raw -LiteralPath $expected | ConvertFrom-Json
-if ($raw.version -ne 1 -or $raw.profile -cne 'production' -or $raw.activatedAtUtc -cne '2026-08-09T01:02:03.0000000Z') { throw 'schema' }
+if ($raw.version -ne 2 -or $raw.state -cne 'activating' -or $raw.profile -cne 'production' -or $raw.activatedAtUtc -cne '2026-08-09T01:02:03.0000000Z') { throw 'schema' }
+$active = Set-AuraCleanupActivationMarkerActive -ActivatedAtUtc ([DateTime]'2026-08-09T01:03:04Z')
+if ($active.State -cne 'active' -or (Read-AuraCleanupActivationMarker).State -cne 'active') { throw 'transition' }
 Remove-AuraCleanupActivationMarker
 if (Test-Path -LiteralPath $expected) { throw 'remove' }
+[IO.File]::WriteAllText($expected, '{"version":1,"profile":"production","state":"active","activatedAtUtc":"2026-08-09T01:02:03.0000000Z","taskName":"AURA Demo Cleanup"}', [Text.Encoding]::ASCII)
+if ((Read-AuraCleanupActivationMarker).Version -ne 1) { throw 'v1-compatibility' }
+Remove-AuraCleanupActivationMarker
 Write-Output 'MARKER_OK'
 """
             result = self.invoke(body, AURA_TEST_RUN_ROOT=directory)
@@ -207,7 +257,13 @@ $script:Task = [PSCustomObject]@{ Disabled=$false; DefinitionMatches=$true }
 if ((Get-AuraCleanupHealth).Status -ne 'CLEANUP_ACTIVATION_INCONSISTENT') { throw 'pre-enabled' }
 $script:Task = $null
 $now = [DateTime]::UtcNow
+$script:Marker = [PSCustomObject]@{ ActivatedAtUtc=$now.AddHours(-5); State='activating' }
+$script:Task = [PSCustomObject]@{ Disabled=$true; DefinitionMatches=$true }
+if ((Get-AuraCleanupHealth -NowUtc $now).Status -ne 'CLEANUP_ACTIVATION_INCOMPLETE') { throw 'activating-disabled' }
+$script:Task = [PSCustomObject]@{ Disabled=$false; DefinitionMatches=$true }
+if ((Get-AuraCleanupHealth -NowUtc $now).Status -ne 'CLEANUP_ACTIVATION_INCOMPLETE') { throw 'activating-enabled' }
 $script:Marker = [PSCustomObject]@{ ActivatedAtUtc=$now.AddHours(-5); State='active' }
+$script:Task = $null
 if ((Get-AuraCleanupHealth -NowUtc $now).Status -ne 'CLEANUP_TASK_MISSING') { throw 'missing' }
 $script:Task = [PSCustomObject]@{ Disabled=$true; DefinitionMatches=$true }
 if ((Get-AuraCleanupHealth -NowUtc $now).Status -ne 'CLEANUP_TASK_DISABLED') { throw 'disabled' }
@@ -274,25 +330,39 @@ Write-Output 'REGISTRATION_OK'
     def test_activation_marker_order_and_rollback(self):
         body = r"""
 $script:TaskState = 'Disabled'
-$script:Marker = $false
+$script:Marker = $null
 $script:FailEnable = $false
-$script:FailMarker = $false
+$script:FailMarkerCreate = $false
+$script:FailTransition = $false
+$script:FailValidation = $false
 $script:Events = [System.Collections.Generic.List[string]]::new()
-function Read-AuraCleanupActivationMarker { param($Profile) if ($script:Marker) { [PSCustomObject]@{ State='active' } } }
-function Get-AuraCleanupTaskSnapshot { param($TaskName,$PowerShellPath,$CleanupScript,$RepositoryRoot) [PSCustomObject]@{ Disabled=($script:TaskState -eq 'Disabled'); DefinitionMatches=$true } }
+function Read-AuraCleanupActivationMarker { param($Profile) $script:Marker }
+function Get-AuraCleanupTaskSnapshot {
+    param($TaskName,$PowerShellPath,$CleanupScript,$RepositoryRoot)
+    if ($script:TaskState -eq 'Ready') { $script:Events.Add("post-enable-state-$($script:Marker.State)") }
+    [PSCustomObject]@{ Disabled=($script:TaskState -eq 'Disabled'); DefinitionMatches=(-not ($script:FailValidation -and $script:TaskState -eq 'Ready')) }
+}
 function Assert-AuraCleanupActivationWindow { }
 function Enable-ScheduledTask { param($TaskName,$ErrorAction) $script:Events.Add('enable'); if ($script:FailEnable) { throw 'enable-failed' }; $script:TaskState='Ready' }
 function Disable-ScheduledTask { param($TaskName,$ErrorAction) $script:Events.Add('disable'); $script:TaskState='Disabled' }
-function Write-AuraCleanupActivationMarker { param($Profile) $script:Events.Add('marker'); if ($script:FailMarker) { throw 'marker-failed' }; $script:Marker=$true }
+function Write-AuraCleanupActivationMarker { param($Profile,$State) $script:Events.Add('marker-activating'); if ($script:FailMarkerCreate) { throw 'marker-create-failed' }; $script:Marker=[PSCustomObject]@{ State='activating' } }
+function Set-AuraCleanupActivationMarkerActive { param($Profile) $script:Events.Add('marker-active'); if ($script:FailTransition) { throw 'marker-transition-failed' }; $script:Marker=[PSCustomObject]@{ State='active' }; $script:Marker }
+function Remove-AuraCleanupActivationMarker { param($Profile) $script:Events.Add('remove-marker'); $script:Marker=$null }
 $parameters = @{ PowerShellPath='C:\powershell.exe'; CleanupScript='C:\repo\Run-DemoCleanup.ps1'; RepositoryRoot='C:\repo' }
 if ((Enable-AuraCleanupTaskActivation @parameters) -ne 'AURA_CLEANUP_ACTIVATED') { throw 'activate' }
-if (-not $script:Marker -or $script:TaskState -ne 'Ready' -or ($script:Events -join ',') -ne 'enable,marker') { throw 'order' }
-$script:TaskState='Disabled'; $script:Marker=$false; $script:Events.Clear(); $script:FailMarker=$true
-try { Enable-AuraCleanupTaskActivation @parameters; throw 'marker-failure-accepted' } catch { if ($_.Exception.Message -eq 'marker-failure-accepted') { throw } }
-if ($script:Marker -or $script:TaskState -ne 'Disabled' -or ($script:Events -join ',') -ne 'enable,marker,disable') { throw 'marker-rollback' }
-$script:TaskState='Disabled'; $script:Marker=$false; $script:Events.Clear(); $script:FailMarker=$false; $script:FailEnable=$true
+if ($script:Marker.State -ne 'active' -or $script:TaskState -ne 'Ready' -or ($script:Events -join ',') -ne 'marker-activating,enable,post-enable-state-activating,marker-active') { throw 'order' }
+$script:TaskState='Disabled'; $script:Marker=$null; $script:Events.Clear(); $script:FailMarkerCreate=$true
+try { Enable-AuraCleanupTaskActivation @parameters; throw 'marker-create-accepted' } catch { if ($_.Exception.Message -eq 'marker-create-accepted') { throw } }
+if ($null -ne $script:Marker -or $script:TaskState -ne 'Disabled' -or ($script:Events -join ',') -ne 'marker-activating') { throw 'marker-create' }
+$script:TaskState='Disabled'; $script:Marker=$null; $script:Events.Clear(); $script:FailMarkerCreate=$false; $script:FailEnable=$true
 try { Enable-AuraCleanupTaskActivation @parameters; throw 'enable-failure-accepted' } catch { if ($_.Exception.Message -eq 'enable-failure-accepted') { throw } }
-if ($script:Marker -or ($script:Events -join ',') -ne 'enable') { throw 'enable-marker' }
+if ($null -ne $script:Marker -or $script:TaskState -ne 'Disabled' -or ($script:Events -join ',') -ne 'marker-activating,enable,disable,remove-marker') { throw 'enable-rollback' }
+$script:TaskState='Disabled'; $script:Marker=$null; $script:Events.Clear(); $script:FailEnable=$false; $script:FailValidation=$true
+try { Enable-AuraCleanupTaskActivation @parameters; throw 'validation-failure-accepted' } catch { if ($_.Exception.Message -eq 'validation-failure-accepted') { throw } }
+if ($null -ne $script:Marker -or $script:TaskState -ne 'Disabled' -or ($script:Events -join ',') -ne 'marker-activating,enable,post-enable-state-activating,disable,remove-marker') { throw 'validation-rollback' }
+$script:TaskState='Disabled'; $script:Marker=$null; $script:Events.Clear(); $script:FailValidation=$false; $script:FailTransition=$true
+try { Enable-AuraCleanupTaskActivation @parameters; throw 'transition-failure-accepted' } catch { if ($_.Exception.Message -eq 'transition-failure-accepted') { throw } }
+if ($null -ne $script:Marker -or $script:TaskState -ne 'Disabled' -or ($script:Events -join ',') -ne 'marker-activating,enable,post-enable-state-activating,marker-active,disable,remove-marker') { throw 'transition-rollback' }
 Write-Output 'ACTIVATION_OK'
 """
         result = self.invoke(body)
@@ -310,20 +380,45 @@ Write-Output 'ACTIVATION_WINDOW_OK'
         self.assert_ok(result)
         self.assertEqual(result.stdout.strip(), "ACTIVATION_WINDOW_OK")
 
+    def test_execute_guard_requires_active_marker_and_exact_enabled_task(self):
+        body = r"""
+$script:Marker=$null; $script:Task=[PSCustomObject]@{ Disabled=$false; DefinitionMatches=$true }
+function Read-AuraCleanupActivationMarker { param($Profile) $script:Marker }
+function Assert-AuraRepositoryLayout { 'C:\repo' }
+function Get-AuraCleanupTaskSnapshot { param($TaskName,$PowerShellPath,$CleanupScript,$RepositoryRoot) $script:Task }
+try { Assert-AuraCleanupExecutionActivated; throw 'absent-accepted' } catch { if ($_.Exception.Message -eq 'absent-accepted') { throw } }
+$script:Marker=[PSCustomObject]@{ State='activating' }
+try { Assert-AuraCleanupExecutionActivated; throw 'activating-accepted' } catch { if ($_.Exception.Message -eq 'activating-accepted') { throw } }
+$script:Marker=[PSCustomObject]@{ State='active' }
+$script:Task=[PSCustomObject]@{ Disabled=$true; DefinitionMatches=$true }
+try { Assert-AuraCleanupExecutionActivated; throw 'disabled-accepted' } catch { if ($_.Exception.Message -eq 'disabled-accepted') { throw } }
+$script:Task=[PSCustomObject]@{ Disabled=$false; DefinitionMatches=$false }
+try { Assert-AuraCleanupExecutionActivated; throw 'mismatch-accepted' } catch { if ($_.Exception.Message -eq 'mismatch-accepted') { throw } }
+$script:Task=[PSCustomObject]@{ Disabled=$false; DefinitionMatches=$true }
+if ((Assert-AuraCleanupExecutionActivated).State -cne 'active') { throw 'active-rejected' }
+Write-Output 'EXECUTION_GUARD_OK'
+"""
+        result = self.invoke(body)
+        self.assert_ok(result)
+        self.assertEqual(result.stdout.strip(), "EXECUTION_GUARD_OK")
+
     def test_deactivation_disables_before_removing_marker(self):
         body = r"""
-$script:TaskState='Ready'; $script:Marker=$true; $script:Events=[System.Collections.Generic.List[string]]::new()
-function Read-AuraCleanupActivationMarker { param($Profile) if ($script:Marker) { [PSCustomObject]@{ State='active' } } }
+$script:TaskState='Ready'; $script:Marker=[PSCustomObject]@{ State='active' }; $script:Events=[System.Collections.Generic.List[string]]::new()
+function Read-AuraCleanupActivationMarker { param($Profile) $script:Marker }
 function Get-AuraCleanupTaskSnapshot { param($TaskName,$PowerShellPath,$CleanupScript,$RepositoryRoot) [PSCustomObject]@{ Disabled=($script:TaskState -eq 'Disabled'); DefinitionMatches=$true } }
 function Disable-ScheduledTask { param($TaskName,$ErrorAction) $script:Events.Add('disable'); $script:TaskState='Disabled' }
-function Remove-AuraCleanupActivationMarker { param($Profile) $script:Events.Add('remove-marker'); $script:Marker=$false }
+function Remove-AuraCleanupActivationMarker { param($Profile) $script:Events.Add('remove-marker'); $script:Marker=$null }
 $parameters = @{ PowerShellPath='C:\powershell.exe'; CleanupScript='C:\repo\Run-DemoCleanup.ps1'; RepositoryRoot='C:\repo' }
 if ((Disable-AuraCleanupTaskActivation @parameters) -ne 'AURA_CLEANUP_DEACTIVATED') { throw 'deactivate' }
-if ($script:Marker -or $script:TaskState -ne 'Disabled' -or ($script:Events -join ',') -ne 'disable,remove-marker') { throw 'order' }
-$script:Marker=$true
+if ($null -ne $script:Marker -or $script:TaskState -ne 'Disabled' -or ($script:Events -join ',') -ne 'disable,remove-marker') { throw 'order' }
+$script:Marker=[PSCustomObject]@{ State='activating' }; $script:Events.Clear()
+if ((Disable-AuraCleanupTaskActivation @parameters) -ne 'AURA_CLEANUP_DEACTIVATED') { throw 'incomplete-deactivate' }
+if ($null -ne $script:Marker -or ($script:Events -join ',') -ne 'remove-marker') { throw 'incomplete-order' }
+$script:Marker=[PSCustomObject]@{ State='active' }
 function Get-AuraCleanupTaskSnapshot { param($TaskName,$PowerShellPath,$CleanupScript,$RepositoryRoot) $null }
 try { Disable-AuraCleanupTaskActivation @parameters; throw 'missing-accepted' } catch { if ($_.Exception.Message -eq 'missing-accepted') { throw } }
-if (-not $script:Marker) { throw 'drift-hidden' }
+if ($null -eq $script:Marker) { throw 'drift-hidden' }
 Write-Output 'DEACTIVATION_OK'
 """
         result = self.invoke(body)
@@ -337,12 +432,13 @@ Write-Output 'DEACTIVATION_OK'
             (root / "production.conf").write_text("test", encoding="ascii")
             (root / "production.pgpass").write_text("test", encoding="ascii")
             (root / "fake-cleanup.cmd").write_text(
-                "@echo off\r\necho %AURA_TEST_PAYLOAD%\r\nexit /b %AURA_TEST_CHILD_EXIT%\r\n",
+                "@echo off\r\nif defined AURA_TEST_CHILD_SENTINEL echo invoked>\"%AURA_TEST_CHILD_SENTINEL%\"\r\necho %AURA_TEST_PAYLOAD%\r\nexit /b %AURA_TEST_CHILD_EXIT%\r\n",
                 encoding="ascii",
             )
             common = r"""
 $ErrorActionPreference='Stop'
 function Assert-AuraProductionProfile { param($Profile) if ($env:AURA_TEST_PREFLIGHT_FAIL -eq '1') { throw 'preflight' } }
+function Assert-AuraCleanupExecutionActivated { param($Profile) if ($env:AURA_TEST_ACTIVATION_STATE -cne 'active') { throw 'not-active' } }
 function Assert-AuraRepositoryLayout { $PSScriptRoot }
 function Initialize-AuraDataDirectories { }
 function Get-AuraSecretPath { param($Profile) (Join-Path $PSScriptRoot 'production.conf') }
@@ -358,23 +454,54 @@ function Restore-AuraProcessEnvironment { param($Previous) }
 function Write-AuraCleanupOperationLog { param($Profile,$Mode,$EligibleSessions,$AttemptedSessions,$SuccessfulCleanupCount,$FailedCleanupCount,$Result,$ElapsedMs) }
 """
             (root / COMMON.name).write_text(common, encoding="utf-8")
-            payloads = {
-                0: '{"status":"ok","mode":"execute","eligible_sessions":0,"attempted_sessions":0,"successful_cleanup_count":0,"failed_cleanup_count":0}',
-                1: '{"status":"error","mode":"execute","code":"DEMO_CLEANUP_FAILED","eligible_sessions":0,"attempted_sessions":0,"successful_cleanup_count":0,"failed_cleanup_count":0}',
-                2: '{"status":"error","mode":"execute","code":"DEMO_CLEANUP_PARTIAL_FAILURE","eligible_sessions":1,"attempted_sessions":1,"successful_cleanup_count":0,"failed_cleanup_count":1}',
-            }
-            for code, payload in payloads.items():
+            payloads = (
+                real_cleanup_payload(_CleanupSuccessService),
+                real_cleanup_payload(_CleanupTotalFailureService),
+                real_cleanup_payload(_CleanupPartialFailureService),
+            )
+
+            def run_wrapper(code: int, payload: str, **environment: str):
+                return subprocess.run(
+                    ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(root / WRAPPER.name), "-Mode", "Execute", "-Confirmation", "RUN_AURA_DEMO_CLEANUP"],
+                    cwd=root,
+                    env={
+                        **os.environ,
+                        "AURA_TEST_ACTIVATION_STATE": "active",
+                        "AURA_TEST_CHILD_EXIT": str(code),
+                        "AURA_TEST_PAYLOAD": payload,
+                        **environment,
+                    },
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                    check=False,
+                )
+
+            for code, payload in payloads:
                 with self.subTest(code=code):
-                    result = subprocess.run(
-                        ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(root / WRAPPER.name), "-Mode", "Execute", "-Confirmation", "RUN_AURA_DEMO_CLEANUP"],
-                        cwd=root,
-                        env={**os.environ, "AURA_TEST_CHILD_EXIT": str(code), "AURA_TEST_PAYLOAD": payload},
-                        capture_output=True,
-                        text=True,
-                        timeout=30,
-                        check=False,
-                    )
+                    result = run_wrapper(code, payload)
                     self.assertEqual(result.returncode, code, result.stdout + result.stderr)
+            malformed_payloads = (
+                (0, "not-json"),
+                (0, '{"status":"unknown","mode":"execute","eligible_sessions":0,"attempted_sessions":0,"successful_cleanup_count":0,"failed_cleanup_count":0}'),
+                (0, '{"status":"ok","mode":"execute","eligible_sessions":0,"attempted_sessions":0,"successful_cleanup_count":0}'),
+                (0, '{"status":"ok","mode":"execute","eligible_sessions":"0","attempted_sessions":0,"successful_cleanup_count":0,"failed_cleanup_count":0}'),
+                (2, payloads[0][1]),
+            )
+            for child_code, payload in malformed_payloads:
+                with self.subTest(malformed_child_code=child_code, payload=payload):
+                    result = run_wrapper(child_code, payload)
+                    self.assertNotEqual(result.returncode, 0)
+
+            sentinel = root / "child-invoked.txt"
+            transition = run_wrapper(
+                0,
+                payloads[0][1],
+                AURA_TEST_ACTIVATION_STATE="activating",
+                AURA_TEST_CHILD_SENTINEL=str(sentinel),
+            )
+            self.assertNotEqual(transition.returncode, 0)
+            self.assertFalse(sentinel.exists(), transition.stdout + transition.stderr)
             failed = subprocess.run(
                 ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(root / WRAPPER.name)],
                 cwd=root,

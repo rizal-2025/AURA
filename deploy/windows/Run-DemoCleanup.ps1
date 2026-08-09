@@ -27,6 +27,9 @@ try {
     if ($Mode -eq 'Execute' -and $Confirmation -cne 'RUN_AURA_DEMO_CLEANUP') {
         throw 'AURA_CLEANUP_CONFIRMATION_REQUIRED'
     }
+    if ($Mode -eq 'Execute') {
+        $null = Assert-AuraCleanupExecutionActivated -Profile production
+    }
 
     $repositoryRoot = Assert-AuraRepositoryLayout
     Push-Location -LiteralPath $repositoryRoot
@@ -72,18 +75,25 @@ try {
     Write-Output $rendered
     try {
         $payload = $rendered | ConvertFrom-Json -ErrorAction Stop
-        if ($null -ne $payload.eligible_sessions) {
-            $eligibleSessions = [int]$payload.eligible_sessions
+        $counts = @{}
+        foreach ($name in @(
+            'eligible_sessions', 'attempted_sessions',
+            'successful_cleanup_count', 'failed_cleanup_count'
+        )) {
+            $property = $payload.PSObject.Properties[$name]
+            if ($null -eq $property -or $property.Value -isnot [int]) {
+                throw 'AURA_CLEANUP_OUTPUT_INVALID'
+            }
+            $value = [int]$property.Value
+            if ($value -lt 0 -or $value -gt 500) {
+                throw 'AURA_CLEANUP_OUTPUT_INVALID'
+            }
+            $counts[$name] = $value
         }
-        if ($null -ne $payload.successful_cleanup_count) {
-            $successfulCleanupCount = [int]$payload.successful_cleanup_count
-        }
-        if ($null -ne $payload.attempted_sessions) {
-            $attemptedSessions = [int]$payload.attempted_sessions
-        }
-        if ($null -ne $payload.failed_cleanup_count) {
-            $failedCleanupCount = [int]$payload.failed_cleanup_count
-        }
+        $eligibleSessions = $counts['eligible_sessions']
+        $attemptedSessions = $counts['attempted_sessions']
+        $successfulCleanupCount = $counts['successful_cleanup_count']
+        $failedCleanupCount = $counts['failed_cleanup_count']
     } catch {
         throw 'AURA_CLEANUP_OUTPUT_INVALID'
     }
@@ -91,13 +101,17 @@ try {
         throw 'AURA_CLEANUP_OUTPUT_INVALID'
     }
     if ($exitCode -eq 0) {
-        if ($payload.status -ne 'ok' -or $payload.mode -ne $operationMode) {
+        if (
+            $payload.status -cne 'ok' `
+            -or $payload.mode -cne $operationMode `
+            -or $null -ne $payload.PSObject.Properties['code']
+        ) {
             throw 'AURA_CLEANUP_OUTPUT_INVALID'
         }
         $operationResult = 'success'
     } elseif ($exitCode -eq 2) {
         if (
-            $payload.status -cne 'error' `
+            $payload.status -cne 'failed' `
             -or $payload.mode -cne $operationMode `
             -or $payload.code -cne 'DEMO_CLEANUP_PARTIAL_FAILURE'
         ) {
@@ -105,7 +119,11 @@ try {
         }
         $operationResult = 'partial_failure'
     } else {
-        if ($payload.status -cne 'error' -or $payload.mode -cne $operationMode) {
+        if (
+            $payload.status -cne 'failed' `
+            -or $payload.mode -cne $operationMode `
+            -or $payload.code -cne 'DEMO_CLEANUP_FAILED'
+        ) {
             throw 'AURA_CLEANUP_OUTPUT_INVALID'
         }
         $operationResult = 'failure'

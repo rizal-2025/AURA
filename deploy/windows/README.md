@@ -84,12 +84,16 @@ separate elevated, exact-confirmation operation:
 ```
 
 It verifies the exact disabled definition, SYSTEM access, Production config,
-loopback PostgreSQL, and database readiness; enables and revalidates the task;
-then atomically creates
+loopback PostgreSQL, and database readiness; atomically writes an `activating`
+marker; enables and revalidates the task; then atomically transitions the marker
+to `active` at
 `C:\ProgramData\AURA\run\cleanup-activation-production.json`. The marker is
-non-secret schema version 1 metadata containing only profile, active state,
-UTC activation time, and expected task name. If marker creation fails, the
-just-enabled task is disabled again.
+non-secret schema version 2 metadata containing only profile, activation state,
+UTC state timestamp, and expected task name. Execute mode requires a valid
+`active` marker and the exact enabled task before Python can run, so a task that
+fires while activation is incomplete fails without cleanup mutation. If enable,
+validation, or marker transition fails, the task is disabled before the marker
+is removed; failed rollback leaves a detectable incomplete state.
 Activation also refuses the scheduled minute and the final two minutes before
 it, leaving enough bounded time to verify enablement and persist the marker
 before the next trigger can start.
@@ -98,6 +102,7 @@ After activation, a missing/disabled/mismatched task, no successful execute,
 latest failed execute, or successful execute older than three hours makes
 Production not ready. Status separately reports last execute attempt, last dry-run,
 and last successful execute age; a dry-run never satisfies execute health.
+An `activating` marker is always `CLEANUP_ACTIVATION_INCOMPLETE` and not ready.
 Intentional deactivation is also explicit and disables/verifies the task before
 removing the marker:
 

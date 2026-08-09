@@ -138,6 +138,7 @@ class DemoCleanupJobTests(unittest.TestCase):
             result = demo_cleanup.main(["--once", "--batch-size", "3"])
         self.assertEqual(result, 2)
         rendered = output.call_args.args[0]
+        self.assertIn('"status": "failed"', rendered)
         self.assertIn("DEMO_CLEANUP_PARTIAL_FAILURE", rendered)
         self.assertIn('"successful_cleanup_count": 2', rendered)
         self.assertIn('"failed_cleanup_count": 1', rendered)
@@ -161,6 +162,7 @@ class DemoCleanupJobTests(unittest.TestCase):
             result = demo_cleanup.main(["--once", "--batch-size", "3"])
         self.assertEqual(result, 1)
         rendered = output.call_args.args[0]
+        self.assertIn('"status": "failed"', rendered)
         self.assertIn("DEMO_CLEANUP_FAILED", rendered)
         self.assertIn('"successful_cleanup_count": 0', rendered)
         self.assertIn('"failed_cleanup_count": 3', rendered)
@@ -176,6 +178,21 @@ class DemoCleanupJobTests(unittest.TestCase):
             result = demo_cleanup.main(["--once"])
         self.assertEqual(result, 1)
         self.assertIn("DEMO_CLEANUP_FAILED", output.call_args.args[0])
+
+    def test_dry_run_failure_uses_canonical_failed_payload(self):
+        with (
+            patch(
+                "app.core.config.get_environment_settings",
+                return_value=SimpleNamespace(APP_ENV="production"),
+            ),
+            patch("builtins.print") as output,
+        ):
+            result = demo_cleanup.main(["--once", "--dry-run"])
+        self.assertEqual(result, 1)
+        rendered = output.call_args.args[0]
+        self.assertIn('"status": "failed"', rendered)
+        self.assertIn('"mode": "dry-run"', rendered)
+        self.assertIn('"code": "DEMO_CLEANUP_FAILED"', rendered)
 
     def test_invalid_batch_size_is_nonzero(self):
         with patch("builtins.print") as output:
