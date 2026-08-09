@@ -77,6 +77,8 @@ _UPDATE_KEYS_V2 = frozenset(
         "reservation_reference",
         "editing_field",
         "update_reservation_candidate_references",
+        "update_reservation_page_cursor",
+        "update_reservation_page_has_more",
     }
 )
 _CANCEL_KEYS_V2 = frozenset(
@@ -84,12 +86,22 @@ _CANCEL_KEYS_V2 = frozenset(
         "cancel_reservation_stage",
         "cancel_reservation_reference",
         "cancel_reservation_candidate_references",
+        "cancel_reservation_page_cursor",
+        "cancel_reservation_page_has_more",
     }
 )
-_UPDATE_KEYS_V2_LEGACY = _UPDATE_KEYS_V2 - {
+_UPDATE_KEYS_V2_PRE_PAGINATION = _UPDATE_KEYS_V2 - {
+    "update_reservation_page_cursor",
+    "update_reservation_page_has_more",
+}
+_CANCEL_KEYS_V2_PRE_PAGINATION = _CANCEL_KEYS_V2 - {
+    "cancel_reservation_page_cursor",
+    "cancel_reservation_page_has_more",
+}
+_UPDATE_KEYS_V2_LEGACY = _UPDATE_KEYS_V2_PRE_PAGINATION - {
     "update_reservation_candidate_references"
 }
-_CANCEL_KEYS_V2_LEGACY = _CANCEL_KEYS_V2 - {
+_CANCEL_KEYS_V2_LEGACY = _CANCEL_KEYS_V2_PRE_PAGINATION - {
     "cancel_reservation_candidate_references"
 }
 _BLOCKER_KEYS = frozenset({RESERVATION_PERSISTENCE_STATE})
@@ -330,8 +342,13 @@ def _validated_update_v2(
     canonicalize_trusted_input: bool,
 ) -> dict[str, Any]:
     payload_keys = set(payload)
-    if payload_keys not in {_UPDATE_KEYS_V2, _UPDATE_KEYS_V2_LEGACY}:
+    if payload_keys not in {
+        _UPDATE_KEYS_V2,
+        _UPDATE_KEYS_V2_PRE_PAGINATION,
+        _UPDATE_KEYS_V2_LEGACY,
+    }:
         raise _validation_error()
+    has_pagination = payload_keys == _UPDATE_KEYS_V2
     stage = payload.get("update_reservation_stage")
     if type(stage) is not str or stage not in UPDATE_STAGES_V2:
         raise _validation_error()
@@ -345,7 +362,32 @@ def _validated_update_v2(
         payload.get("update_reservation_candidate_references", []),
         canonicalize_trusted_input=canonicalize_trusted_input,
     )
-    if stage == "select_reservation_reference":
+    page_cursor = _validate_reference(
+        payload.get("update_reservation_page_cursor"),
+        optional=True,
+        canonicalize_trusted_input=canonicalize_trusted_input,
+    )
+    page_has_more = payload.get("update_reservation_page_has_more", False)
+    if has_pagination and type(page_has_more) is not bool:
+        raise _validation_error()
+    if not has_pagination:
+        page_cursor = None
+        page_has_more = False
+
+    if stage == "select_reservation_reference" and has_pagination:
+        if (
+            reservation_reference is not None
+            or editing_field is not None
+            or not 1 <= len(candidate_references) <= MAX_RESERVATION_CANDIDATES
+            or (page_cursor is None and len(candidate_references) == 1)
+            or page_cursor in candidate_references
+            or (
+                page_has_more
+                and len(candidate_references) != MAX_RESERVATION_CANDIDATES
+            )
+        ):
+            raise _validation_error()
+    elif stage == "select_reservation_reference":
         if (
             reservation_reference is not None
             or editing_field is not None
@@ -357,6 +399,8 @@ def _validated_update_v2(
             len(candidate_references) != 1
             or reservation_reference != candidate_references[0]
             or editing_field is not None
+            or page_cursor is not None
+            or page_has_more
         ):
             raise _validation_error()
     elif stage == "select_field":
@@ -364,12 +408,16 @@ def _validated_update_v2(
             reservation_reference is None
             or editing_field is not None
             or candidate_references
+            or page_cursor is not None
+            or page_has_more
         ):
             raise _validation_error()
     elif (
         reservation_reference is None
         or editing_field is None
         or candidate_references
+        or page_cursor is not None
+        or page_has_more
     ):
         raise _validation_error()
     validated = {
@@ -377,8 +425,11 @@ def _validated_update_v2(
         "reservation_reference": reservation_reference,
         "editing_field": editing_field,
     }
-    if payload_keys == _UPDATE_KEYS_V2:
+    if "update_reservation_candidate_references" in payload_keys:
         validated["update_reservation_candidate_references"] = candidate_references
+    if has_pagination:
+        validated["update_reservation_page_cursor"] = page_cursor
+        validated["update_reservation_page_has_more"] = page_has_more
     return validated
 
 
@@ -388,8 +439,13 @@ def _validated_cancel_v2(
     canonicalize_trusted_input: bool,
 ) -> dict[str, Any]:
     payload_keys = set(payload)
-    if payload_keys not in {_CANCEL_KEYS_V2, _CANCEL_KEYS_V2_LEGACY}:
+    if payload_keys not in {
+        _CANCEL_KEYS_V2,
+        _CANCEL_KEYS_V2_PRE_PAGINATION,
+        _CANCEL_KEYS_V2_LEGACY,
+    }:
         raise _validation_error()
+    has_pagination = payload_keys == _CANCEL_KEYS_V2
     stage = payload.get("cancel_reservation_stage")
     if type(stage) is not str or stage not in CANCEL_STAGES_V2:
         raise _validation_error()
@@ -402,23 +458,57 @@ def _validated_cancel_v2(
         payload.get("cancel_reservation_candidate_references", []),
         canonicalize_trusted_input=canonicalize_trusted_input,
     )
-    if stage == "select_reservation_reference":
+    page_cursor = _validate_reference(
+        payload.get("cancel_reservation_page_cursor"),
+        optional=True,
+        canonicalize_trusted_input=canonicalize_trusted_input,
+    )
+    page_has_more = payload.get("cancel_reservation_page_has_more", False)
+    if has_pagination and type(page_has_more) is not bool:
+        raise _validation_error()
+    if not has_pagination:
+        page_cursor = None
+        page_has_more = False
+
+    if stage == "select_reservation_reference" and has_pagination:
+        if (
+            reservation_reference is not None
+            or not 1 <= len(candidate_references) <= MAX_RESERVATION_CANDIDATES
+            or (page_cursor is None and len(candidate_references) == 1)
+            or page_cursor in candidate_references
+            or (
+                page_has_more
+                and len(candidate_references) != MAX_RESERVATION_CANDIDATES
+            )
+        ):
+            raise _validation_error()
+    elif stage == "select_reservation_reference":
         if reservation_reference is not None or len(candidate_references) == 1:
             raise _validation_error()
     elif stage == "confirm_reservation_selection":
         if (
             len(candidate_references) != 1
             or reservation_reference != candidate_references[0]
+            or page_cursor is not None
+            or page_has_more
         ):
             raise _validation_error()
-    elif reservation_reference is None or candidate_references:
+    elif (
+        reservation_reference is None
+        or candidate_references
+        or page_cursor is not None
+        or page_has_more
+    ):
         raise _validation_error()
     validated = {
         "cancel_reservation_stage": stage,
         "cancel_reservation_reference": reservation_reference,
     }
-    if payload_keys == _CANCEL_KEYS_V2:
+    if "cancel_reservation_candidate_references" in payload_keys:
         validated["cancel_reservation_candidate_references"] = candidate_references
+    if has_pagination:
+        validated["cancel_reservation_page_cursor"] = page_cursor
+        validated["cancel_reservation_page_has_more"] = page_has_more
     return validated
 
 
@@ -551,30 +641,56 @@ def capture_reservation_workflow_snapshot_v2(
         raise _validation_error()
 
     if update_stage is not None:
-        return build_workflow_snapshot_v2(
-            {
-                "update_reservation_stage": update_stage,
-                "reservation_reference": state.get("reservation_reference"),
-                "editing_field": state.get("editing_field"),
-                "update_reservation_candidate_references": list(
-                    state.get("update_reservation_candidate_references") or []
-                ),
-            },
-        )
+        update_payload = {
+            "update_reservation_stage": update_stage,
+            "reservation_reference": state.get("reservation_reference"),
+            "editing_field": state.get("editing_field"),
+            "update_reservation_candidate_references": list(
+                state.get("update_reservation_candidate_references") or []
+            ),
+        }
+        if (
+            state.get("update_reservation_page_cursor") is not None
+            or state.get("update_reservation_page_has_more") is not None
+        ):
+            update_payload.update(
+                {
+                    "update_reservation_page_cursor": state.get(
+                        "update_reservation_page_cursor"
+                    ),
+                    "update_reservation_page_has_more": state.get(
+                        "update_reservation_page_has_more"
+                    ),
+                }
+            )
+        return build_workflow_snapshot_v2(update_payload)
     if cancel_stage is not None:
         if state.get("editing_field") is not None:
             raise _validation_error()
-        return build_workflow_snapshot_v2(
-            {
-                "cancel_reservation_stage": cancel_stage,
-                "cancel_reservation_reference": state.get(
-                    "cancel_reservation_reference"
-                ),
-                "cancel_reservation_candidate_references": list(
-                    state.get("cancel_reservation_candidate_references") or []
-                ),
-            },
-        )
+        cancel_payload = {
+            "cancel_reservation_stage": cancel_stage,
+            "cancel_reservation_reference": state.get(
+                "cancel_reservation_reference"
+            ),
+            "cancel_reservation_candidate_references": list(
+                state.get("cancel_reservation_candidate_references") or []
+            ),
+        }
+        if (
+            state.get("cancel_reservation_page_cursor") is not None
+            or state.get("cancel_reservation_page_has_more") is not None
+        ):
+            cancel_payload.update(
+                {
+                    "cancel_reservation_page_cursor": state.get(
+                        "cancel_reservation_page_cursor"
+                    ),
+                    "cancel_reservation_page_has_more": state.get(
+                        "cancel_reservation_page_has_more"
+                    ),
+                }
+            )
+        return build_workflow_snapshot_v2(cancel_payload)
 
     if state.get("intent") == "reservation" and not completed:
         return build_workflow_snapshot_v2(

@@ -109,6 +109,20 @@ class ReservationRepository:
         owner_customer_id,
         limit: int = 5,
     ):
+        return self.list_active_page(
+            db,
+            owner_customer_id=owner_customer_id,
+            after_public_reference=None,
+            limit=limit,
+        )
+
+    def list_active_page(
+        self,
+        db: Session,
+        owner_customer_id,
+        after_public_reference: str | None,
+        limit: int = 5,
+    ):
         require_owner_customer_id(owner_customer_id)
         if (
             isinstance(limit, bool)
@@ -116,12 +130,25 @@ class ReservationRepository:
             or not 1 <= limit <= 50
         ):
             raise ValueError("Reservation list limit must be between 1 and 50.")
-        return (
-            db.query(Reservation)
-            .filter(
-                Reservation.owner_customer_id == owner_customer_id,
-                func.lower(Reservation.status) != "cancelled",
+        query = db.query(Reservation).filter(
+            Reservation.owner_customer_id == owner_customer_id,
+            func.lower(Reservation.status) != "cancelled",
+        )
+        if after_public_reference is not None:
+            canonical_cursor = canonicalize_public_reference(
+                after_public_reference
             )
+            cursor_id = (
+                db.query(Reservation.id)
+                .filter(
+                    Reservation.owner_customer_id == owner_customer_id,
+                    Reservation.public_reference == canonical_cursor,
+                )
+                .scalar_subquery()
+            )
+            query = query.filter(Reservation.id < cursor_id)
+        return (
+            query
             .order_by(Reservation.id.desc())
             .limit(limit)
             .all()

@@ -29,6 +29,7 @@ from app.services.conversation_workflow_state_service import (
     ConversationWorkflowStateService,
     WorkflowV1ConversionOutcome,
 )
+from app.services.reservation.service import ReservationService
 from migrations.add_conversation_workflow_states import (
     migrate as migrate_workflow_v1,
 )
@@ -750,11 +751,14 @@ class WorkflowSnapshotV2PostgreSQLTests(unittest.TestCase):
             "RSV_" + ("2" * 32),
             "RSV_" + ("1" * 32),
         ]
+        page_cursor = "RSV_" + ("3" * 32)
         first_memory = MemoryManager()
         first_memory.get_session(memory_key).update(
             {
                 "update_reservation_stage": "select_reservation_reference",
                 "update_reservation_candidate_references": candidate_references,
+                "update_reservation_page_cursor": page_cursor,
+                "update_reservation_page_has_more": False,
                 "reservation_reference": None,
                 "editing_field": None,
             }
@@ -781,6 +785,65 @@ class WorkflowSnapshotV2PostgreSQLTests(unittest.TestCase):
         self.assertEqual(
             restored["update_reservation_stage"],
             "select_reservation_reference",
+        )
+        self.assertEqual(restored["update_reservation_page_cursor"], page_cursor)
+        self.assertFalse(restored["update_reservation_page_has_more"])
+
+    def test_12_selectable_keyset_pages_reach_all_rows_without_remapping(self):
+        owner = self._owner()
+        inserted = []
+        with self.Session.begin() as db:
+            for index in range(10):
+                row = Reservation(
+                    owner_customer_id=owner,
+                    public_reference=f"RSV_{uuid4().hex}",
+                    name=f"Page {index}",
+                    people=index + 1,
+                    date="2026-08-15",
+                    time="19:00",
+                    status="pending",
+                )
+                db.add(row)
+                db.flush()
+                inserted.append((row.id, row.public_reference))
+
+        service = ReservationService()
+        with self.Session() as db:
+            first = service.list_selectable_reservation_page(
+                db,
+                owner_customer_id=owner,
+                page_size=5,
+            )
+        self.assertTrue(first.has_more)
+        self.assertEqual(
+            [row.id for row in first.reservations],
+            [identifier for identifier, _reference in reversed(inserted[5:])],
+        )
+
+        with self.Session.begin() as db:
+            db.add(
+                Reservation(
+                    owner_customer_id=owner,
+                    public_reference=f"RSV_{uuid4().hex}",
+                    name="Created after first page",
+                    people=2,
+                    date="2026-08-16",
+                    time="20:00",
+                    status="pending",
+                )
+            )
+
+        with self.Session() as db:
+            second = service.list_selectable_reservation_page(
+                db,
+                owner_customer_id=owner,
+                after_public_reference=first.reservations[-1].reference,
+                page_size=5,
+            )
+        self.assertFalse(second.has_more)
+        self.assertEqual(
+            [row.id for row in second.reservations],
+            [identifier for identifier, _reference in reversed(inserted[:5])],
         )
 
 

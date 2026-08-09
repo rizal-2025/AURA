@@ -5,7 +5,10 @@ from app.core.input_validation import validate_reservation_field
 from app.db.repositories.reservation_repository import ReservationRepository
 from app.schemas.reservation import ReservationCreate
 from app.core.unit_of_work import UnitOfWork
-from app.services.reservation.dto import PersistedReservationDTO
+from app.services.reservation.dto import (
+    PersistedReservationDTO,
+    ReservationSelectionPage,
+)
 from app.services.reservation.public_reference import (
     require_canonical_public_reference,
 )
@@ -83,26 +86,70 @@ class ReservationService:
         owner_customer_id,
         limit: int = 5,
     ):
+        return self.list_selectable_reservation_page(
+            db,
+            owner_customer_id=owner_customer_id,
+            after_public_reference=None,
+            page_size=limit,
+        ).reservations
+
+    def list_selectable_reservation_page(
+        self,
+        db: Session,
+        owner_customer_id,
+        *,
+        after_public_reference: str | None = None,
+        page_size: int = 5,
+    ) -> ReservationSelectionPage:
         require_owner_customer_id(owner_customer_id)
+        if (
+            isinstance(page_size, bool)
+            or not isinstance(page_size, int)
+            or not 1 <= page_size <= 5
+        ):
+            raise ValueError("Reservation page size must be between 1 and 5.")
         with UnitOfWork(db) as unit:
-            list_active = getattr(self.repository, "list_active_recent", None)
-            if list_active is None:
-                rows = tuple(
-                    row
-                    for row in self.repository.list_recent(
-                        db,
-                        owner_customer_id=owner_customer_id,
-                        limit=limit,
+            list_page = getattr(self.repository, "list_active_page", None)
+            if list_page is None:
+                if after_public_reference is not None:
+                    rows = ()
+                else:
+                    list_active = getattr(
+                        self.repository,
+                        "list_active_recent",
+                        None,
                     )
-                    if str(getattr(row, "status", "")).lower() != "cancelled"
-                )
+                    if list_active is not None:
+                        rows = list_active(
+                            db,
+                            owner_customer_id=owner_customer_id,
+                            limit=page_size + 1,
+                        )
+                    else:
+                        rows = tuple(
+                            row
+                            for row in self.repository.list_recent(
+                                db,
+                                owner_customer_id=owner_customer_id,
+                                limit=page_size + 1,
+                            )
+                            if str(getattr(row, "status", "")).lower()
+                            != "cancelled"
+                        )
             else:
-                rows = list_active(
+                rows = list_page(
                     db,
                     owner_customer_id=owner_customer_id,
-                    limit=limit,
+                    after_public_reference=after_public_reference,
+                    limit=page_size + 1,
                 )
-            result = tuple(self._dto(row) for row in rows)
+            has_more = len(rows) > page_size
+            result = ReservationSelectionPage(
+                reservations=tuple(
+                    self._dto(row) for row in rows[:page_size]
+                ),
+                has_more=has_more,
+            )
             unit.commit()
         return result
 

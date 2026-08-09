@@ -27,6 +27,8 @@ INDONESIAN_MONTHS = (
     "Nov",
     "Des",
 )
+NEXT_PAGE_COMMAND = "berikutnya"
+FIRST_PAGE_COMMAND = "awal"
 
 
 @dataclass(frozen=True)
@@ -42,6 +44,11 @@ def parse_reservation_selection(
     """Resolve a displayed number or a backwards-compatible public reference."""
 
     normalized = value.strip() if isinstance(value, str) else ""
+    command = " ".join(normalized.casefold().split())
+    if command == NEXT_PAGE_COMMAND:
+        return ReservationSelection("next_page")
+    if command == FIRST_PAGE_COMMAND:
+        return ReservationSelection("first_page")
     if re.fullmatch(r"[+-]?\d+", normalized):
         choice = int(normalized)
         if 1 <= choice <= len(candidate_references):
@@ -73,6 +80,41 @@ def format_numbered_reservations(reservations) -> str:
         f"{index}. {_format_date(reservation.date)} · "
         f"{_format_time(reservation.time)} · {reservation.people} orang"
         for index, reservation in enumerate(reservations, start=1)
+    )
+
+
+def format_paginated_selection(
+    reservations,
+    *,
+    has_more: bool,
+    is_later_page: bool,
+) -> str:
+    count = len(reservations)
+    if is_later_page:
+        heading = "Reservasi lainnya:"
+    elif has_more:
+        heading = "Saya menemukan beberapa reservasi:"
+    else:
+        heading = f"Saya menemukan {count} reservasi:"
+
+    if not has_more and not is_later_page:
+        guidance = f"Pilih reservasi: 1 sampai {count}."
+    else:
+        guidance_lines = [f"Ketik 1 sampai {count} untuk memilih."]
+        if has_more:
+            guidance_lines.append(
+                f'Ketik "{NEXT_PAGE_COMMAND}" untuk melihat reservasi lainnya.'
+            )
+        if is_later_page:
+            guidance_lines.append(
+                f'Ketik "{FIRST_PAGE_COMMAND}" untuk kembali ke daftar awal.'
+            )
+        guidance = "\n".join(guidance_lines)
+
+    return (
+        f"{heading}\n\n"
+        f"{format_numbered_reservations(reservations)}\n\n"
+        f"{guidance}"
     )
 
 

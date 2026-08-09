@@ -533,6 +533,8 @@ class AgentOrchestrator:
     def _clear_update_selection_state(session: dict) -> None:
         session["update_reservation_stage"] = None
         session["update_reservation_candidate_references"] = []
+        session["update_reservation_page_cursor"] = None
+        session["update_reservation_page_has_more"] = None
         session["reservation_reference"] = None
         session["editing_field"] = None
 
@@ -540,6 +542,8 @@ class AgentOrchestrator:
     def _clear_cancel_selection_state(session: dict) -> None:
         session["cancel_reservation_stage"] = None
         session["cancel_reservation_candidate_references"] = []
+        session["cancel_reservation_page_cursor"] = None
+        session["cancel_reservation_page_has_more"] = None
         session["cancel_reservation_reference"] = None
 
     async def _view_reservations(

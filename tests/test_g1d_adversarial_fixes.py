@@ -33,7 +33,10 @@ from app.services.handoff.notification_outbox_service import (
     NotificationOutboxService,
 )
 from app.services.authenticated_chat_service import AuthenticatedChatService
-from app.services.reservation.dto import PersistedReservationDTO
+from app.services.reservation.dto import (
+    PersistedReservationDTO,
+    ReservationSelectionPage,
+)
 from app.services.reservation.service import ReservationService
 
 
@@ -369,6 +372,9 @@ class PersistedReservationDTOTests(unittest.TestCase):
         service = MagicMock()
         service.list_recent_reservations.return_value = (row,)
         service.list_selectable_reservations.return_value = (row,)
+        service.list_selectable_reservation_page.return_value = (
+            ReservationSelectionPage((row,), False)
+        )
         owner = uuid4()
 
         view = asyncio.run(

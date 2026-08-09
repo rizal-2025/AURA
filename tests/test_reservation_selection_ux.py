@@ -51,6 +51,35 @@ class SelectionService:
         )
         return tuple(sorted(rows, key=lambda row: row.id, reverse=True)[:limit])
 
+    def list_selectable_reservation_page(
+        self,
+        _db,
+        owner_customer_id,
+        *,
+        after_public_reference=None,
+        page_size=5,
+    ):
+        rows = sorted(
+            (
+                row
+                for row in self.rows.values()
+                if row.owner_customer_id == owner_customer_id
+                and row.status.lower() != "cancelled"
+            ),
+            key=lambda row: row.id,
+            reverse=True,
+        )
+        if after_public_reference is not None:
+            cursor = self.rows.get(after_public_reference)
+            if cursor is None or cursor.owner_customer_id != owner_customer_id:
+                rows = []
+            else:
+                rows = [row for row in rows if row.id < cursor.id]
+        return SimpleNamespace(
+            reservations=tuple(rows[:page_size]),
+            has_more=len(rows) > page_size,
+        )
+
     def get_selectable_reservation_by_reference(
         self,
         _db,
@@ -184,6 +213,127 @@ class ReservationSelectionUxTests(unittest.TestCase):
                 self.assertEqual(state["update_reservation_stage"], agent.SELECT_FIELD)
                 self.assertEqual(service.update_calls, [])
 
+    def test_update_five_reservations_remain_one_bounded_page(self):
+        memory, _service, agent = self.update_agent(
+            [reservation(index) for index in range(1, 6)]
+        )
+        start = self.send(agent, "u-five", "ubah reservasi")
+        state = memory.get_session("u-five")
+        self.assertEqual(
+            state["update_reservation_candidate_references"],
+            [reference_for(index) for index in range(5, 0, -1)],
+        )
+        self.assertFalse(state["update_reservation_page_has_more"])
+        self.assertNotIn("berikutnya", start["response"])
+
+    def test_update_sixth_reservation_is_reachable_and_updated_normally(self):
+        rows = [reservation(index) for index in range(1, 7)]
+        memory, service, agent = self.update_agent(rows)
+        start = self.send(agent, "u-six", "ubah reservasi")
+        self.assertIn("berikutnya", start["response"])
+        self.assertEqual(
+            memory.get_session("u-six")["update_reservation_candidate_references"],
+            [reference_for(index) for index in range(6, 1, -1)],
+        )
+
+        later = self.send(agent, "u-six", "berikutnya")
+        self.assertIn('"awal"', later["response"])
+        self.assertEqual(
+            memory.get_session("u-six")["update_reservation_candidate_references"],
+            [reference_for(1)],
+        )
+        self.send(agent, "u-six", "1")
+        self.send(agent, "u-six", "people")
+        updated = self.send(agent, "u-six", "12")
+        self.assertEqual(updated["status"], "updated")
+        self.assertEqual(
+            service.update_calls,
+            [(reference_for(1), "people", 12)],
+        )
+
+    def test_update_ten_reservations_are_all_reachable_across_pages(self):
+        rows = [reservation(index) for index in range(1, 11)]
+        memory, service, agent = self.update_agent(rows)
+        self.send(agent, "u-ten", "ubah reservasi")
+        first_page = list(
+            memory.get_session("u-ten")["update_reservation_candidate_references"]
+        )
+        self.send(agent, "u-ten", "berikutnya")
+        second_page = list(
+            memory.get_session("u-ten")["update_reservation_candidate_references"]
+        )
+        self.assertEqual(
+            first_page + second_page,
+            [reference_for(index) for index in range(10, 0, -1)],
+        )
+        self.send(agent, "u-ten", "5")
+        repeated = self.send(agent, "u-ten", "5")
+        self.assertTrue(repeated["invalid_input"])
+        self.assertEqual(service.update_calls, [])
+        self.send(agent, "u-ten", "people")
+        self.send(agent, "u-ten", "11")
+        self.assertEqual(
+            service.update_calls,
+            [(reference_for(1), "people", 11)],
+        )
+
+    def test_update_page_navigation_restart_stale_owner_and_reset_are_safe(self):
+        foreign = reservation(7, owner=OTHER_OWNER)
+        rows = [reservation(index) for index in range(1, 7)] + [foreign]
+        memory, service, agent = self.update_agent(rows)
+        self.send(agent, "u-nav", "ubah reservasi")
+        self.send(agent, "u-nav", "berikutnya")
+        later_state = memory.get_session("u-nav")
+        self.assertEqual(
+            later_state["update_reservation_candidate_references"],
+            [reference_for(1)],
+        )
+        self.assertNotIn(foreign.reference, later_state["update_reservation_candidate_references"])
+        invalid = self.send(agent, "u-nav", "lanjut saja")
+        self.assertTrue(invalid["invalid_input"])
+        self.assertEqual(
+            memory.get_session("u-nav")["update_reservation_candidate_references"],
+            [reference_for(1)],
+        )
+
+        snapshot = capture_reservation_workflow_snapshot_v2(memory, "u-nav")
+        restored_memory = MemoryManager()
+        restored_memory.replace_reservation_workflow_state(
+            "u-restored",
+            decode_workflow_snapshot_v2(snapshot.materialize()).materialize(),
+        )
+        restored_agent = UpdateReservationAgent(restored_memory, service)
+        self.send(restored_agent, "u-restored", "1")
+        self.assertEqual(
+            restored_memory.get_session("u-restored")["reservation_reference"],
+            reference_for(1),
+        )
+
+        returned = self.send(agent, "u-nav", "awal")
+        self.assertIn("berikutnya", returned["response"])
+        self.assertEqual(
+            memory.get_session("u-nav")["update_reservation_candidate_references"],
+            [reference_for(index) for index in range(6, 1, -1)],
+        )
+        self.send(agent, "u-nav", "berikutnya")
+        no_next = self.send(agent, "u-nav", "berikutnya")
+        self.assertIn("Tidak ada reservasi berikutnya", no_next["response"])
+        self.assertEqual(
+            memory.get_session("u-nav")["update_reservation_candidate_references"],
+            [reference_for(1)],
+        )
+
+        service.rows[reference_for(1)].status = "cancelled"
+        stale = self.send(agent, "u-nav", "1")
+        self.assertIn("tidak lagi tersedia", stale["response"])
+        self.assertEqual(service.update_calls, [])
+
+        service.rows[reference_for(1)].status = "pending"
+        memory.clear_session("u-nav")
+        reset = self.send(agent, "u-nav", "ubah reservasi")
+        self.assertIn("berikutnya", reset["response"])
+        self.assertIsNone(memory.get_session("u-nav")["update_reservation_page_cursor"])
+
     def test_update_multiple_rejects_invalid_choices_without_mutation(self):
         memory, service, agent = self.update_agent([reservation(1), reservation(2)])
         self.send(agent, "u-invalid", "ubah reservasi")
@@ -222,6 +372,34 @@ class ReservationSelectionUxTests(unittest.TestCase):
             [reference_for(2), reference_for(1)],
         )
 
+    def test_pre_pagination_selection_snapshot_refreshes_before_input_mapping(self):
+        legacy_payload = {
+            "update_reservation_stage": "select_reservation_reference",
+            "reservation_reference": None,
+            "editing_field": None,
+            "update_reservation_candidate_references": [
+                reference_for(2),
+                reference_for(1),
+            ],
+        }
+        memory = MemoryManager()
+        memory.replace_reservation_workflow_state(
+            "u-pre-pagination",
+            decode_workflow_snapshot_v2(legacy_payload).materialize(),
+        )
+        service = SelectionService(
+            [reservation(index) for index in range(1, 7)]
+        )
+        agent = UpdateReservationAgent(memory, service)
+        refreshed = self.send(agent, "u-pre-pagination", "2")
+        state = memory.get_session("u-pre-pagination")
+        self.assertIn("berikutnya", refreshed["response"])
+        self.assertIsNone(state["reservation_reference"])
+        self.assertEqual(
+            state["update_reservation_candidate_references"],
+            [reference_for(index) for index in range(6, 1, -1)],
+        )
+
     def test_candidate_codec_rejects_duplicates_overflow_and_bad_references(self):
         base = {
             "update_reservation_stage": "select_reservation_reference",
@@ -242,6 +420,57 @@ class ReservationSelectionUxTests(unittest.TestCase):
                             "update_reservation_candidate_references": candidates,
                         }
                     )
+
+    def test_candidate_codec_rejects_malformed_pagination_state(self):
+        candidates = [reference_for(index) for index in range(6, 1, -1)]
+        base = {
+            "update_reservation_stage": "select_reservation_reference",
+            "reservation_reference": None,
+            "editing_field": None,
+            "update_reservation_candidate_references": candidates,
+            "update_reservation_page_cursor": None,
+            "update_reservation_page_has_more": True,
+        }
+        invalid = (
+            {**base, "update_reservation_page_has_more": "yes"},
+            {**base, "update_reservation_page_cursor": "RSV_invalid"},
+            {
+                **base,
+                "update_reservation_page_cursor": candidates[0],
+            },
+            {
+                **base,
+                "update_reservation_candidate_references": candidates[:2],
+            },
+            {
+                **base,
+                "update_reservation_candidate_references": [],
+                "update_reservation_page_has_more": False,
+            },
+        )
+        for payload in invalid:
+            with self.subTest(payload=payload):
+                with self.assertRaises(ConversationMemoryValidationError):
+                    build_workflow_snapshot_v2(payload)
+
+        cancel_base = {
+            "cancel_reservation_stage": "select_reservation_reference",
+            "cancel_reservation_reference": None,
+            "cancel_reservation_candidate_references": candidates,
+            "cancel_reservation_page_cursor": None,
+            "cancel_reservation_page_has_more": True,
+        }
+        for payload in (
+            {**cancel_base, "cancel_reservation_page_has_more": 1},
+            {**cancel_base, "cancel_reservation_page_cursor": candidates[0]},
+            {
+                **cancel_base,
+                "cancel_reservation_candidate_references": candidates[:3],
+            },
+        ):
+            with self.subTest(payload=payload):
+                with self.assertRaises(ConversationMemoryValidationError):
+                    build_workflow_snapshot_v2(payload)
 
     def test_reset_midway_discards_selection_and_restart_rebuilds_it(self):
         memory, _service, agent = self.update_agent([reservation(1), reservation(2)])
@@ -298,6 +527,89 @@ class ReservationSelectionUxTests(unittest.TestCase):
         )
         self.assertEqual(service.cancel_calls, [])
 
+    def test_cancel_five_six_and_ten_are_bounded_and_reachable(self):
+        memory, _service, agent = self.cancel_agent(
+            [reservation(index) for index in range(1, 6)]
+        )
+        five = self.send(agent, "c-five", "batalkan reservasi")
+        self.assertNotIn("berikutnya", five["response"])
+        self.assertEqual(
+            len(memory.get_session("c-five")["cancel_reservation_candidate_references"]),
+            5,
+        )
+
+        for count, choice, expected in ((6, "1", 1), (10, "5", 1)):
+            with self.subTest(count=count):
+                rows = [reservation(index) for index in range(1, count + 1)]
+                memory, service, agent = self.cancel_agent(rows)
+                session_id = f"c-{count}"
+                start = self.send(agent, session_id, "batalkan reservasi")
+                self.assertIn("berikutnya", start["response"])
+                first_page = list(
+                    memory.get_session(session_id)[
+                        "cancel_reservation_candidate_references"
+                    ]
+                )
+                self.send(agent, session_id, "berikutnya")
+                second_page = list(
+                    memory.get_session(session_id)[
+                        "cancel_reservation_candidate_references"
+                    ]
+                )
+                self.assertEqual(
+                    first_page + second_page,
+                    [reference_for(index) for index in range(count, 0, -1)],
+                )
+                selected = self.send(agent, session_id, choice)
+                self.assertIn("Yakin ingin membatalkan", selected["response"])
+                self.assertEqual(service.cancel_calls, [])
+                repeated = self.send(agent, session_id, choice)
+                self.assertIn("Yakin ingin membatalkan", repeated["response"])
+                self.assertEqual(service.cancel_calls, [])
+                cancelled = self.send(agent, session_id, "Ya")
+                self.assertEqual(cancelled["status"], "cancelled")
+                self.assertEqual(service.cancel_calls, [reference_for(expected)])
+
+    def test_cancel_later_page_restart_stale_owner_return_and_reset_are_safe(self):
+        foreign = reservation(7, owner=OTHER_OWNER)
+        rows = [reservation(index) for index in range(1, 7)] + [foreign]
+        memory, service, agent = self.cancel_agent(rows)
+        self.send(agent, "c-nav", "batalkan reservasi")
+        self.send(agent, "c-nav", "berikutnya")
+        state = memory.get_session("c-nav")
+        self.assertEqual(
+            state["cancel_reservation_candidate_references"],
+            [reference_for(1)],
+        )
+        self.assertNotIn(foreign.reference, state["cancel_reservation_candidate_references"])
+
+        snapshot = capture_reservation_workflow_snapshot_v2(memory, "c-nav")
+        restored_memory = MemoryManager()
+        restored_memory.replace_reservation_workflow_state(
+            "c-restored",
+            decode_workflow_snapshot_v2(snapshot.materialize()).materialize(),
+        )
+        restored_agent = CancelReservationAgent(restored_memory, service)
+        self.send(restored_agent, "c-restored", "1")
+        self.assertEqual(
+            restored_memory.get_session("c-restored")["cancel_reservation_reference"],
+            reference_for(1),
+        )
+
+        returned = self.send(agent, "c-nav", "awal")
+        self.assertIn("berikutnya", returned["response"])
+        self.send(agent, "c-nav", "berikutnya")
+        service.rows[reference_for(1)].status = "cancelled"
+        stale = self.send(agent, "c-nav", "1")
+        self.assertIn("tidak lagi tersedia", stale["response"])
+        self.assertEqual(service.cancel_calls, [])
+
+        service.rows[reference_for(1)].status = "pending"
+        memory.clear_session("c-nav")
+        reset = self.send(agent, "c-nav", "batalkan reservasi")
+        self.assertIn("berikutnya", reset["response"])
+        self.assertIsNone(memory.get_session("c-nav")["cancel_reservation_page_cursor"])
+
         memory, service, agent = self.cancel_agent([reservation(1), reservation(2), foreign])
         self.send(agent, "c-stale", "batalkan reservasi")
         service.rows[reference_for(2)].status = "cancelled"
@@ -318,7 +630,7 @@ class ReservationSelectionUxTests(unittest.TestCase):
         )
 
     def test_intent_switching_clears_incompatible_selection_state(self):
-        rows = [reservation(1), reservation(2)]
+        rows = [reservation(index) for index in range(1, 7)]
         service = SelectionService(rows)
         orchestrator = AgentOrchestrator()
         orchestrator.update_reservation_agent = UpdateReservationAgent(
@@ -331,6 +643,7 @@ class ReservationSelectionUxTests(unittest.TestCase):
         )
         session_id = "switch"
         self.send(orchestrator.update_reservation_agent, session_id, "ubah reservasi")
+        self.send(orchestrator.update_reservation_agent, session_id, "berikutnya")
         result = asyncio.run(
             orchestrator._handle_authenticated(
                 session_id,
@@ -340,13 +653,16 @@ class ReservationSelectionUxTests(unittest.TestCase):
             )
         )
         state = orchestrator.memory_manager.get_session(session_id)
-        self.assertIn("Pilih reservasi", result.reply)
+        self.assertIn("berikutnya", result.reply)
         self.assertIsNone(state["update_reservation_stage"])
         self.assertEqual(state["update_reservation_candidate_references"], [])
+        self.assertIsNone(state["update_reservation_page_cursor"])
+        self.assertIsNone(state["update_reservation_page_has_more"])
         self.assertEqual(
             state["cancel_reservation_stage"],
             CancelReservationAgent.SELECT_RESERVATION_REFERENCE,
         )
+        self.send(orchestrator.cancel_reservation_agent, session_id, "berikutnya")
 
         result = asyncio.run(
             orchestrator._handle_authenticated(
@@ -357,9 +673,11 @@ class ReservationSelectionUxTests(unittest.TestCase):
             )
         )
         state = orchestrator.memory_manager.get_session(session_id)
-        self.assertIn("Pilih reservasi", result.reply)
+        self.assertIn("berikutnya", result.reply)
         self.assertIsNone(state["cancel_reservation_stage"])
         self.assertEqual(state["cancel_reservation_candidate_references"], [])
+        self.assertIsNone(state["cancel_reservation_page_cursor"])
+        self.assertIsNone(state["cancel_reservation_page_has_more"])
         self.assertEqual(
             state["update_reservation_stage"],
             UpdateReservationAgent.SELECT_RESERVATION_REFERENCE,

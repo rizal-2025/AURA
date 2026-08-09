@@ -17,3 +17,9 @@ class PersistedReservationDTO:
     time: str
     status: str
     reference: str | None = None
+
+
+@dataclass(frozen=True)
+class ReservationSelectionPage:
+    reservations: tuple[PersistedReservationDTO, ...]
+    has_more: bool
