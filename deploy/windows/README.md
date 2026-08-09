@@ -29,14 +29,52 @@ five internal demo operations. The full AURA app is never the Funnel target.
    .\Install-AuraFirewallRules.ps1 -Confirmation INSTALL_AURA_FIREWALL_RULES
    ```
 
-5. Optionally register maintenance only:
+5. Maintenance registration is a separate activation gate. Do not run this
+   command during cleanup hardening or dry-run validation:
 
    ```powershell
    .\Register-AuraTasks.ps1
    ```
 
-   This registers hourly cleanup and daily backup. It does not register AURA
-   or Funnel startup.
+   When separately authorized, this registers hourly cleanup and daily backup.
+   It does not register AURA or Funnel startup. The cleanup action uses the
+   verified repository root as its explicit Task Scheduler working directory.
+
+## Cleanup hardening contract
+
+The cleanup wrapper is Production-only, defaults to a zero-mutation dry-run,
+and validates the repository layout, secret ACLs, exact Production database
+target, loopback PostgreSQL listener, and schema readiness before invoking the
+Python job.
+
+Preview bounded aggregate counts while Production remains offline:
+
+```powershell
+.\Run-DemoCleanup.ps1 -Profile production -Mode DryRun
+```
+
+Dry-run uses the same bounded expired-session eligibility query as execute mode
+and reports counts only. It does not print session, customer, token, or database
+identifiers. Execute mode requires the exact non-secret confirmation token and
+must not be used until a separate activation gate authorizes it:
+
+```powershell
+.\Run-DemoCleanup.ps1 -Profile production -Mode Execute `
+  -Confirmation RUN_AURA_DEMO_CLEANUP
+```
+
+Each session is still deleted in its own transaction. A failed session rolls
+back completely while independent candidates may continue; any such partial
+failure makes the job exit non-zero. Cleanup writes protected aggregate
+operation records for dry-run, success, partial failure, and failure.
+This hardening does not change the two-hour idle expiry, 24-hour absolute
+expiry, revocation eligibility, or the absence of a post-expiry grace period.
+
+`Get-AuraPublicDemoStatus.ps1` reports one of `CLEANUP_NOT_CONFIGURED`,
+`CLEANUP_NEVER_RAN`, `CLEANUP_HEALTHY`, `CLEANUP_STALE`, or `CLEANUP_FAILED`.
+An absent task is intentionally informational and does not degrade status.
+Once installed, an execute success older than three hours is stale, and a later
+failed execute is failed. Dry-runs do not count as successful retention runs.
 
 ## Local PostgreSQL integration tests
 

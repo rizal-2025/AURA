@@ -1193,3 +1193,112 @@ function Write-AuraOperationLog {
     Remove-AuraExpiredFiles -Root $script:AuraLogRoot `
         -Filter 'operations-*.log' -RetentionDays 14 -PreservePath $path
 }
+
+function Write-AuraCleanupOperationLog {
+    param(
+        [Parameter(Mandatory)][string]$Profile,
+        [Parameter(Mandatory)][ValidateSet('dry-run', 'execute')][string]$Mode,
+        [Parameter(Mandatory)][ValidateRange(0, 500)][int]$EligibleSessions,
+        [Parameter(Mandatory)][ValidateRange(0, 500)][int]$AttemptedSessions,
+        [Parameter(Mandatory)][ValidateRange(0, 500)][int]$SuccessfulCleanupCount,
+        [Parameter(Mandatory)][ValidateRange(0, 500)][int]$FailedCleanupCount,
+        [Parameter(Mandatory)][ValidateSet('success', 'partial_failure', 'failure')]
+        [string]$Result,
+        [ValidateRange(0, 3600000)][int]$ElapsedMs = 0
+    )
+    Assert-AuraProfile -Profile $Profile
+    Initialize-AuraDataDirectories
+    $day = [DateTime]::UtcNow.ToString('yyyyMMdd')
+    $path = Join-Path $script:AuraLogRoot "operations-$day.log"
+    $line = (
+        'timestamp={0} profile={1} stage=CLEANUP mode={2} ' +
+        'eligible_sessions={3} attempted_sessions={4} ' +
+        'successful_cleanup_count={5} failed_cleanup_count={6} ' +
+        'result={7} elapsed_ms={8}'
+    ) -f [DateTime]::UtcNow.ToString('o'), $Profile, $Mode, `
+        $EligibleSessions, $AttemptedSessions, $SuccessfulCleanupCount, `
+        $FailedCleanupCount, $Result, $ElapsedMs
+    Add-Content -LiteralPath $path -Value $line -Encoding ascii
+    Remove-AuraExpiredFiles -Root $script:AuraLogRoot `
+        -Filter 'operations-*.log' -RetentionDays 14 -PreservePath $path
+}
+
+function Get-AuraCleanupHealth {
+    param(
+        [string]$Profile = 'production',
+        [string]$TaskName = 'AURA Demo Cleanup',
+        [DateTime]$NowUtc = [DateTime]::UtcNow,
+        [ValidateRange(1, 168)][int]$StaleAfterHours = 3
+    )
+    Assert-AuraProfile -Profile $Profile
+    try {
+        $task = Get-ScheduledTask -TaskName $TaskName `
+            -ErrorAction SilentlyContinue
+    } catch {
+        $task = $null
+    }
+    if ($null -eq $task -or [string]$task.State -eq 'Disabled') {
+        return [PSCustomObject]@{
+            Status = 'CLEANUP_NOT_CONFIGURED'
+            LastSuccessAge = 'never'
+        }
+    }
+
+    $records = [System.Collections.Generic.List[object]]::new()
+    $pattern = (
+        '^timestamp=(?<timestamp>\S+) profile=(?<profile>staging|production) ' +
+        'stage=CLEANUP mode=execute eligible_sessions=\d+ attempted_sessions=\d+ ' +
+        'successful_cleanup_count=\d+ failed_cleanup_count=\d+ ' +
+        'result=(?<result>success|partial_failure|failure) elapsed_ms=\d+$'
+    )
+    foreach ($file in Get-ChildItem -LiteralPath $script:AuraLogRoot -File `
+        -Filter 'operations-*.log' -ErrorAction SilentlyContinue) {
+        foreach ($line in Get-Content -LiteralPath $file.FullName `
+            -ErrorAction SilentlyContinue) {
+            $match = [regex]::Match([string]$line, $pattern)
+            if (-not $match.Success -or $match.Groups['profile'].Value -cne $Profile) {
+                continue
+            }
+            $timestamp = [DateTimeOffset]::MinValue
+            if (-not [DateTimeOffset]::TryParse(
+                $match.Groups['timestamp'].Value,
+                [Globalization.CultureInfo]::InvariantCulture,
+                [Globalization.DateTimeStyles]::RoundtripKind,
+                [ref]$timestamp
+            )) { continue }
+            $records.Add([PSCustomObject]@{
+                Timestamp = $timestamp.UtcDateTime
+                Result = $match.Groups['result'].Value
+            })
+        }
+    }
+    if ($records.Count -eq 0) {
+        return [PSCustomObject]@{
+            Status = 'CLEANUP_NEVER_RAN'
+            LastSuccessAge = 'never'
+        }
+    }
+
+    $latest = $records | Sort-Object Timestamp -Descending |
+        Select-Object -First 1
+    if ($latest.Result -ne 'success') {
+        $lastSuccessAge = if (
+            @($records | Where-Object Result -eq 'success').Count -eq 0
+        ) { 'never' } else { 'recorded' }
+        return [PSCustomObject]@{
+            Status = 'CLEANUP_FAILED'
+            LastSuccessAge = $lastSuccessAge
+        }
+    }
+    $age = $NowUtc.ToUniversalTime() - $latest.Timestamp
+    if ($age.TotalHours -gt $StaleAfterHours) {
+        return [PSCustomObject]@{
+            Status = 'CLEANUP_STALE'
+            LastSuccessAge = 'stale'
+        }
+    }
+    return [PSCustomObject]@{
+        Status = 'CLEANUP_HEALTHY'
+        LastSuccessAge = 'fresh'
+    }
+}

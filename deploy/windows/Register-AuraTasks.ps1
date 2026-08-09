@@ -20,7 +20,10 @@ $maintenanceSettings = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew
 
 $cleanupScript = Join-Path $PSScriptRoot 'Run-DemoCleanup.ps1'
 $backupScript = Join-Path $PSScriptRoot 'Backup-DemoDatabase.ps1'
-$cleanupAction = New-ScheduledTaskAction -Execute $powerShell -Argument "-NoProfile -NonInteractive -File `"$cleanupScript`" -Profile production"
+$repositoryRoot = Assert-AuraRepositoryLayout
+$cleanupAction = New-ScheduledTaskAction -Execute $powerShell `
+    -Argument "-NoProfile -NonInteractive -File `"$cleanupScript`" -Profile production -Mode Execute -Confirmation RUN_AURA_DEMO_CLEANUP" `
+    -WorkingDirectory $repositoryRoot
 $backupAction = New-ScheduledTaskAction -Execute $powerShell -Argument "-NoProfile -NonInteractive -File `"$backupScript`" -Profile production"
 $cleanupTrigger = New-ScheduledTaskTrigger -Daily -At '00:17'
 $cleanupTrigger.Repetition.Interval = 'PT1H'

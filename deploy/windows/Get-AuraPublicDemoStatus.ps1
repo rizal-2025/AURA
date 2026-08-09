@@ -88,6 +88,17 @@ if ($backupAge -eq 'warning') { $reasons.Add('BACKUP_WARNING') }
 if ($backupAge -eq 'stale') { $reasons.Add('BACKUP_STALE') }
 if ($backupAge -eq 'missing') { $reasons.Add('BACKUP_MISSING') }
 
+$cleanupHealth = Get-AuraCleanupHealth -Profile production
+if ($cleanupHealth.Status -eq 'CLEANUP_NEVER_RAN') {
+    $reasons.Add('CLEANUP_NEVER_RAN')
+}
+if ($cleanupHealth.Status -eq 'CLEANUP_STALE') {
+    $reasons.Add('CLEANUP_STALE')
+}
+if ($cleanupHealth.Status -eq 'CLEANUP_FAILED') {
+    $reasons.Add('CLEANUP_FAILED')
+}
+
 function ConvertTo-SafeYesNo([bool]$Value) {
     if ($Value) { return 'yes' }
     return 'no'
@@ -115,6 +126,11 @@ Write-Output ('AURA_PUBLIC_DEMO_CHECK config_acl_valid={0}' -f `
 Write-Output ('AURA_PUBLIC_DEMO_CHECK pgpass_acl_valid={0}' -f `
     (ConvertTo-SafeYesNo $pgPassAclValid))
 Write-Output "AURA_PUBLIC_DEMO_CHECK backup_age=$backupAge"
+Write-Output "AURA_PUBLIC_DEMO_CHECK cleanup_health=$($cleanupHealth.Status)"
+Write-Output (
+    'AURA_PUBLIC_DEMO_CHECK cleanup_last_success_age={0}' -f `
+        $cleanupHealth.LastSuccessAge
+)
 
 $offline = (
     -not $auraPresent -and -not $funnelPresent `

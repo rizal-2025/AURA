@@ -533,6 +533,84 @@ class DemoRateLimitCleanupPostgreSQLTests(unittest.TestCase):
                 2,
             )
 
+    def test_dry_run_is_repeatable_accurate_and_mutation_free(self):
+        expired_id = self.expire(TOKEN_A)
+        with self.Session() as db:
+            expired = db.get(DemoSession, expired_id)
+            active = db.scalar(
+                select(DemoSession).where(
+                    DemoSession.token_digest == self.digest(TOKEN_B)
+                )
+            )
+            db.add_all(
+                (
+                    DemoChatMessage(
+                        demo_session_id=expired_id,
+                        role="user",
+                        content="expired preview",
+                        request_id=uuid4(),
+                        created_at=self.now,
+                    ),
+                    DemoChatMessage(
+                        demo_session_id=active.id,
+                        role="user",
+                        content="active preview",
+                        request_id=uuid4(),
+                        created_at=self.now,
+                    ),
+                    Reservation(
+                        name="Pending preview",
+                        people=2,
+                        date="2026-08-05",
+                        time="19:00",
+                        owner_customer_id=expired.owner_customer_id,
+                        status="pending",
+                    ),
+                    Reservation(
+                        name="Cancelled preview",
+                        people=2,
+                        date="2026-08-05",
+                        time="20:00",
+                        owner_customer_id=expired.owner_customer_id,
+                        status="cancelled",
+                    ),
+                    Reservation(
+                        name="Active preview",
+                        people=2,
+                        date="2026-08-05",
+                        time="21:00",
+                        owner_customer_id=active.owner_customer_id,
+                        status="pending",
+                    ),
+                )
+            )
+            db.commit()
+
+        service = DemoCleanupService(
+            session_factory=self.Session,
+            app_env="demo",
+            clock=lambda: self.now,
+        )
+        first = service.dry_run_once()
+        second = service.dry_run_once()
+        self.assertEqual(first, second)
+        self.assertEqual(first.eligible_sessions, 1)
+        self.assertEqual(first.eligible_messages, 1)
+        self.assertEqual(first.eligible_reservations, 2)
+        with self.Session() as db:
+            self.assertEqual(
+                db.scalar(select(func.count()).select_from(DemoSession)),
+                2,
+            )
+            self.assertEqual(
+                db.scalar(select(func.count()).select_from(DemoChatMessage)),
+                2,
+            )
+            self.assertEqual(
+                db.scalar(select(func.count()).select_from(Reservation)),
+                3,
+            )
+
     def test_handoff_delete_failure_rolls_back_and_next_session_continues(self):
         failed_session_id = self.expire(TOKEN_A)
         next_session_id = self.expire(TOKEN_B)

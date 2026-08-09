@@ -119,9 +119,25 @@ evidence, and contact the deployment owner.
 
 ## Manual cleanup
 
-Production cleanup is never part of start or status. Use the existing dedicated
-cleanup command only under its documented policy and review aggregate output;
-do not schedule new destructive cleanup as part of this lifecycle.
+Production cleanup is never part of start. Status reports cleanup configuration
+and health but never invokes cleanup or queries session data. During hardening,
+the scheduled task remains absent and `CLEANUP_NOT_CONFIGURED` is informational.
+
+Use `Run-DemoCleanup.ps1 -Profile production -Mode DryRun` for the approved
+zero-mutation preview. It reports bounded aggregate eligible-row counts without
+identifiers. Execute mode requires `-Mode Execute -Confirmation
+RUN_AURA_DEMO_CLEANUP`, returns non-zero for any partial or total failure, and
+must not be used until a separate activation gate authorizes it.
+
+Protected operation logs record timestamp, profile, mode, aggregate session
+eligibility/attempt/success/failure counts, final result, and elapsed time.
+After future task activation, status
+classifies a missing successful execute as `CLEANUP_NEVER_RAN`, a success older
+than three hours as `CLEANUP_STALE`, and the latest failed execute as
+`CLEANUP_FAILED`. Dry-run success does not satisfy execute freshness.
+
+Do not register, enable, or execute scheduled cleanup as part of the normal
+start/stop lifecycle.
 
 ## What not to do
 
