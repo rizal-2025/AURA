@@ -97,6 +97,40 @@ class WindowsSelfHostAssetTests(unittest.TestCase):
         self.assertIn("Resolve-AuraPostgreSQLTool -ToolName 'pg_restore.exe'", protect)
         self.assertNotIn("Read-Host", protect)
 
+    def test_runtime_directories_preserve_the_reviewed_modify_acl(self):
+        common = (WINDOWS_ROOT / "AuraWindows.Common.ps1").read_text(
+            encoding="utf-8"
+        )
+        backup = (WINDOWS_ROOT / "Backup-DemoDatabase.ps1").read_text(
+            encoding="utf-8"
+        )
+        protect = (WINDOWS_ROOT / "Protect-AuraBackup.ps1").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("function Assert-AuraOperatorRuntimeContainerAcl", common)
+        self.assertIn("FileSystemRights]::Modify", common)
+        self.assertIn("FileSystemRights]::Synchronize", common)
+        self.assertIn("AURA_RUNTIME_ACL_ACE_COUNT_INVALID", common)
+        self.assertIn("AURA_RUNTIME_ACL_RIGHTS_INVALID", common)
+        self.assertIn("AURA_RUNTIME_ACL_INHERITANCE_FLAGS_INVALID", common)
+        self.assertIn("AURA_RUNTIME_ACL_PROPAGATION_FLAGS_INVALID", common)
+        self.assertNotIn(
+            "Set-AuraOperatorProtectedAcl -Path $script:AuraRunRoot -Container",
+            common,
+        )
+        self.assertNotIn(
+            "Set-AuraOperatorProtectedAcl -Path $script:AuraBackupRoot -Container",
+            backup + protect,
+        )
+        self.assertIn(
+            "Assert-AuraOperatorRuntimeContainerAcl -Path $script:AuraRunRoot",
+            common,
+        )
+        self.assertIn(
+            "Assert-AuraOperatorRuntimeContainerAcl -Path $script:AuraBackupRoot",
+            backup + protect,
+        )
+
     def test_postgresql_tools_use_centralized_trusted_discovery(self):
         common = (WINDOWS_ROOT / "AuraWindows.Common.ps1").read_text(
             encoding="utf-8"

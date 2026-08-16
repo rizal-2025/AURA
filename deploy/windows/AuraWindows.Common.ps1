@@ -433,6 +433,72 @@ function Set-AuraOperatorProtectedAcl {
     Assert-AuraOperatorSecretAcl -Path $item.FullName
 }
 
+function Assert-AuraOperatorRuntimeContainerAcl {
+    param([Parameter(Mandatory)][string]$Path)
+
+    $item = Get-Item -LiteralPath $Path -Force
+    $invalidPathType = -not $item.PSIsContainer -or (
+        ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0
+    )
+    if ($invalidPathType) { throw 'AURA_RUNTIME_ACL_PATH_TYPE_INVALID' }
+
+    $currentSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+    $expectedRights = @{
+        $currentSid = (
+            [Security.AccessControl.FileSystemRights]::Modify -bor
+            [Security.AccessControl.FileSystemRights]::Synchronize
+        )
+        'S-1-5-18' = [Security.AccessControl.FileSystemRights]::FullControl
+        'S-1-5-32-544' = [Security.AccessControl.FileSystemRights]::FullControl
+    }
+    $expectedInheritance = (
+        [Security.AccessControl.InheritanceFlags]::ObjectInherit -bor
+        [Security.AccessControl.InheritanceFlags]::ContainerInherit
+    )
+    $expectedPropagation = [Security.AccessControl.PropagationFlags]::None
+    $acl = Get-Acl -LiteralPath $item.FullName
+    if (-not $acl.AreAccessRulesProtected) {
+        throw 'AURA_RUNTIME_ACL_INHERITANCE_ENABLED'
+    }
+    $rules = @($acl.Access)
+    if ($rules.Count -ne $expectedRights.Count) {
+        throw 'AURA_RUNTIME_ACL_ACE_COUNT_INVALID'
+    }
+
+    $seen = @{}
+    foreach ($rule in $rules) {
+        if ($rule.IsInherited) { throw 'AURA_RUNTIME_ACL_INHERITED_RULE_FOUND' }
+        if (
+            $rule.AccessControlType -ne
+            [Security.AccessControl.AccessControlType]::Allow
+        ) { throw 'AURA_RUNTIME_ACL_DENY_OR_UNKNOWN_TYPE_FOUND' }
+        try {
+            $sid = $rule.IdentityReference.Translate(
+                [Security.Principal.SecurityIdentifier]
+            ).Value
+        } catch { throw 'AURA_RUNTIME_ACL_IDENTITY_INVALID' }
+        if (-not $expectedRights.ContainsKey($sid)) {
+            throw 'AURA_RUNTIME_ACL_UNEXPECTED_IDENTITY'
+        }
+        if ($seen.ContainsKey($sid)) { throw 'AURA_RUNTIME_ACL_DUPLICATE_ACE' }
+        if ([long]$rule.FileSystemRights -ne [long]$expectedRights[$sid]) {
+            throw 'AURA_RUNTIME_ACL_RIGHTS_INVALID'
+        }
+        if ($rule.InheritanceFlags -ne $expectedInheritance) {
+            throw 'AURA_RUNTIME_ACL_INHERITANCE_FLAGS_INVALID'
+        }
+        if ($rule.PropagationFlags -ne $expectedPropagation) {
+            throw 'AURA_RUNTIME_ACL_PROPAGATION_FLAGS_INVALID'
+        }
+        $seen[$sid] = $true
+    }
+    foreach ($sid in $expectedRights.Keys) {
+        if (-not $seen.ContainsKey($sid)) {
+            throw 'AURA_RUNTIME_ACL_REQUIRED_IDENTITY_MISSING'
+        }
+    }
+}
+
 function Import-AuraConfiguration {
     param([Parameter(Mandatory)][string]$Profile)
     $path = Get-AuraSecretPath -Profile $Profile
@@ -1037,7 +1103,7 @@ function Write-AuraOwnershipMetadata {
         [Parameter(Mandatory)]$ProcessInfo
     )
     Initialize-AuraDataDirectories
-    Set-AuraOperatorProtectedAcl -Path $script:AuraRunRoot -Container
+    Assert-AuraOperatorRuntimeContainerAcl -Path $script:AuraRunRoot
     $safePath = Assert-AuraPathWithin -Path $Path -Root $script:AuraRunRoot
     $tempPath = "$safePath.partial"
     if (Test-Path -LiteralPath $tempPath) {
@@ -1318,7 +1384,7 @@ function Write-AuraCleanupActivationMarker {
     )
     Assert-AuraProductionProfile -Profile $Profile
     Initialize-AuraDataDirectories
-    Set-AuraOperatorProtectedAcl -Path $script:AuraRunRoot -Container
+    Assert-AuraOperatorRuntimeContainerAcl -Path $script:AuraRunRoot
     $path = Assert-AuraPathWithin `
         -Path (Get-AuraCleanupActivationPath -Profile $Profile) `
         -Root $script:AuraRunRoot

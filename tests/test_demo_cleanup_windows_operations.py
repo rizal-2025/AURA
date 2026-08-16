@@ -220,6 +220,7 @@ Write-Output 'TASK_XML_OK'
 $script:AuraRunRoot = $env:AURA_TEST_RUN_ROOT
 function Initialize-AuraDataDirectories { New-Item -ItemType Directory -Path $script:AuraRunRoot -Force | Out-Null }
 function Set-AuraOperatorProtectedAcl { param($Path,[switch]$Container) }
+function Assert-AuraOperatorRuntimeContainerAcl { param($Path) }
 function Assert-AuraOperatorSecretAcl { param($Path) }
 $expected = Join-Path $script:AuraRunRoot 'cleanup-activation-production.json'
 if (Test-Path -LiteralPath $expected) { throw 'preexisting' }
