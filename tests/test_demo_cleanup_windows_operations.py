@@ -515,5 +515,334 @@ function Write-AuraCleanupOperationLog { param($Profile,$Mode,$EligibleSessions,
             self.assertNotEqual(failed.returncode, 0)
 
 
+@unittest.skipUnless(os.name == "nt", "Real NTFS ACL tests require Windows")
+class RuntimeContainerAclBehavioralTests(unittest.TestCase):
+    _PREAMBLE = r"""
+$testRoot = [IO.Path]::GetFullPath($env:AURA_TEST_ACL_ROOT).TrimEnd('\')
+$temporaryRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\') + '\'
+if (-not $testRoot.StartsWith(
+    $temporaryRoot,
+    [StringComparison]::OrdinalIgnoreCase
+)) { throw 'AURA_TEST_ACL_ROOT_NOT_TEMPORARY' }
+$testItem = Get-Item -LiteralPath $testRoot -Force
+if (
+    -not $testItem.PSIsContainer `
+    -or ($testItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0
+) { throw 'AURA_TEST_ACL_ROOT_INVALID' }
+
+$script:TestCurrentSid = [Security.Principal.WindowsIdentity]::GetCurrent().User
+$script:TestSystemSid = [Security.Principal.SecurityIdentifier]::new('S-1-5-18')
+$script:TestAdministratorsSid = [Security.Principal.SecurityIdentifier]::new(
+    'S-1-5-32-544'
+)
+$script:TestUsersSid = [Security.Principal.SecurityIdentifier]::new(
+    'S-1-5-32-545'
+)
+$script:TestInheritance = (
+    [Security.AccessControl.InheritanceFlags]::ContainerInherit -bor
+    [Security.AccessControl.InheritanceFlags]::ObjectInherit
+)
+$script:TestOperatorRights = (
+    [Security.AccessControl.FileSystemRights]::Modify -bor
+    [Security.AccessControl.FileSystemRights]::Synchronize
+)
+
+function New-TestRuntimeRule {
+    param(
+        [Parameter(Mandatory)]
+        [Security.Principal.SecurityIdentifier]$Sid,
+        [Parameter(Mandatory)]
+        [Security.AccessControl.FileSystemRights]$Rights,
+        [Security.AccessControl.InheritanceFlags]$Inheritance =
+            $script:TestInheritance,
+        [Security.AccessControl.PropagationFlags]$Propagation =
+            [Security.AccessControl.PropagationFlags]::None,
+        [Security.AccessControl.AccessControlType]$Type =
+            [Security.AccessControl.AccessControlType]::Allow
+    )
+    return [Security.AccessControl.FileSystemAccessRule]::new(
+        $Sid,
+        $Rights,
+        $Inheritance,
+        $Propagation,
+        $Type
+    )
+}
+
+function Set-TestReviewedRuntimeAcl {
+    param([Parameter(Mandatory)][string]$Path)
+
+    # Exercise the repository's real protected-container provisioning helper,
+    # then narrow the operator to the reviewed runtime Modify contract.
+    Set-AuraOperatorProtectedAcl -Path $Path -Container
+    $acl = [Security.AccessControl.DirectorySecurity]::new()
+    $acl.SetAccessRuleProtection($true, $false)
+    [void]$acl.AddAccessRule((New-TestRuntimeRule `
+        -Sid $script:TestSystemSid `
+        -Rights ([Security.AccessControl.FileSystemRights]::FullControl)))
+    [void]$acl.AddAccessRule((New-TestRuntimeRule `
+        -Sid $script:TestAdministratorsSid `
+        -Rights ([Security.AccessControl.FileSystemRights]::FullControl)))
+    [void]$acl.AddAccessRule((New-TestRuntimeRule `
+        -Sid $script:TestCurrentSid `
+        -Rights $script:TestOperatorRights))
+    [IO.Directory]::SetAccessControl($Path, $acl)
+}
+
+function Set-TestDirectoryAcl {
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)]$Acl
+    )
+    [IO.Directory]::SetAccessControl($Path, $Acl)
+}
+
+function Assert-TestRuntimeAclRejected {
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][string]$Expected
+    )
+    try {
+        Assert-AuraOperatorRuntimeContainerAcl -Path $Path
+        throw 'AURA_TEST_UNSAFE_ACL_ACCEPTED'
+    } catch {
+        $actual = $_.Exception.Message
+        if ($actual -ceq 'AURA_TEST_UNSAFE_ACL_ACCEPTED') { throw }
+        if ($actual -cne $Expected) {
+            throw "AURA_TEST_ACL_ERROR_MISMATCH expected=$Expected actual=$actual"
+        }
+    }
+    Write-Output "AURA_TEST_ACL_REJECTED=$Expected"
+}
+
+Set-TestReviewedRuntimeAcl -Path $testRoot
+Assert-AuraOperatorRuntimeContainerAcl -Path $testRoot
+"""
+
+    def invoke_acl_case(self, body: str) -> subprocess.CompletedProcess[str]:
+        with tempfile.TemporaryDirectory(prefix="aura-runtime-acl-") as directory:
+            resolved = Path(directory).resolve()
+            self.assertTrue(
+                resolved.is_relative_to(Path(tempfile.gettempdir()).resolve())
+            )
+            command = (
+                f". '{COMMON}'; $ErrorActionPreference='Stop'; "
+                f"{self._PREAMBLE}; try {{ {body} }} finally {{ "
+                "Set-TestReviewedRuntimeAcl -Path $testRoot }"
+            )
+            return subprocess.run(
+                [
+                    "powershell.exe",
+                    "-NoProfile",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-Command",
+                    command,
+                ],
+                cwd=PROJECT_ROOT,
+                env={**os.environ, "AURA_TEST_ACL_ROOT": str(resolved)},
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=False,
+            )
+
+    def assert_acl_case(self, body: str, expected: str) -> str:
+        result = self.invoke_acl_case(body)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(result.stderr, "")
+        self.assertIn(expected, result.stdout)
+        return result.stdout
+
+    def test_exact_reviewed_runtime_acl_is_accepted(self):
+        self.assert_acl_case(
+            "Write-Output 'AURA_TEST_RUNTIME_ACL_ACCEPTED'",
+            "AURA_TEST_RUNTIME_ACL_ACCEPTED",
+        )
+
+    def test_inheritance_enabled_is_rejected(self):
+        self.assert_acl_case(
+            r"""
+$acl = Get-Acl -LiteralPath $testRoot
+$acl.SetAccessRuleProtection($false, $true)
+Set-TestDirectoryAcl -Path $testRoot -Acl $acl
+Assert-TestRuntimeAclRejected -Path $testRoot `
+    -Expected 'AURA_RUNTIME_ACL_INHERITANCE_ENABLED'
+""",
+            "AURA_TEST_ACL_REJECTED=AURA_RUNTIME_ACL_INHERITANCE_ENABLED",
+        )
+
+    def test_unexpected_principal_is_rejected(self):
+        self.assert_acl_case(
+            r"""
+$acl = Get-Acl -LiteralPath $testRoot
+$acl.PurgeAccessRules($script:TestSystemSid)
+[void]$acl.AddAccessRule((New-TestRuntimeRule `
+    -Sid $script:TestUsersSid `
+    -Rights ([Security.AccessControl.FileSystemRights]::FullControl)))
+Set-TestDirectoryAcl -Path $testRoot -Acl $acl
+Assert-TestRuntimeAclRejected -Path $testRoot `
+    -Expected 'AURA_RUNTIME_ACL_UNEXPECTED_IDENTITY'
+""",
+            "AURA_TEST_ACL_REJECTED=AURA_RUNTIME_ACL_UNEXPECTED_IDENTITY",
+        )
+
+    def test_deny_ace_is_rejected(self):
+        self.assert_acl_case(
+            r"""
+$acl = Get-Acl -LiteralPath $testRoot
+$acl.PurgeAccessRules($script:TestSystemSid)
+[void]$acl.AddAccessRule((New-TestRuntimeRule `
+    -Sid $script:TestSystemSid `
+    -Rights ([Security.AccessControl.FileSystemRights]::FullControl) `
+    -Type ([Security.AccessControl.AccessControlType]::Deny)))
+Set-TestDirectoryAcl -Path $testRoot -Acl $acl
+Assert-TestRuntimeAclRejected -Path $testRoot `
+    -Expected 'AURA_RUNTIME_ACL_DENY_OR_UNKNOWN_TYPE_FOUND'
+""",
+            "AURA_TEST_ACL_REJECTED=AURA_RUNTIME_ACL_DENY_OR_UNKNOWN_TYPE_FOUND",
+        )
+
+    def test_rights_mismatch_is_rejected(self):
+        self.assert_acl_case(
+            r"""
+$acl = Get-Acl -LiteralPath $testRoot
+$acl.PurgeAccessRules($script:TestCurrentSid)
+[void]$acl.AddAccessRule((New-TestRuntimeRule `
+    -Sid $script:TestCurrentSid `
+    -Rights ([Security.AccessControl.FileSystemRights]::FullControl)))
+Set-TestDirectoryAcl -Path $testRoot -Acl $acl
+Assert-TestRuntimeAclRejected -Path $testRoot `
+    -Expected 'AURA_RUNTIME_ACL_RIGHTS_INVALID'
+""",
+            "AURA_TEST_ACL_REJECTED=AURA_RUNTIME_ACL_RIGHTS_INVALID",
+        )
+
+    def test_inheritance_flags_mismatch_is_rejected(self):
+        self.assert_acl_case(
+            r"""
+$acl = Get-Acl -LiteralPath $testRoot
+$acl.PurgeAccessRules($script:TestCurrentSid)
+[void]$acl.AddAccessRule((New-TestRuntimeRule `
+    -Sid $script:TestCurrentSid `
+    -Rights $script:TestOperatorRights `
+    -Inheritance ([Security.AccessControl.InheritanceFlags]::ContainerInherit)))
+Set-TestDirectoryAcl -Path $testRoot -Acl $acl
+Assert-TestRuntimeAclRejected -Path $testRoot `
+    -Expected 'AURA_RUNTIME_ACL_INHERITANCE_FLAGS_INVALID'
+""",
+            "AURA_TEST_ACL_REJECTED=AURA_RUNTIME_ACL_INHERITANCE_FLAGS_INVALID",
+        )
+
+    def test_propagation_flags_mismatch_is_rejected(self):
+        self.assert_acl_case(
+            r"""
+$acl = Get-Acl -LiteralPath $testRoot
+$acl.PurgeAccessRules($script:TestCurrentSid)
+[void]$acl.AddAccessRule((New-TestRuntimeRule `
+    -Sid $script:TestCurrentSid `
+    -Rights $script:TestOperatorRights `
+    -Propagation ([Security.AccessControl.PropagationFlags]::InheritOnly)))
+Set-TestDirectoryAcl -Path $testRoot -Acl $acl
+Assert-TestRuntimeAclRejected -Path $testRoot `
+    -Expected 'AURA_RUNTIME_ACL_PROPAGATION_FLAGS_INVALID'
+""",
+            "AURA_TEST_ACL_REJECTED=AURA_RUNTIME_ACL_PROPAGATION_FLAGS_INVALID",
+        )
+
+    def test_required_principal_missing_is_rejected_by_count_gate(self):
+        self.assert_acl_case(
+            r"""
+$acl = Get-Acl -LiteralPath $testRoot
+$acl.PurgeAccessRules($script:TestSystemSid)
+Set-TestDirectoryAcl -Path $testRoot -Acl $acl
+Assert-TestRuntimeAclRejected -Path $testRoot `
+    -Expected 'AURA_RUNTIME_ACL_ACE_COUNT_INVALID'
+""",
+            "AURA_TEST_ACL_REJECTED=AURA_RUNTIME_ACL_ACE_COUNT_INVALID",
+        )
+
+    def test_duplicate_or_overlapping_operator_ace_is_rejected(self):
+        self.assert_acl_case(
+            r"""
+$acl = Get-Acl -LiteralPath $testRoot
+[void]$acl.AddAccessRule((New-TestRuntimeRule `
+    -Sid $script:TestCurrentSid `
+    -Rights ([Security.AccessControl.FileSystemRights]::FullControl)))
+Set-TestDirectoryAcl -Path $testRoot -Acl $acl
+$operatorRules = @((Get-Acl -LiteralPath $testRoot).Access | Where-Object {
+    $_.IdentityReference.Translate(
+        [Security.Principal.SecurityIdentifier]
+    ).Value -ceq $script:TestCurrentSid.Value
+})
+$representation = if ($operatorRules.Count -gt 1) { 'separate' } else {
+    'canonicalized'
+}
+try {
+    Assert-AuraOperatorRuntimeContainerAcl -Path $testRoot
+    throw 'AURA_TEST_UNSAFE_ACL_ACCEPTED'
+} catch {
+    $actual = $_.Exception.Message
+    if ($actual -ceq 'AURA_TEST_UNSAFE_ACL_ACCEPTED') { throw }
+    if ($actual -cnotin @(
+        'AURA_RUNTIME_ACL_ACE_COUNT_INVALID',
+        'AURA_RUNTIME_ACL_DUPLICATE_ACE',
+        'AURA_RUNTIME_ACL_RIGHTS_INVALID'
+    )) { throw "AURA_TEST_OVERLAPPING_ACL_ERROR_UNEXPECTED actual=$actual" }
+    Write-Output (
+        'AURA_TEST_OVERLAPPING_ACE_REJECTED={0} representation={1}' -f `
+        $actual, $representation
+    )
+}
+""",
+            "AURA_TEST_OVERLAPPING_ACE_REJECTED=",
+        )
+
+    def test_regular_file_is_rejected(self):
+        self.assert_acl_case(
+            r"""
+$file = Join-Path $testRoot 'not-a-directory.txt'
+[IO.File]::WriteAllText($file, 'disposable ACL test', [Text.Encoding]::ASCII)
+Assert-TestRuntimeAclRejected -Path $file `
+    -Expected 'AURA_RUNTIME_ACL_PATH_TYPE_INVALID'
+""",
+            "AURA_TEST_ACL_REJECTED=AURA_RUNTIME_ACL_PATH_TYPE_INVALID",
+        )
+
+    def test_reparse_point_directory_is_rejected_when_supported(self):
+        result = self.invoke_acl_case(
+            r"""
+$target = Join-Path $testRoot 'junction-target'
+$junction = Join-Path $testRoot 'junction-under-test'
+[void](New-Item -ItemType Directory -Path $target)
+try {
+    [void](New-Item -ItemType Junction -Path $junction -Target $target `
+        -ErrorAction Stop)
+} catch {
+    Write-Output (
+        'AURA_TEST_REPARSE_SKIPPED={0}:{1}' -f `
+        $_.Exception.GetType().Name, $_.FullyQualifiedErrorId
+    )
+    return
+}
+try {
+    Assert-TestRuntimeAclRejected -Path $junction `
+        -Expected 'AURA_RUNTIME_ACL_PATH_TYPE_INVALID'
+} finally {
+    Remove-Item -LiteralPath $junction -Force -ErrorAction SilentlyContinue
+}
+"""
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(result.stderr, "")
+        if "AURA_TEST_REPARSE_SKIPPED=" in result.stdout:
+            reason = result.stdout.split("AURA_TEST_REPARSE_SKIPPED=", 1)[1].strip()
+            self.skipTest(f"Junction creation unavailable: {reason}")
+        self.assertIn(
+            "AURA_TEST_ACL_REJECTED=AURA_RUNTIME_ACL_PATH_TYPE_INVALID",
+            result.stdout,
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
