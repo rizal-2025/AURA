@@ -214,6 +214,87 @@ Write-Output 'TASK_XML_OK'
         self.assert_ok(result)
         self.assertEqual(result.stdout.strip(), "TASK_XML_OK")
 
+    def test_task_validator_normalizes_only_proven_effective_defaults(self):
+        body = r"""
+$powerShell = 'C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe'
+$cleanup = 'C:\repo\deploy\windows\Run-DemoCleanup.ps1'
+$root = 'C:\repo'
+$canonical = New-AuraCleanupTaskXml -PowerShellPath $powerShell -CleanupScript $cleanup -RepositoryRoot $root -Enabled $false
+$namespace = 'http://schemas.microsoft.com/windows/2004/02/mit/task'
+function New-Variant { [xml]$document = $canonical; return $document }
+function Manager($document) {
+    $manager = [Xml.XmlNamespaceManager]::new($document.NameTable)
+    $manager.AddNamespace('t', $namespace)
+    return ,$manager
+}
+function Remove-Value($document, [string]$xpath) {
+    $node = $document.SelectSingleNode($xpath, (Manager $document))
+    if ($null -eq $node) { throw 'test-node-missing' }
+    [void]$node.ParentNode.RemoveChild($node)
+}
+function Set-Value($document, [string]$xpath, [string]$value) {
+    $node = $document.SelectSingleNode($xpath, (Manager $document))
+    if ($null -eq $node) { throw 'test-node-missing' }
+    $node.InnerText = $value
+}
+function Valid($document, [object]$runLevel = 'Limited', [object]$start = $false) {
+    return Test-AuraCleanupTaskXml -Xml $document.OuterXml -PowerShellPath $powerShell -CleanupScript $cleanup -RepositoryRoot $root -Enabled $false -EffectiveRunLevel $runLevel -EffectiveStartWhenAvailable $start
+}
+function Valid-WithoutEffectiveEvidence($document) {
+    return Test-AuraCleanupTaskXml -Xml $document.OuterXml -PowerShellPath $powerShell -CleanupScript $cleanup -RepositoryRoot $root -Enabled $false
+}
+if (-not (Valid (New-Variant))) { throw 'explicit-defaults' }
+$case = New-Variant
+Remove-Value $case '/t:Task/t:Principals/t:Principal/t:RunLevel'
+if (-not (Valid $case)) { throw 'omitted-run-level' }
+$case = New-Variant
+Remove-Value $case '/t:Task/t:Settings/t:StartWhenAvailable'
+if (-not (Valid $case)) { throw 'omitted-start-when-available' }
+$case = New-Variant
+Remove-Value $case '/t:Task/t:Principals/t:Principal/t:RunLevel'
+Remove-Value $case '/t:Task/t:Settings/t:StartWhenAvailable'
+if (-not (Valid $case)) { throw 'both-defaults-omitted' }
+if (Valid-WithoutEffectiveEvidence $case) { throw 'unproven-omissions-accepted' }
+if (Valid (New-Variant) 'Highest') { throw 'effective-elevation-accepted' }
+if (Valid (New-Variant) 'Unknown') { throw 'unknown-effective-run-level-accepted' }
+if (Valid (New-Variant) 'Limited' $true) { throw 'effective-start-true-accepted' }
+if (Valid (New-Variant) 'Limited' 'false') { throw 'unknown-effective-start-accepted' }
+$case = New-Variant
+Set-Value $case '/t:Task/t:Principals/t:Principal/t:RunLevel' 'HighestAvailable'
+if (Valid $case) { throw 'highest-available-accepted' }
+$case = New-Variant
+Set-Value $case '/t:Task/t:Principals/t:Principal/t:RunLevel' 'leastprivilege'
+if (Valid $case) { throw 'malformed-run-level-accepted' }
+$case = New-Variant
+Set-Value $case '/t:Task/t:Settings/t:StartWhenAvailable' 'true'
+if (Valid $case) { throw 'start-true-accepted' }
+$case = New-Variant
+Set-Value $case '/t:Task/t:Settings/t:StartWhenAvailable' 'False'
+if (Valid $case) { throw 'malformed-start-accepted' }
+$case = New-Variant
+Remove-Value $case '/t:Task/t:Actions/t:Exec/t:Command'
+if (Valid $case) { throw 'missing-command-accepted' }
+$case = New-Variant
+Set-Value $case '/t:Task/t:Principals/t:Principal/t:UserId' 'S-1-5-32-544'
+if (Valid $case) { throw 'principal-mismatch-accepted' }
+$case = New-Variant
+Set-Value $case '/t:Task/t:Actions/t:Exec/t:WorkingDirectory' 'C:\wrong'
+if (Valid $case) { throw 'working-directory-mismatch-accepted' }
+$case = New-Variant
+Set-Value $case '/t:Task/t:Triggers/t:CalendarTrigger/t:StartBoundary' '2024-01-01T00:18:00'
+if (Valid $case) { throw 'trigger-mismatch-accepted' }
+$case = New-Variant
+Set-Value $case '/t:Task/t:Triggers/t:CalendarTrigger/t:Repetition/t:Interval' 'PT2H'
+if (Valid $case) { throw 'repetition-mismatch-accepted' }
+Write-Output 'TASK_DEFAULT_NORMALIZATION_OK'
+"""
+        result = self.invoke(body)
+        self.assert_ok(result)
+        self.assertEqual(
+            result.stdout.strip(),
+            "TASK_DEFAULT_NORMALIZATION_OK",
+        )
+
     def test_activation_marker_schema_is_atomic_and_removable(self):
         with tempfile.TemporaryDirectory() as directory:
             body = r"""
@@ -301,7 +382,7 @@ $script:Corrupt = $false
 $script:FailRegisterAfterCreate = $false
 $script:ActivationMarker = $null
 function Read-AuraCleanupActivationMarker { param($Profile) $script:ActivationMarker }
-function Get-ScheduledTask { param($TaskName,$ErrorAction) if ($null -ne $script:TaskState) { [PSCustomObject]@{ State=$script:TaskState } } }
+function Get-ScheduledTask { param($TaskName,$ErrorAction) if ($null -ne $script:TaskState) { [PSCustomObject]@{ State=$script:TaskState; Principal=[PSCustomObject]@{ RunLevel='Limited' }; Settings=[PSCustomObject]@{ StartWhenAvailable=$false } } } }
 function Export-ScheduledTask { param($TaskName,$ErrorAction) if ($script:Corrupt) { '<Task />' } else { $script:TaskXml } }
 function Register-ScheduledTask { param($TaskName,$Xml,$ErrorAction) $script:RegisterCount++; $script:TaskXml=$Xml; $script:TaskState='Disabled'; if ($script:FailRegisterAfterCreate) { throw 'partial-register' } }
 function Unregister-ScheduledTask { param($TaskName,$Confirm,$ErrorAction) $script:UnregisterCount++; $script:TaskState=$null; $script:TaskXml=$null }

@@ -1520,7 +1520,9 @@ function Test-AuraCleanupTaskXml {
         [Parameter(Mandatory)][string]$PowerShellPath,
         [Parameter(Mandatory)][string]$CleanupScript,
         [Parameter(Mandatory)][string]$RepositoryRoot,
-        [Parameter(Mandatory)][bool]$Enabled
+        [Parameter(Mandatory)][bool]$Enabled,
+        [AllowNull()][object]$EffectiveRunLevel,
+        [AllowNull()][object]$EffectiveStartWhenAvailable
     )
     try {
         [xml]$document = $Xml
@@ -1532,6 +1534,43 @@ function Test-AuraCleanupTaskXml {
             return [string]$node.InnerText
         }
         $expectedEnabled = ([string]$Enabled).ToLowerInvariant()
+        $runLevel = Get-TaskValue '/t:Task/t:Principals/t:Principal/t:RunLevel'
+        $hasEffectiveRunLevel = $PSBoundParameters.ContainsKey(
+            'EffectiveRunLevel'
+        )
+        $effectiveRunLevelSafe = $false
+        if ($hasEffectiveRunLevel -and $null -ne $EffectiveRunLevel) {
+            $effectiveRunLevelText = [string]$EffectiveRunLevel
+            $effectiveRunLevelSafe = (
+                $effectiveRunLevelText -ceq 'LeastPrivilege' `
+                -or $effectiveRunLevelText -ceq 'Limited'
+            )
+        }
+        $runLevelSafe = if ($null -eq $runLevel) {
+            $hasEffectiveRunLevel -and $effectiveRunLevelSafe
+        } else {
+            $runLevel -ceq 'LeastPrivilege' -and (
+                -not $hasEffectiveRunLevel -or $effectiveRunLevelSafe
+            )
+        }
+        $startWhenAvailable = Get-TaskValue `
+            '/t:Task/t:Settings/t:StartWhenAvailable'
+        $hasEffectiveStartWhenAvailable = $PSBoundParameters.ContainsKey(
+            'EffectiveStartWhenAvailable'
+        )
+        $effectiveStartWhenAvailableSafe = (
+            $hasEffectiveStartWhenAvailable `
+            -and $EffectiveStartWhenAvailable -is [bool] `
+            -and -not [bool]$EffectiveStartWhenAvailable
+        )
+        $startWhenAvailableSafe = if ($null -eq $startWhenAvailable) {
+            $effectiveStartWhenAvailableSafe
+        } else {
+            $startWhenAvailable -ceq 'false' -and (
+                -not $hasEffectiveStartWhenAvailable `
+                -or $effectiveStartWhenAvailableSafe
+            )
+        }
         return (
             (Get-TaskValue '/t:Task/t:Triggers/t:CalendarTrigger/t:Repetition/t:Interval') -ceq 'PT1H' `
             -and (Get-TaskValue '/t:Task/t:Triggers/t:CalendarTrigger/t:Repetition/t:Duration') -ceq 'P1D' `
@@ -1539,9 +1578,9 @@ function Test-AuraCleanupTaskXml {
             -and (Get-TaskValue '/t:Task/t:Triggers/t:CalendarTrigger/t:ScheduleByDay/t:DaysInterval') -ceq '1' `
             -and (Get-TaskValue '/t:Task/t:Principals/t:Principal/t:UserId') -ceq 'S-1-5-18' `
             -and $null -eq (Get-TaskValue '/t:Task/t:Principals/t:Principal/t:LogonType') `
-            -and (Get-TaskValue '/t:Task/t:Principals/t:Principal/t:RunLevel') -ceq 'LeastPrivilege' `
+            -and $runLevelSafe `
             -and (Get-TaskValue '/t:Task/t:Settings/t:MultipleInstancesPolicy') -ceq 'IgnoreNew' `
-            -and (Get-TaskValue '/t:Task/t:Settings/t:StartWhenAvailable') -ceq 'false' `
+            -and $startWhenAvailableSafe `
             -and (Get-TaskValue '/t:Task/t:Settings/t:Enabled') -ceq $expectedEnabled `
             -and (Get-TaskValue '/t:Task/t:Settings/t:ExecutionTimeLimit') -ceq 'PT20M' `
             -and (Get-TaskValue '/t:Task/t:Actions/t:Exec/t:Command') -ceq $PowerShellPath `
@@ -1565,7 +1604,9 @@ function Get-AuraCleanupTaskSnapshot {
     $disabled = [string]$tasks[0].State -ceq 'Disabled'
     $matches = Test-AuraCleanupTaskXml -Xml $xml -PowerShellPath $PowerShellPath `
         -CleanupScript $CleanupScript -RepositoryRoot $RepositoryRoot `
-        -Enabled (-not $disabled)
+        -Enabled (-not $disabled) `
+        -EffectiveRunLevel $tasks[0].Principal.RunLevel `
+        -EffectiveStartWhenAvailable $tasks[0].Settings.StartWhenAvailable
     return [PSCustomObject]@{
         State = [string]$tasks[0].State
         Disabled = $disabled
