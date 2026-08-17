@@ -15,6 +15,12 @@ try {
     if ($response.StatusCode -ne 200 -or $response.Content -ne '{"status":"healthy"}') {
         throw 'AURA_READINESS_RESPONSE_INVALID'
     }
+    if ($Profile -eq 'production') {
+        $cleanupHealth = Get-AuraCleanupHealth -Profile production
+        if (-not $cleanupHealth.ReadyCompatible) {
+            throw $cleanupHealth.Status
+        }
+    }
 } catch {
     throw 'AURA_READINESS_FAILED'
 } finally {

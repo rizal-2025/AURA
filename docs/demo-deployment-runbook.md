@@ -22,3 +22,11 @@ Only cleanup and backup may be scheduled. Never register AURA or Funnel at
 boot/logon. Never expose PostgreSQL, RDP, file shares, OpenAPI, `/ready`, or the
 full `app.main` application. Never log the stable `*.ts.net` hostname, service
 token, session token, database URL, provider key, or Tailscale credential.
+
+Cleanup scheduling requires its own human activation gate. Before that gate,
+keep `AURA Demo Cleanup` absent or staged disabled, keep the activation marker
+absent, and use only the Production-offline dry-run documented in
+`deploy/windows/README.md`. This is reported as `CLEANUP_NOT_CONFIGURED`
+without degrading normal status. Registration and activation are separate;
+follow the exact elevated activation/deactivation commands in that README only
+under their respective human gates.

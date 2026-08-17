@@ -88,6 +88,11 @@ if ($backupAge -eq 'warning') { $reasons.Add('BACKUP_WARNING') }
 if ($backupAge -eq 'stale') { $reasons.Add('BACKUP_STALE') }
 if ($backupAge -eq 'missing') { $reasons.Add('BACKUP_MISSING') }
 
+$cleanupHealth = Get-AuraCleanupHealth -Profile production
+if (-not $cleanupHealth.ReadyCompatible) {
+    $reasons.Add($cleanupHealth.Status)
+}
+
 function ConvertTo-SafeYesNo([bool]$Value) {
     if ($Value) { return 'yes' }
     return 'no'
@@ -115,6 +120,19 @@ Write-Output ('AURA_PUBLIC_DEMO_CHECK config_acl_valid={0}' -f `
 Write-Output ('AURA_PUBLIC_DEMO_CHECK pgpass_acl_valid={0}' -f `
     (ConvertTo-SafeYesNo $pgPassAclValid))
 Write-Output "AURA_PUBLIC_DEMO_CHECK backup_age=$backupAge"
+Write-Output "AURA_PUBLIC_DEMO_CHECK cleanup_health=$($cleanupHealth.Status)"
+Write-Output (
+    'AURA_PUBLIC_DEMO_CHECK cleanup_last_attempt_age={0}' -f `
+        $cleanupHealth.LastAttemptAge
+)
+Write-Output (
+    'AURA_PUBLIC_DEMO_CHECK cleanup_last_dry_run_age={0}' -f `
+        $cleanupHealth.LastDryRunAge
+)
+Write-Output (
+    'AURA_PUBLIC_DEMO_CHECK cleanup_last_success_age={0}' -f `
+        $cleanupHealth.LastSuccessAge
+)
 
 $offline = (
     -not $auraPresent -and -not $funnelPresent `
@@ -126,7 +144,8 @@ $ready = (
     -and $postgresqlRunning -and $databaseReady `
     -and $auraPresent -and $ownedPidValid -and $listenerLoopback `
     -and $localHealth -and $funnelPresent -and $publicHealth `
-    -and $firewallValid -and $backupAge -notin @('stale', 'missing')
+    -and $firewallValid -and $backupAge -notin @('stale', 'missing') `
+    -and $cleanupHealth.ReadyCompatible
 )
 $state = if ($ready) { 'ready' } elseif ($offline) { 'offline' } else { 'degraded' }
 $reasonOutput = if ($reasons.Count -eq 0) {

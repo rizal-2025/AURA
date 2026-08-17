@@ -71,6 +71,18 @@ class DemoCleanupSummary:
     deleted_expired_buckets: int
 
 
+@dataclass(frozen=True)
+class DemoCleanupDryRunSummary:
+    eligible_sessions: int
+    eligible_messages: int
+    eligible_reservations: int
+    eligible_workflow_states: int
+    eligible_handoffs: int
+    eligible_session_buckets: int
+    eligible_expired_buckets: int
+    blocked_sessions: int
+
+
 def validate_demo_cleanup_batch_size(value: int) -> int:
     if (
         isinstance(value, bool)
@@ -173,6 +185,97 @@ class DemoCleanupService:
                 identifiers = tuple(int(row.id) for row in rows)
                 unit.commit()
             return identifiers
+        except Exception:
+            raise DemoCleanupUnavailableError() from None
+        finally:
+            self._close_session(db)
+
+    def _preview(
+        self,
+        *,
+        now: datetime,
+        batch_size: int,
+    ) -> DemoCleanupDryRunSummary:
+        """Return bounded aggregate delete counts without changing data."""
+        db = self.session_factory()
+        try:
+            with UnitOfWork(db) as unit:
+                rows = self.sessions.list_expired(
+                    db,
+                    now=now,
+                    limit=batch_size,
+                )
+                counts = {
+                    "messages": 0,
+                    "reservations": 0,
+                    "workflow_states": 0,
+                    "handoffs": 0,
+                    "session_buckets": 0,
+                    "blocked_sessions": 0,
+                }
+                for row in rows:
+                    session_id = int(row.id)
+                    owner_customer_id = row.owner_customer_id
+                    counts["messages"] += (
+                        self.messages.count_all_by_demo_session(
+                            db,
+                            demo_session_id=session_id,
+                        )
+                    )
+                    counts["reservations"] += (
+                        self.reservations.count_for_owner(
+                            db,
+                            owner_customer_id,
+                        )
+                    )
+                    counts["workflow_states"] += int(
+                        self.workflows.get_by_scope(
+                            db,
+                            owner_customer_id=owner_customer_id,
+                            session_reference_hash=self._workflow_hash(
+                                session_id
+                            ),
+                        )
+                        is not None
+                    )
+                    counts["handoffs"] += (
+                        self.handoffs.count_by_demo_session(
+                            db,
+                            demo_session_id=session_id,
+                        )
+                    )
+                    counts["session_buckets"] += (
+                        self.rate_buckets.count_session_subject(
+                            db,
+                            subject_digest=demo_session_rate_limit_subject(
+                                row.token_digest
+                            ),
+                        )
+                    )
+                    counts["blocked_sessions"] += int(
+                        self._owner_has_non_demo_references(
+                            db,
+                            owner_customer_id,
+                        )
+                    )
+                expired_buckets = len(
+                    self.rate_buckets.list_expired(
+                        db,
+                        now=now,
+                        limit=batch_size,
+                    )
+                )
+                unit.commit()
+            return DemoCleanupDryRunSummary(
+                eligible_sessions=len(rows),
+                eligible_messages=counts["messages"],
+                eligible_reservations=counts["reservations"],
+                eligible_workflow_states=counts["workflow_states"],
+                eligible_handoffs=counts["handoffs"],
+                eligible_session_buckets=counts["session_buckets"],
+                eligible_expired_buckets=expired_buckets,
+                blocked_sessions=counts["blocked_sessions"],
+            )
         except Exception:
             raise DemoCleanupUnavailableError() from None
         finally:
@@ -385,3 +488,16 @@ class DemoCleanupService:
             failed_sessions=counts["failed"],
             deleted_expired_buckets=deleted_buckets,
         )
+
+    def dry_run_once(
+        self,
+        *,
+        now: datetime | None = None,
+        batch_size: int = DEFAULT_DEMO_CLEANUP_BATCH_SIZE,
+    ) -> DemoCleanupDryRunSummary:
+        """Preview the exact bounded eligibility scope without mutations."""
+        if self.app_env != "demo":
+            raise DemoCleanupConfigurationError()
+        limit = validate_demo_cleanup_batch_size(batch_size)
+        timestamp = validate_utc_datetime(now or self.clock())
+        return self._preview(now=timestamp, batch_size=limit)

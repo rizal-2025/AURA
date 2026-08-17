@@ -596,6 +596,18 @@ class DemoChatMessageRepository:
             or 0
         )
 
+    def count_all_by_demo_session(self, db, *, demo_session_id: int) -> int:
+        """Count every row that cleanup would delete for one demo session."""
+        session_id = _require_internal_session_id(demo_session_id)
+        return int(
+            db.scalar(
+                select(func.count())
+                .select_from(DemoChatMessage)
+                .where(DemoChatMessage.demo_session_id == session_id)
+            )
+            or 0
+        )
+
 
 class DemoHandoffEventRepository:
     """Persist simulated demo handoffs without production ticket dependencies."""
@@ -688,6 +700,17 @@ class DemoHandoffEventRepository:
             )
         )
         return int(result.rowcount or 0)
+
+    def count_by_demo_session(self, db, *, demo_session_id: int) -> int:
+        session_id = _require_internal_session_id(demo_session_id)
+        return int(
+            db.scalar(
+                select(func.count())
+                .select_from(DemoHandoffEvent)
+                .where(DemoHandoffEvent.demo_session_id == session_id)
+            )
+            or 0
+        )
 
 
 class DemoRateLimitBucketRepository:
@@ -941,6 +964,25 @@ class DemoRateLimitBucketRepository:
             )
         )
         return int(result.rowcount or 0)
+
+    def count_session_subject(
+        self,
+        db,
+        *,
+        subject_digest: str,
+    ) -> int:
+        subject_digest = demo_session_rate_limit_subject(subject_digest)
+        return int(
+            db.scalar(
+                select(func.count())
+                .select_from(DemoRateLimitBucket)
+                .where(
+                    DemoRateLimitBucket.scope_type == "session",
+                    DemoRateLimitBucket.subject_digest == subject_digest,
+                )
+            )
+            or 0
+        )
 
 
 def demo_session_rate_limit_subject(token_digest: str) -> str:

@@ -263,6 +263,146 @@ class DemoCleanupServiceTests(unittest.TestCase):
         self.assertEqual(self.count(DemoSession), 1)
         self.assertEqual(self.count(Customer), 1)
 
+    def test_dry_run_counts_exact_scope_and_performs_zero_mutations(self):
+        expired_id, expired_owner, expired_digest = self.create_session(
+            "dry-expired"
+        )
+        active_id, active_owner, _ = self.create_session(
+            "dry-active",
+            idle_delta=timedelta(minutes=5),
+        )
+        db = self.Session()
+        db.add_all(
+            [
+                DemoChatMessage(
+                    demo_session_id=expired_id,
+                    role="user",
+                    content="expired one",
+                    created_at=self.now,
+                ),
+                DemoChatMessage(
+                    demo_session_id=expired_id,
+                    role="assistant",
+                    content="expired two",
+                    created_at=self.now,
+                ),
+                DemoChatMessage(
+                    demo_session_id=active_id,
+                    role="user",
+                    content="active",
+                    created_at=self.now,
+                ),
+                Reservation(
+                    name="Pending",
+                    people=2,
+                    date="2026-08-04",
+                    time="19:00",
+                    owner_customer_id=expired_owner,
+                    status="pending",
+                ),
+                Reservation(
+                    name="Cancelled",
+                    people=2,
+                    date="2026-08-04",
+                    time="20:00",
+                    owner_customer_id=expired_owner,
+                    status="cancelled",
+                ),
+                Reservation(
+                    name="Active owner",
+                    people=2,
+                    date="2026-08-04",
+                    time="21:00",
+                    owner_customer_id=active_owner,
+                    status="pending",
+                ),
+                ConversationWorkflowState(
+                    owner_customer_id=expired_owner,
+                    session_reference_hash=(
+                        ConversationWorkflowStateService.hash_session_reference(
+                            f"demo-session-{expired_id}"
+                        )
+                    ),
+                    schema_version=1,
+                    payload={},
+                    is_active=True,
+                    revision=1,
+                    created_at=self.now,
+                    updated_at=self.now,
+                ),
+                DemoHandoffEvent(
+                    demo_session_id=expired_id,
+                    reference="DEMO-HO-DRYRUN",
+                    status="simulated",
+                    reason_code="internal_error",
+                    safe_summary=(
+                        "The demo assistant could not safely complete the request."
+                    ),
+                    created_at=self.now,
+                ),
+                DemoRateLimitBucket(
+                    scope_type="session",
+                    subject_digest=expired_digest,
+                    action="chat",
+                    window_started_at=self.now - timedelta(minutes=1),
+                    window_seconds=60,
+                    request_count=1,
+                    expires_at=self.now + timedelta(minutes=1),
+                    updated_at=self.now,
+                ),
+                DemoRateLimitBucket(
+                    scope_type="global",
+                    subject_digest=hashlib.sha256(b"dry-global").hexdigest(),
+                    action="chat",
+                    window_started_at=self.now - timedelta(minutes=2),
+                    window_seconds=60,
+                    request_count=1,
+                    expires_at=self.now,
+                    updated_at=self.now,
+                ),
+            ]
+        )
+        db.commit()
+        db.close()
+
+        mutation_statements = []
+
+        def capture_mutation(
+            _connection,
+            _cursor,
+            statement,
+            _parameters,
+            _context,
+            _executemany,
+        ):
+            if statement.lstrip().upper().startswith(("DELETE", "UPDATE")):
+                mutation_statements.append(statement)
+
+        event.listen(self.engine, "before_cursor_execute", capture_mutation)
+        try:
+            first = self.service().dry_run_once()
+            second = self.service().dry_run_once()
+        finally:
+            event.remove(
+                self.engine,
+                "before_cursor_execute",
+                capture_mutation,
+            )
+
+        self.assertEqual(first, second)
+        self.assertEqual(first.eligible_sessions, 1)
+        self.assertEqual(first.eligible_messages, 2)
+        self.assertEqual(first.eligible_reservations, 2)
+        self.assertEqual(first.eligible_workflow_states, 1)
+        self.assertEqual(first.eligible_handoffs, 1)
+        self.assertEqual(first.eligible_session_buckets, 1)
+        self.assertEqual(first.eligible_expired_buckets, 1)
+        self.assertEqual(first.blocked_sessions, 0)
+        self.assertEqual(mutation_statements, [])
+        self.assertEqual(self.count(DemoSession), 2)
+        self.assertEqual(self.count(DemoChatMessage), 3)
+        self.assertEqual(self.count(Reservation), 3)
+
     def test_idle_expired_session_and_owner_are_cleaned(self):
         self.create_session("idle")
         summary = self.run_cleanup()
@@ -356,6 +496,14 @@ class DemoCleanupServiceTests(unittest.TestCase):
                     date="2026-08-04",
                     time="19:00",
                     owner_customer_id=owner_id,
+                ),
+                Reservation(
+                    name="Cancelled demo",
+                    people=2,
+                    date="2026-08-04",
+                    time="20:00",
+                    owner_customer_id=owner_id,
+                    status="cancelled",
                 ),
                 DemoRateLimitBucket(
                     scope_type="session",
@@ -665,6 +813,8 @@ class DemoCleanupServiceTests(unittest.TestCase):
         )
         with self.assertRaises(DemoCleanupConfigurationError):
             self.run_cleanup(service)
+        with self.assertRaises(DemoCleanupConfigurationError):
+            service.dry_run_once()
         self.assertEqual(called, [])
 
     def test_batch_size_validation(self):

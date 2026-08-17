@@ -20,6 +20,8 @@ EXPECTED_SCRIPTS = {
     "Invoke-AuraProductionBackup.ps1",
     "Test-AuraReadiness.ps1",
     "Run-DemoCleanup.ps1",
+    "Activate-AuraDemoCleanup.ps1",
+    "Deactivate-AuraDemoCleanup.ps1",
     "Backup-DemoDatabase.ps1",
     "Protect-AuraBackup.ps1",
     "Restore-DemoDatabase-Test.ps1",
@@ -95,6 +97,40 @@ class WindowsSelfHostAssetTests(unittest.TestCase):
         self.assertIn("Resolve-AuraPostgreSQLTool -ToolName 'pg_restore.exe'", protect)
         self.assertNotIn("Read-Host", protect)
 
+    def test_runtime_directories_preserve_the_reviewed_modify_acl(self):
+        common = (WINDOWS_ROOT / "AuraWindows.Common.ps1").read_text(
+            encoding="utf-8"
+        )
+        backup = (WINDOWS_ROOT / "Backup-DemoDatabase.ps1").read_text(
+            encoding="utf-8"
+        )
+        protect = (WINDOWS_ROOT / "Protect-AuraBackup.ps1").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("function Assert-AuraOperatorRuntimeContainerAcl", common)
+        self.assertIn("FileSystemRights]::Modify", common)
+        self.assertIn("FileSystemRights]::Synchronize", common)
+        self.assertIn("AURA_RUNTIME_ACL_ACE_COUNT_INVALID", common)
+        self.assertIn("AURA_RUNTIME_ACL_RIGHTS_INVALID", common)
+        self.assertIn("AURA_RUNTIME_ACL_INHERITANCE_FLAGS_INVALID", common)
+        self.assertIn("AURA_RUNTIME_ACL_PROPAGATION_FLAGS_INVALID", common)
+        self.assertNotIn(
+            "Set-AuraOperatorProtectedAcl -Path $script:AuraRunRoot -Container",
+            common,
+        )
+        self.assertNotIn(
+            "Set-AuraOperatorProtectedAcl -Path $script:AuraBackupRoot -Container",
+            backup + protect,
+        )
+        self.assertIn(
+            "Assert-AuraOperatorRuntimeContainerAcl -Path $script:AuraRunRoot",
+            common,
+        )
+        self.assertIn(
+            "Assert-AuraOperatorRuntimeContainerAcl -Path $script:AuraBackupRoot",
+            backup + protect,
+        )
+
     def test_postgresql_tools_use_centralized_trusted_discovery(self):
         common = (WINDOWS_ROOT / "AuraWindows.Common.ps1").read_text(
             encoding="utf-8"
@@ -134,12 +170,13 @@ class WindowsSelfHostAssetTests(unittest.TestCase):
 
     def test_task_and_firewall_contracts_are_fixed(self):
         tasks = (WINDOWS_ROOT / "Register-AuraTasks.ps1").read_text(encoding="utf-8")
+        common = (WINDOWS_ROOT / "AuraWindows.Common.ps1").read_text(encoding="utf-8")
         firewall = (WINDOWS_ROOT / "Install-AuraFirewallRules.ps1").read_text(encoding="utf-8")
-        self.assertIn("MultipleInstances IgnoreNew", tasks)
+        self.assertIn("<MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>", common)
         self.assertNotIn("AtLogOn", tasks)
         self.assertNotIn("AURA API Production", tasks)
         self.assertNotIn("Start-Aura", tasks)
-        self.assertIn("'00:17'", tasks)
+        self.assertIn("<StartBoundary>2024-01-01T00:17:00</StartBoundary>", common)
         for port in (8000, 8001, 5432):
             self.assertIn(f"-LocalPort {port}", firewall)
         self.assertNotIn("-Action Allow -Protocol TCP -LocalPort", firewall)

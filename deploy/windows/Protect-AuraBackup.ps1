@@ -39,7 +39,7 @@ if (
     throw 'AURA_BACKUP_PROTECTION_ARTIFACT_INVALID'
 }
 
-Set-AuraOperatorProtectedAcl -Path $script:AuraBackupRoot -Container
+Assert-AuraOperatorRuntimeContainerAcl -Path $script:AuraBackupRoot
 Set-AuraOperatorProtectedAcl -Path $safeBackup
 
 $pgRestore = Resolve-AuraPostgreSQLTool -ToolName 'pg_restore.exe'

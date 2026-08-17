@@ -48,4 +48,8 @@ if ($funnel.State -ne 'owned') {
 if (-not (Test-AuraPublicHealth -Profile production)) {
     throw 'AURA_PUBLIC_HEALTH_FAILED'
 }
+$cleanupHealth = Get-AuraCleanupHealth -Profile production
+if (-not $cleanupHealth.ReadyCompatible) {
+    throw $cleanupHealth.Status
+}
 Write-Output 'AURA_PUBLIC_DEMO_READY profile=production'

@@ -23,6 +23,11 @@ def build_parser() -> argparse.ArgumentParser:
         default=100,
         help="Maximum eligible sessions to scan (1..500).",
     )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Report bounded eligible-row counts without deleting data.",
+    )
     return parser
 
 
@@ -44,24 +49,74 @@ def main(argv: list[str] | None = None) -> int:
             session_factory=SessionLocal,
             app_env=settings.APP_ENV,
         )
-        summary = asyncio.run(
-            service.run_once(batch_size=batch_size)
-        )
+        if args.dry_run:
+            summary = service.dry_run_once(batch_size=batch_size)
+        else:
+            summary = asyncio.run(
+                service.run_once(batch_size=batch_size)
+            )
     except Exception:
         print(
             json.dumps(
-                {"status": "failed", "code": "DEMO_CLEANUP_FAILED"},
+                {
+                    "status": "failed",
+                    "code": "DEMO_CLEANUP_FAILED",
+                    "mode": "dry-run" if args.dry_run else "execute",
+                    "eligible_sessions": 0,
+                    "attempted_sessions": 0,
+                    "successful_cleanup_count": 0,
+                    "failed_cleanup_count": 0,
+                },
                 sort_keys=True,
             )
         )
         return 1
+
+    if args.dry_run:
+        print(
+            json.dumps(
+                {
+                    "status": "ok",
+                    "mode": "dry-run",
+                    "attempted_sessions": 0,
+                    "successful_cleanup_count": 0,
+                    "failed_cleanup_count": 0,
+                    **asdict(summary),
+                },
+                sort_keys=True,
+            )
+        )
+        return 0
+
+    status = "ok"
+    code = None
+    exit_code = 0
+    if summary.failed_sessions > 0:
+        status = "failed"
+        if summary.cleaned_sessions > 0:
+            code = "DEMO_CLEANUP_PARTIAL_FAILURE"
+            exit_code = 2
+        else:
+            code = "DEMO_CLEANUP_FAILED"
+            exit_code = 1
+    payload = {
+        "status": status,
+        "mode": "execute",
+        "eligible_sessions": summary.scanned,
+        "attempted_sessions": summary.scanned,
+        "successful_cleanup_count": summary.cleaned_sessions,
+        "failed_cleanup_count": summary.failed_sessions,
+        **asdict(summary),
+    }
+    if code is not None:
+        payload["code"] = code
     print(
         json.dumps(
-            {"status": "ok", **asdict(summary)},
+            payload,
             sort_keys=True,
         )
     )
-    return 0
+    return exit_code
 
 
 if __name__ == "__main__":

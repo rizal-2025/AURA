@@ -6,7 +6,7 @@ param(
 
 . (Join-Path $PSScriptRoot 'AuraWindows.Common.ps1')
 Initialize-AuraDataDirectories
-Set-AuraOperatorProtectedAcl -Path $script:AuraBackupRoot -Container
+Assert-AuraOperatorRuntimeContainerAcl -Path $script:AuraBackupRoot
 $previous = Import-AuraConfiguration -Profile $Profile
 $tempPath = $null
 try {

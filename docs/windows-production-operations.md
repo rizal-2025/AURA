@@ -119,9 +119,43 @@ evidence, and contact the deployment owner.
 
 ## Manual cleanup
 
-Production cleanup is never part of start or status. Use the existing dedicated
-cleanup command only under its documented policy and review aggregate output;
-do not schedule new destructive cleanup as part of this lifecycle.
+Production cleanup is never part of start. Status reports cleanup configuration
+and health but never invokes cleanup or queries session data. Before activation,
+no activation marker plus no task (or a correctly staged disabled task) is
+`CLEANUP_NOT_CONFIGURED` and is informational.
+
+Use `Run-DemoCleanup.ps1 -Profile production -Mode DryRun` for the approved
+zero-mutation preview. It reports bounded aggregate eligible-row counts without
+identifiers. Execute mode requires `-Mode Execute -Confirmation
+RUN_AURA_DEMO_CLEANUP`, preserves CLI exits 0/1/2 exactly, and
+must not be used until a separate activation gate authorizes it.
+
+Protected operation logs record timestamp, profile, mode, aggregate session
+eligibility/attempt/success/failure counts, final result, and elapsed time.
+An authorized `Register-AuraTasks.ps1` run only stages cleanup disabled. Its
+fixed XML definition uses an hourly `PT1H` repetition from local minute 17,
+SYSTEM/ServiceAccount/LeastPrivilege, and `IgnoreNew` overlap handling. A
+separate elevated `Activate-AuraDemoCleanup.ps1` confirmation validates the
+task and prerequisites, writes a non-secret version-2 `activating` marker under
+`C:\ProgramData\AURA\run`, enables and revalidates the task, then atomically
+transitions the marker to `active`. Execute mode refuses to invoke Python unless
+the marker is `active` and the exact task is enabled, so a scheduled launch
+during transition cannot mutate cleanup data. Enable, validation, or transition
+failure disables the task before removing the marker. `Deactivate-AuraDemoCleanup.ps1`
+disables and validates first, then removes either valid marker state.
+
+After activation, status classifies task drift as `CLEANUP_TASK_MISSING`,
+`CLEANUP_TASK_DISABLED`, or `CLEANUP_TASK_INVALID`; no successful execute as
+`CLEANUP_NEVER_RAN`; a success older than three hours as `CLEANUP_STALE`; and
+the latest failed/partial execute as `CLEANUP_FAILED`. Each is not-ready.
+The last execute attempt, last dry-run, and last successful execute are tracked
+separately; dry-run success never satisfies execute freshness.
+Unexpected task removal never clears the marker.
+An incomplete `activating` state is reported as
+`CLEANUP_ACTIVATION_INCOMPLETE` and is never readiness-compatible.
+
+Do not register, enable, or execute scheduled cleanup as part of the normal
+start/stop lifecycle.
 
 ## What not to do
 
