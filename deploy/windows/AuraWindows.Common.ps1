@@ -1522,7 +1522,8 @@ function Test-AuraCleanupTaskXml {
         [Parameter(Mandatory)][string]$RepositoryRoot,
         [Parameter(Mandatory)][bool]$Enabled,
         [AllowNull()][object]$EffectiveRunLevel,
-        [AllowNull()][object]$EffectiveStartWhenAvailable
+        [AllowNull()][object]$EffectiveStartWhenAvailable,
+        [AllowNull()][object]$EffectiveEnabled
     )
     try {
         [xml]$document = $Xml
@@ -1571,6 +1572,20 @@ function Test-AuraCleanupTaskXml {
                 -or $effectiveStartWhenAvailableSafe
             )
         }
+        $enabledValue = Get-TaskValue '/t:Task/t:Settings/t:Enabled'
+        $hasEffectiveEnabled = $PSBoundParameters.ContainsKey(
+            'EffectiveEnabled'
+        )
+        $effectiveEnabledSafe = (
+            $hasEffectiveEnabled `
+            -and $EffectiveEnabled -is [bool] `
+            -and [bool]$EffectiveEnabled -eq $Enabled
+        )
+        $enabledSafe = if ($null -eq $enabledValue) {
+            $Enabled -and $effectiveEnabledSafe
+        } else {
+            $enabledValue -ceq $expectedEnabled -and $effectiveEnabledSafe
+        }
         return (
             (Get-TaskValue '/t:Task/t:Triggers/t:CalendarTrigger/t:Repetition/t:Interval') -ceq 'PT1H' `
             -and (Get-TaskValue '/t:Task/t:Triggers/t:CalendarTrigger/t:Repetition/t:Duration') -ceq 'P1D' `
@@ -1581,7 +1596,7 @@ function Test-AuraCleanupTaskXml {
             -and $runLevelSafe `
             -and (Get-TaskValue '/t:Task/t:Settings/t:MultipleInstancesPolicy') -ceq 'IgnoreNew' `
             -and $startWhenAvailableSafe `
-            -and (Get-TaskValue '/t:Task/t:Settings/t:Enabled') -ceq $expectedEnabled `
+            -and $enabledSafe `
             -and (Get-TaskValue '/t:Task/t:Settings/t:ExecutionTimeLimit') -ceq 'PT20M' `
             -and (Get-TaskValue '/t:Task/t:Actions/t:Exec/t:Command') -ceq $PowerShellPath `
             -and (Get-TaskValue '/t:Task/t:Actions/t:Exec/t:Arguments') -ceq (Get-AuraCleanupTaskArguments -CleanupScript $CleanupScript) `
@@ -1606,7 +1621,8 @@ function Get-AuraCleanupTaskSnapshot {
         -CleanupScript $CleanupScript -RepositoryRoot $RepositoryRoot `
         -Enabled (-not $disabled) `
         -EffectiveRunLevel $tasks[0].Principal.RunLevel `
-        -EffectiveStartWhenAvailable $tasks[0].Settings.StartWhenAvailable
+        -EffectiveStartWhenAvailable $tasks[0].Settings.StartWhenAvailable `
+        -EffectiveEnabled $tasks[0].Settings.Enabled
     return [PSCustomObject]@{
         State = [string]$tasks[0].State
         Disabled = $disabled
@@ -1692,7 +1708,11 @@ function Register-AuraCleanupTaskStaged {
                     $removeAttributedArtifact = Test-AuraCleanupTaskXml `
                         -Xml $partialXml -PowerShellPath $PowerShellPath `
                         -CleanupScript $CleanupScript `
-                        -RepositoryRoot $RepositoryRoot -Enabled $false
+                        -RepositoryRoot $RepositoryRoot -Enabled $false `
+                        -EffectiveRunLevel $partialTask[0].Principal.RunLevel `
+                        -EffectiveStartWhenAvailable `
+                            $partialTask[0].Settings.StartWhenAvailable `
+                        -EffectiveEnabled $partialTask[0].Settings.Enabled
                 }
             } catch { $removeAttributedArtifact = $false }
         }

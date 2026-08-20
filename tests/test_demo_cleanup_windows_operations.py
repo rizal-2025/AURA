@@ -187,7 +187,7 @@ $root = 'C:\repo'
 $first = New-AuraCleanupTaskXml -PowerShellPath $powerShell -CleanupScript $cleanup -RepositoryRoot $root -Enabled $false
 $second = New-AuraCleanupTaskXml -PowerShellPath $powerShell -CleanupScript $cleanup -RepositoryRoot $root -Enabled $false
 if ($first -cne $second) { throw 'not-deterministic' }
-if (-not (Test-AuraCleanupTaskXml -Xml $first -PowerShellPath $powerShell -CleanupScript $cleanup -RepositoryRoot $root -Enabled $false)) { throw 'inspection' }
+if (-not (Test-AuraCleanupTaskXml -Xml $first -PowerShellPath $powerShell -CleanupScript $cleanup -RepositoryRoot $root -Enabled $false -EffectiveEnabled $false)) { throw 'inspection' }
 [xml]$document = $first
 $manager = [Xml.XmlNamespaceManager]::new($document.NameTable)
 $manager.AddNamespace('t', 'http://schemas.microsoft.com/windows/2004/02/mit/task')
@@ -207,7 +207,7 @@ $definition.XmlText = $first
 if ($definition.Principal.LogonType -ne 5) { throw 'service-account-logon' }
 if ($definition.Triggers.Item(1).Repetition.Interval -cne 'PT1H') { throw 'host-interval' }
 $serialized = $definition.XmlText
-if (-not (Test-AuraCleanupTaskXml -Xml $serialized -PowerShellPath $powerShell -CleanupScript $cleanup -RepositoryRoot $root -Enabled $false)) { throw 'host-serialization' }
+if (-not (Test-AuraCleanupTaskXml -Xml $serialized -PowerShellPath $powerShell -CleanupScript $cleanup -RepositoryRoot $root -Enabled $false -EffectiveEnabled $false)) { throw 'host-serialization' }
 Write-Output 'TASK_XML_OK'
 """
         result = self.invoke(body)
@@ -238,7 +238,7 @@ function Set-Value($document, [string]$xpath, [string]$value) {
     $node.InnerText = $value
 }
 function Valid($document, [object]$runLevel = 'Limited', [object]$start = $false) {
-    return Test-AuraCleanupTaskXml -Xml $document.OuterXml -PowerShellPath $powerShell -CleanupScript $cleanup -RepositoryRoot $root -Enabled $false -EffectiveRunLevel $runLevel -EffectiveStartWhenAvailable $start
+    return Test-AuraCleanupTaskXml -Xml $document.OuterXml -PowerShellPath $powerShell -CleanupScript $cleanup -RepositoryRoot $root -Enabled $false -EffectiveRunLevel $runLevel -EffectiveStartWhenAvailable $start -EffectiveEnabled $false
 }
 function Valid-WithoutEffectiveEvidence($document) {
     return Test-AuraCleanupTaskXml -Xml $document.OuterXml -PowerShellPath $powerShell -CleanupScript $cleanup -RepositoryRoot $root -Enabled $false
@@ -293,6 +293,72 @@ Write-Output 'TASK_DEFAULT_NORMALIZATION_OK'
         self.assertEqual(
             result.stdout.strip(),
             "TASK_DEFAULT_NORMALIZATION_OK",
+        )
+
+    def test_task_validator_normalizes_enabled_only_with_effective_proof(self):
+        body = r"""
+$powerShell = 'C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe'
+$cleanup = 'C:\repo\deploy\windows\Run-DemoCleanup.ps1'
+$root = 'C:\repo'
+$canonical = New-AuraCleanupTaskXml -PowerShellPath $powerShell -CleanupScript $cleanup -RepositoryRoot $root -Enabled $false
+$namespace = 'http://schemas.microsoft.com/windows/2004/02/mit/task'
+function New-Variant { [xml]$document = $canonical; return $document }
+function Manager($document) {
+    $manager = [Xml.XmlNamespaceManager]::new($document.NameTable)
+    $manager.AddNamespace('t', $namespace)
+    return ,$manager
+}
+function Enabled-Node($document) {
+    return $document.SelectSingleNode('/t:Task/t:Settings/t:Enabled', (Manager $document))
+}
+function Set-Enabled($document, [string]$value) {
+    (Enabled-Node $document).InnerText = $value
+}
+function Remove-Enabled($document) {
+    $node = Enabled-Node $document
+    [void]$node.ParentNode.RemoveChild($node)
+}
+function Valid($document, [bool]$expected, [object]$effective) {
+    return Test-AuraCleanupTaskXml -Xml $document.OuterXml -PowerShellPath $powerShell -CleanupScript $cleanup -RepositoryRoot $root -Enabled $expected -EffectiveRunLevel 'Limited' -EffectiveStartWhenAvailable $false -EffectiveEnabled $effective
+}
+function Valid-WithoutEnabledEvidence($document, [bool]$expected) {
+    return Test-AuraCleanupTaskXml -Xml $document.OuterXml -PowerShellPath $powerShell -CleanupScript $cleanup -RepositoryRoot $root -Enabled $expected -EffectiveRunLevel 'Limited' -EffectiveStartWhenAvailable $false
+}
+$case = New-Variant
+Set-Enabled $case 'true'
+if (-not (Valid $case $true $true)) { throw 'explicit-true-effective-true-rejected' }
+$case = New-Variant
+Remove-Enabled $case
+if (-not (Valid $case $true $true)) { throw 'omitted-true-effective-true-rejected' }
+$case = New-Variant
+if (Valid $case $true $false) { throw 'explicit-false-expected-true-accepted' }
+if (Valid $case $true $true) { throw 'xml-effective-disagreement-accepted' }
+$case = New-Variant
+Remove-Enabled $case
+if (Valid $case $true $false) { throw 'omitted-effective-false-accepted' }
+if (Valid-WithoutEnabledEvidence $case $true) { throw 'omitted-without-evidence-accepted' }
+$case = New-Variant
+Set-Enabled $case 'True'
+if (Valid $case $true $true) { throw 'malformed-enabled-accepted' }
+$case = New-Variant
+if (-not (Valid $case $false $false)) { throw 'explicit-false-effective-false-rejected' }
+if (Valid $case $false 'false') { throw 'unknown-effective-enabled-accepted' }
+if (Valid-WithoutEnabledEvidence $case $false) { throw 'explicit-false-without-evidence-accepted' }
+$case = New-Variant
+Set-Enabled $case 'true'
+if (Valid $case $false $true) { throw 'enabled-accepted-as-disabled' }
+if (Valid $case $false $false) { throw 'enabled-xml-effective-false-accepted' }
+$case = New-Variant
+Remove-Enabled $case
+if (Valid $case $false $false) { throw 'omitted-false-accepted' }
+if (Valid $case $false $true) { throw 'omitted-enabled-accepted-as-disabled' }
+Write-Output 'TASK_ENABLED_NORMALIZATION_OK'
+"""
+        result = self.invoke(body)
+        self.assert_ok(result)
+        self.assertEqual(
+            result.stdout.strip(),
+            "TASK_ENABLED_NORMALIZATION_OK",
         )
 
     def test_activation_marker_schema_is_atomic_and_removable(self):
@@ -382,7 +448,7 @@ $script:Corrupt = $false
 $script:FailRegisterAfterCreate = $false
 $script:ActivationMarker = $null
 function Read-AuraCleanupActivationMarker { param($Profile) $script:ActivationMarker }
-function Get-ScheduledTask { param($TaskName,$ErrorAction) if ($null -ne $script:TaskState) { [PSCustomObject]@{ State=$script:TaskState; Principal=[PSCustomObject]@{ RunLevel='Limited' }; Settings=[PSCustomObject]@{ StartWhenAvailable=$false } } } }
+function Get-ScheduledTask { param($TaskName,$ErrorAction) if ($null -ne $script:TaskState) { [PSCustomObject]@{ State=$script:TaskState; Principal=[PSCustomObject]@{ RunLevel='Limited' }; Settings=[PSCustomObject]@{ StartWhenAvailable=$false; Enabled=($script:TaskState -ne 'Disabled') } } } }
 function Export-ScheduledTask { param($TaskName,$ErrorAction) if ($script:Corrupt) { '<Task />' } else { $script:TaskXml } }
 function Register-ScheduledTask { param($TaskName,$Xml,$ErrorAction) $script:RegisterCount++; $script:TaskXml=$Xml; $script:TaskState='Disabled'; if ($script:FailRegisterAfterCreate) { throw 'partial-register' } }
 function Unregister-ScheduledTask { param($TaskName,$Confirm,$ErrorAction) $script:UnregisterCount++; $script:TaskState=$null; $script:TaskXml=$null }
