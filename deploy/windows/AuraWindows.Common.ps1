@@ -785,18 +785,57 @@ function Test-AuraPostgreSQLLoopbackListener {
     return $true
 }
 
+function Invoke-AuraRepositoryPythonOperation {
+    param(
+        [Parameter(Mandatory)]
+        [ValidateSet('readiness', 'schema-verify', 'readiness-import')]
+        [string]$Operation
+    )
+
+    $repositoryRoot = Assert-AuraRepositoryLayout
+    $arguments = switch ($Operation) {
+        'readiness' { '-m app.jobs.public_demo_readiness' }
+        'schema-verify' { '-m app.jobs.demo_schema --operation verify' }
+        'readiness-import' { '-B -c "import app.jobs.public_demo_readiness"' }
+    }
+    $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
+    $startInfo.FileName = Get-AuraPythonPath
+    $startInfo.Arguments = $arguments
+    $startInfo.WorkingDirectory = $repositoryRoot
+    $startInfo.UseShellExecute = $false
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+    $startInfo.CreateNoWindow = $true
+
+    $process = [System.Diagnostics.Process]::Start($startInfo)
+    if ($null -eq $process) { throw 'AURA_PYTHON_PROCESS_START_FAILED' }
+    try {
+        $standardOutput = $process.StandardOutput.ReadToEnd()
+        $standardError = $process.StandardError.ReadToEnd()
+        $process.WaitForExit()
+        return [PSCustomObject]@{
+            ExitCode = $process.ExitCode
+            StandardOutput = $standardOutput
+            StandardError = $standardError
+            WorkingDirectory = $repositoryRoot
+        }
+    } finally {
+        $standardOutput = $null
+        $standardError = $null
+        $process.Dispose()
+    }
+}
+
 function Test-AuraProductionDatabaseReadiness {
     try {
         Assert-AuraProductionConfiguration
-        $python = Get-AuraPythonPath
-        & $python -m app.jobs.public_demo_readiness 1>$null 2>$null
-        if ($LASTEXITCODE -ne 0) { return $false }
-        $schemaOutput = & $python -m app.jobs.demo_schema `
-            --operation verify 2>$null
-        $schemaExitCode = $LASTEXITCODE
+        $readiness = Invoke-AuraRepositoryPythonOperation -Operation readiness
+        if ($readiness.ExitCode -ne 0) { return $false }
+        $schema = Invoke-AuraRepositoryPythonOperation -Operation schema-verify
         $null = ConvertFrom-AuraSchemaProcessResult -Profile production `
-            -Operation verify -ExitCode $schemaExitCode `
-            -StandardOutput ($schemaOutput -join "`n") -StandardError ''
+            -Operation verify -ExitCode $schema.ExitCode `
+            -StandardOutput $schema.StandardOutput `
+            -StandardError $schema.StandardError
         return $true
     } catch {
         return $false

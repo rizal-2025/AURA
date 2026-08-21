@@ -24,6 +24,17 @@ def read(path: Path) -> str:
 
 
 class ProductionOperationsStaticTests(unittest.TestCase):
+    def test_database_readiness_process_is_anchored_to_repository(self):
+        common = read(COMMON)
+        self.assertIn("function Invoke-AuraRepositoryPythonOperation", common)
+        self.assertIn("$repositoryRoot = Assert-AuraRepositoryLayout", common)
+        self.assertIn("$startInfo.FileName = Get-AuraPythonPath", common)
+        self.assertIn("$startInfo.WorkingDirectory = $repositoryRoot", common)
+        self.assertIn("$startInfo.UseShellExecute = $false", common)
+        self.assertIn("'-m app.jobs.public_demo_readiness'", common)
+        self.assertIn("'-m app.jobs.demo_schema --operation verify'", common)
+        self.assertNotIn("EnvironmentVariables['PYTHONPATH']", common)
+
     def test_daily_commands_are_production_only_and_idempotent(self):
         start = read(START)
         stop = read(STOP)
@@ -188,7 +199,12 @@ class ProductionOperationsStaticTests(unittest.TestCase):
 
 @unittest.skipUnless(os.name == "nt", "PowerShell behavior tests require Windows")
 class ProductionOperationsPowerShellTests(unittest.TestCase):
-    def invoke(self, body: str, **environment: str) -> subprocess.CompletedProcess[str]:
+    def invoke(
+        self,
+        body: str,
+        cwd: Path = PROJECT_ROOT,
+        **environment: str,
+    ) -> subprocess.CompletedProcess[str]:
         command = f". '{COMMON}'; $ErrorActionPreference='Stop'; {body}"
         return subprocess.run(
             [
@@ -199,7 +215,7 @@ class ProductionOperationsPowerShellTests(unittest.TestCase):
                 "-Command",
                 command,
             ],
-            cwd=PROJECT_ROOT,
+            cwd=cwd,
             env={**os.environ, **environment},
             capture_output=True,
             text=True,
@@ -210,6 +226,79 @@ class ProductionOperationsPowerShellTests(unittest.TestCase):
     def assert_ok(self, result: subprocess.CompletedProcess[str]) -> None:
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(result.stderr, "")
+
+    def test_repository_python_import_is_external_cwd_independent(self):
+        body = r"""
+$root = Assert-AuraRepositoryLayout
+$result = Invoke-AuraRepositoryPythonOperation -Operation readiness-import
+if ($result.ExitCode -ne 0) { throw 'repository-import-failed' }
+if (-not [string]::IsNullOrEmpty($result.StandardError)) { throw 'repository-import-stderr' }
+if ([IO.Path]::GetFullPath($result.WorkingDirectory) -cne [IO.Path]::GetFullPath($root)) { throw 'working-directory-invalid' }
+Write-Output ('REPOSITORY_IMPORT_OK root=' + $result.WorkingDirectory)
+"""
+        external_directories = [
+            PROJECT_ROOT.parent,
+            Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32",
+        ]
+        for directory in external_directories:
+            with self.subTest(directory=directory):
+                self.assertNotEqual(directory.resolve(), PROJECT_ROOT.resolve())
+                result = self.invoke(body, cwd=directory)
+                self.assert_ok(result)
+                self.assertIn("REPOSITORY_IMPORT_OK", result.stdout)
+                self.assertIn(str(PROJECT_ROOT), result.stdout)
+
+    def test_wrong_cwd_import_negative_control(self):
+        python = PROJECT_ROOT / ".venv" / "Scripts" / "python.exe"
+        environment = {
+            name: value
+            for name, value in os.environ.items()
+            if name.casefold() != "pythonpath"
+        }
+        result = subprocess.run(
+            [
+                str(python),
+                "-B",
+                "-c",
+                "import app.jobs.public_demo_readiness",
+            ],
+            cwd=PROJECT_ROOT.parent,
+            env=environment,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("No module named 'app'", result.stderr)
+
+    def test_database_readiness_child_failures_remain_fail_closed(self):
+        body = r"""
+function Assert-AuraProductionConfiguration { }
+$script:ReadinessCase = 'readiness-failure'
+function Invoke-AuraRepositoryPythonOperation {
+    param($Operation)
+    if ($script:ReadinessCase -eq 'readiness-failure') {
+        return [PSCustomObject]@{ ExitCode=1; StandardOutput=''; StandardError='import failure' }
+    }
+    if ($Operation -eq 'readiness') {
+        return [PSCustomObject]@{ ExitCode=0; StandardOutput=''; StandardError='' }
+    }
+    if ($script:ReadinessCase -eq 'schema-failure') {
+        return [PSCustomObject]@{ ExitCode=1; StandardOutput=''; StandardError='database failure' }
+    }
+    return [PSCustomObject]@{ ExitCode=0; StandardOutput='not-json'; StandardError='' }
+}
+if (Test-AuraProductionDatabaseReadiness) { throw 'readiness-failure-accepted' }
+$script:ReadinessCase = 'schema-failure'
+if (Test-AuraProductionDatabaseReadiness) { throw 'schema-failure-accepted' }
+$script:ReadinessCase = 'schema-malformed'
+if (Test-AuraProductionDatabaseReadiness) { throw 'schema-malformed-accepted' }
+Write-Output 'READINESS_FAILURES_REJECTED'
+"""
+        result = self.invoke(body)
+        self.assert_ok(result)
+        self.assertEqual(result.stdout.strip(), "READINESS_FAILURES_REJECTED")
 
     def test_exact_process_command_rejects_extra_arguments(self):
         body = r"""

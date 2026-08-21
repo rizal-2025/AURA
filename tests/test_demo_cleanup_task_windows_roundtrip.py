@@ -25,7 +25,12 @@ class DemoCleanupWindowsRegisteredTaskTests(unittest.TestCase):
         if not ctypes.windll.shell32.IsUserAnAdmin():
             self.skipTest("Real Task Scheduler registration requires elevation")
 
-    def invoke(self, body: str, task_name: str) -> subprocess.CompletedProcess[str]:
+    def invoke(
+        self,
+        body: str,
+        task_name: str,
+        cwd: Path = PROJECT_ROOT,
+    ) -> subprocess.CompletedProcess[str]:
         command = f". '{COMMON}'; $ErrorActionPreference='Stop'; {body}"
         return subprocess.run(
             [
@@ -36,7 +41,7 @@ class DemoCleanupWindowsRegisteredTaskTests(unittest.TestCase):
                 "-Command",
                 command,
             ],
-            cwd=PROJECT_ROOT,
+            cwd=cwd,
             env={
                 **os.environ,
                 "AURA_TEST_TASK_NAME": task_name,
@@ -51,6 +56,31 @@ class DemoCleanupWindowsRegisteredTaskTests(unittest.TestCase):
     def assert_ok(self, result: subprocess.CompletedProcess[str]) -> None:
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(result.stderr, "")
+
+    def test_elevated_readiness_import_is_external_cwd_independent(self):
+        task_name = f"Codex Enabled Normalization Test {uuid.uuid4().hex}"
+        body = r"""
+$productionBefore = @(Get-ScheduledTask -TaskName 'AURA Demo Cleanup' -ErrorAction SilentlyContinue)
+if ($productionBefore.Count -ne 1) { throw 'production-task-count-invalid' }
+$stateBefore = [string]$productionBefore[0].State
+$enabledBefore = [bool]$productionBefore[0].Settings.Enabled
+if ($stateBefore -cne 'Disabled' -or $enabledBefore) { throw 'production-task-not-disabled' }
+if ($null -ne (Read-AuraCleanupActivationMarker -Profile production)) { throw 'activation-marker-present' }
+$root = Assert-AuraRepositoryLayout
+$result = Invoke-AuraRepositoryPythonOperation -Operation readiness-import
+if ($result.ExitCode -ne 0) { throw 'elevated-import-failed' }
+if (-not [string]::IsNullOrEmpty($result.StandardError)) { throw 'elevated-import-stderr' }
+if ([IO.Path]::GetFullPath($result.WorkingDirectory) -cne [IO.Path]::GetFullPath($root)) { throw 'elevated-working-directory-invalid' }
+$productionAfter = @(Get-ScheduledTask -TaskName 'AURA Demo Cleanup' -ErrorAction SilentlyContinue)
+if ($productionAfter.Count -ne 1) { throw 'production-task-count-changed' }
+if ([string]$productionAfter[0].State -cne $stateBefore -or [bool]$productionAfter[0].Settings.Enabled -ne $enabledBefore) { throw 'production-task-state-changed' }
+if ($null -ne (Read-AuraCleanupActivationMarker -Profile production)) { throw 'activation-marker-created' }
+Write-Output ('ELEVATED_REPOSITORY_IMPORT_OK root=' + $result.WorkingDirectory)
+"""
+        result = self.invoke(body, task_name, cwd=PROJECT_ROOT.parent)
+        self.assert_ok(result)
+        self.assertIn("ELEVATED_REPOSITORY_IMPORT_OK", result.stdout)
+        self.assertIn(str(PROJECT_ROOT), result.stdout)
 
     def test_registered_task_accepts_windows_default_omissions(self):
         task_name = f"Codex Enabled Normalization Test {uuid.uuid4().hex}"
