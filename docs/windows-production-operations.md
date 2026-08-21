@@ -150,6 +150,9 @@ the marker is `active` and the exact task is enabled, so a scheduled launch
 during transition cannot mutate cleanup data. Enable, validation, or transition
 failure disables the task before removing the marker. `Deactivate-AuraDemoCleanup.ps1`
 disables and validates first, then removes either valid marker state.
+Repository Python readiness operations launched by the elevated activation path
+derive and explicitly use the repository root as their working directory; they
+do not depend on the caller's current directory.
 
 After activation, status classifies task drift as `CLEANUP_TASK_MISSING`,
 `CLEANUP_TASK_DISABLED`, or `CLEANUP_TASK_INVALID`; no successful execute as
