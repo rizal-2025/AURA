@@ -135,6 +135,14 @@ eligibility/attempt/success/failure counts, final result, and elapsed time.
 An authorized `Register-AuraTasks.ps1` run only stages cleanup disabled. Its
 fixed XML definition uses an hourly `PT1H` repetition from local minute 17,
 SYSTEM/ServiceAccount/LeastPrivilege, and `IgnoreNew` overlap handling.
+The exact cleanup action uses Windows PowerShell with `-NoProfile`,
+`-NonInteractive`, and process-scoped `-ExecutionPolicy Bypass` before `-File`
+so the repository-owned script can run unattended under restrictive host
+defaults. This flag applies only to that scheduled PowerShell process: no
+machine-wide or user-wide policy is changed, and no `Set-ExecutionPolicy`
+operation is performed. The action remains canonical and exact; omitting,
+changing, or adding to the approved execution-policy arguments makes task
+validation fail.
 A registered/exported Windows definition may omit the explicit defaults
 `RunLevel=LeastPrivilege` and `StartWhenAvailable=false`, and Windows may omit
 `Enabled=true` after a disabled task is enabled. Canonical validation accepts

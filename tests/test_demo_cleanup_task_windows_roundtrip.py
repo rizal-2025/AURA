@@ -6,6 +6,7 @@ import os
 from datetime import datetime, timedelta
 from pathlib import Path
 import subprocess
+import tempfile
 import unittest
 import uuid
 
@@ -14,6 +15,13 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 COMMON = PROJECT_ROOT / "deploy" / "windows" / "AuraWindows.Common.ps1"
 NOOP_ACTION = (
     PROJECT_ROOT / "tests" / "fixtures" / "windows" / "Noop-ScheduledTaskAction.ps1"
+)
+EXECUTION_POLICY_PROBE = (
+    PROJECT_ROOT
+    / "tests"
+    / "fixtures"
+    / "windows"
+    / "ExecutionPolicyProbe-ScheduledTaskAction.ps1"
 )
 
 
@@ -30,6 +38,7 @@ class DemoCleanupWindowsRegisteredTaskTests(unittest.TestCase):
         body: str,
         task_name: str,
         cwd: Path = PROJECT_ROOT,
+        environment: dict[str, str] | None = None,
     ) -> subprocess.CompletedProcess[str]:
         command = f". '{COMMON}'; $ErrorActionPreference='Stop'; {body}"
         return subprocess.run(
@@ -46,6 +55,8 @@ class DemoCleanupWindowsRegisteredTaskTests(unittest.TestCase):
                 **os.environ,
                 "AURA_TEST_TASK_NAME": task_name,
                 "AURA_TEST_NOOP_ACTION": str(NOOP_ACTION),
+                "AURA_TEST_EXECUTION_POLICY_PROBE": str(EXECUTION_POLICY_PROBE),
+                **(environment or {}),
             },
             capture_output=True,
             text=True,
@@ -81,6 +92,143 @@ Write-Output ('ELEVATED_REPOSITORY_IMPORT_OK root=' + $result.WorkingDirectory)
         self.assert_ok(result)
         self.assertIn("ELEVATED_REPOSITORY_IMPORT_OK", result.stdout)
         self.assertIn(str(PROJECT_ROOT), result.stdout)
+
+    def test_bounded_execution_policy_runs_disposable_task(self):
+        now = datetime.now().astimezone()
+        next_boundary = now.replace(minute=17, second=0, microsecond=0)
+        if next_boundary <= now:
+            next_boundary += timedelta(hours=1)
+        if now.minute == 17 or next_boundary - now <= timedelta(minutes=2):
+            self.skipTest("Too close to the task's minute-17 trigger boundary")
+
+        task_name = f"AURA Execution Policy Test {uuid.uuid4().hex}"
+        with tempfile.TemporaryDirectory(
+            prefix="aura-execution-policy-"
+        ) as directory:
+            body = r"""
+$positiveName = $env:AURA_TEST_TASK_NAME
+$negativeName = $positiveName + ' Negative'
+if ($positiveName -notmatch '^AURA Execution Policy Test [a-f0-9]{32}$') { throw 'test-task-name-invalid' }
+$productionBefore = @(Get-ScheduledTask -TaskName 'AURA Demo Cleanup' -ErrorAction SilentlyContinue)
+if ($productionBefore.Count -ne 1) { throw 'production-task-count-invalid' }
+$productionStateBefore = [string]$productionBefore[0].State
+$productionEnabledBefore = [bool]$productionBefore[0].Settings.Enabled
+if ($productionStateBefore -cne 'Disabled' -or $productionEnabledBefore) { throw 'production-task-not-disabled' }
+if ($null -ne (Read-AuraCleanupActivationMarker -Profile production)) { throw 'activation-marker-present' }
+
+$testRoot = [IO.Path]::GetFullPath($env:AURA_TEST_EXECUTION_POLICY_ROOT).TrimEnd('\')
+$tempRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\') + '\'
+if (-not ($testRoot + '\').StartsWith($tempRoot, [StringComparison]::OrdinalIgnoreCase)) { throw 'test-root-not-temporary' }
+Set-AuraOperatorProtectedAcl -Path $testRoot -Container
+$sourceProbe = [IO.Path]::GetFullPath($env:AURA_TEST_EXECUTION_POLICY_PROBE)
+if (-not (Test-Path -LiteralPath $sourceProbe -PathType Leaf)) { throw 'probe-fixture-missing' }
+$probe = Join-Path $testRoot 'ExecutionPolicyProbe-ScheduledTaskAction.ps1'
+Copy-Item -LiteralPath $sourceProbe -Destination $probe -ErrorAction Stop
+$resultPath = Join-Path $testRoot 'execution-policy-probe-result.txt'
+$root = Assert-AuraRepositoryLayout
+$powerShell = (Get-Command powershell.exe -ErrorAction Stop).Source
+$persistentScopes = @('MachinePolicy', 'UserPolicy', 'CurrentUser', 'LocalMachine')
+function Get-PersistentPolicies {
+    $values = @{}
+    foreach ($entry in Get-ExecutionPolicy -List) {
+        if ([string]$entry.Scope -in $persistentScopes) {
+            $values[[string]$entry.Scope] = [string]$entry.ExecutionPolicy
+        }
+    }
+    return $values
+}
+function Assert-PoliciesEqual($before, $after) {
+    foreach ($scope in $persistentScopes) {
+        if ($before[$scope] -cne $after[$scope]) { throw ('persistent-policy-changed-' + $scope) }
+    }
+}
+function Remove-TestTask([string]$name) {
+    $remaining = @(Get-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue)
+    if ($remaining.Count -eq 1) {
+        if ([string]$remaining[0].State -cne 'Disabled') {
+            Disable-ScheduledTask -TaskName $name -ErrorAction Stop | Out-Null
+        }
+        Unregister-ScheduledTask -TaskName $name -Confirm:$false -ErrorAction Stop
+    }
+}
+function Wait-TestTask([string]$name, [DateTime]$previousRun) {
+    $deadline = [DateTime]::UtcNow.AddSeconds(15)
+    do {
+        Start-Sleep -Milliseconds 200
+        $currentTask = Get-ScheduledTask -TaskName $name -ErrorAction Stop
+        $currentInfo = Get-ScheduledTaskInfo -TaskName $name -ErrorAction Stop
+        if ($currentInfo.LastRunTime -gt $previousRun -and [string]$currentTask.State -cne 'Running') {
+            return $currentInfo
+        }
+    } while ([DateTime]::UtcNow -lt $deadline)
+    throw ('test-task-timeout-' + $name)
+}
+
+$policiesBefore = Get-PersistentPolicies
+$failure = $null
+try {
+    $positiveXml = New-AuraCleanupTaskXml -PowerShellPath $powerShell -CleanupScript $probe -RepositoryRoot $root -Enabled $true
+    [xml]$negativeDocument = $positiveXml
+    $manager = [Xml.XmlNamespaceManager]::new($negativeDocument.NameTable)
+    $manager.AddNamespace('t', 'http://schemas.microsoft.com/windows/2004/02/mit/task')
+    $argumentsNode = $negativeDocument.SelectSingleNode('/t:Task/t:Actions/t:Exec/t:Arguments', $manager)
+    if ($null -eq $argumentsNode) { throw 'negative-arguments-missing' }
+    $argumentsNode.InnerText = $argumentsNode.InnerText.Replace(
+        '-ExecutionPolicy Bypass',
+        '-ExecutionPolicy Restricted'
+    )
+    if (Test-AuraCleanupTaskXml -Xml $negativeDocument.OuterXml -PowerShellPath $powerShell -CleanupScript $probe -RepositoryRoot $root -Enabled $true -EffectiveRunLevel 'Limited' -EffectiveStartWhenAvailable $false -EffectiveEnabled $true) { throw 'restricted-negative-control-accepted' }
+
+    Register-ScheduledTask -TaskName $negativeName -Xml $negativeDocument.OuterXml -ErrorAction Stop | Out-Null
+    $negativeBefore = (Get-ScheduledTaskInfo -TaskName $negativeName -ErrorAction Stop).LastRunTime
+    Start-ScheduledTask -TaskName $negativeName -ErrorAction Stop
+    $negativeInfo = Wait-TestTask -name $negativeName -previousRun $negativeBefore
+    if ($negativeInfo.LastTaskResult -eq 0) { throw 'restricted-negative-control-succeeded' }
+    if (Test-Path -LiteralPath $resultPath) { throw 'restricted-negative-control-ran-script' }
+    Remove-TestTask $negativeName
+
+    Register-ScheduledTask -TaskName $positiveName -Xml $positiveXml -ErrorAction Stop | Out-Null
+    $positiveTask = Get-ScheduledTask -TaskName $positiveName -ErrorAction Stop
+    $positiveSnapshot = Get-AuraCleanupTaskSnapshot -TaskName $positiveName -PowerShellPath $powerShell -CleanupScript $probe -RepositoryRoot $root
+    if ($null -eq $positiveSnapshot -or $positiveSnapshot.Disabled -or -not $positiveSnapshot.DefinitionMatches) { throw 'bounded-positive-task-not-canonical' }
+    $positiveBefore = (Get-ScheduledTaskInfo -TaskName $positiveName -ErrorAction Stop).LastRunTime
+    Start-ScheduledTask -TaskName $positiveName -ErrorAction Stop
+    $positiveInfo = Wait-TestTask -name $positiveName -previousRun $positiveBefore
+    if ($positiveInfo.LastTaskResult -ne 0) { throw 'bounded-positive-task-failed' }
+    if (-not (Test-Path -LiteralPath $resultPath -PathType Leaf)) { throw 'bounded-positive-probe-missing' }
+    if ([IO.File]::ReadAllText($resultPath, [Text.Encoding]::ASCII) -cne 'AURA_EXECUTION_POLICY_PROBE_OK') { throw 'bounded-positive-probe-invalid' }
+    if (-not [bool]$positiveTask.Settings.Enabled) { throw 'bounded-positive-task-not-enabled' }
+
+    $policiesAfter = Get-PersistentPolicies
+    Assert-PoliciesEqual $policiesBefore $policiesAfter
+    Write-Output (
+        'EXECUTION_POLICY_TASK_BEHAVIOR_OK negative_result={0} positive_result={1}' -f `
+        $negativeInfo.LastTaskResult, $positiveInfo.LastTaskResult
+    )
+} catch { $failure = $_ } finally {
+    Remove-TestTask $negativeName
+    Remove-TestTask $positiveName
+    Remove-Item -LiteralPath $resultPath -Force -ErrorAction SilentlyContinue
+}
+if (@(Get-ScheduledTask -TaskName $negativeName -ErrorAction SilentlyContinue).Count -ne 0) { throw 'negative-task-cleanup-failed' }
+if (@(Get-ScheduledTask -TaskName $positiveName -ErrorAction SilentlyContinue).Count -ne 0) { throw 'positive-task-cleanup-failed' }
+Assert-PoliciesEqual $policiesBefore (Get-PersistentPolicies)
+if ($null -ne (Read-AuraCleanupActivationMarker -Profile production)) { throw 'activation-marker-created' }
+$productionAfter = @(Get-ScheduledTask -TaskName 'AURA Demo Cleanup' -ErrorAction SilentlyContinue)
+if ($productionAfter.Count -ne 1) { throw 'production-task-count-changed' }
+if ([string]$productionAfter[0].State -cne $productionStateBefore -or [bool]$productionAfter[0].Settings.Enabled -ne $productionEnabledBefore) { throw 'production-task-state-changed' }
+if ($null -ne $failure) { throw $failure }
+"""
+            result = self.invoke(
+                body,
+                task_name,
+                environment={"AURA_TEST_EXECUTION_POLICY_ROOT": directory},
+            )
+        self.assert_ok(result)
+        self.assertRegex(
+            result.stdout,
+            r"EXECUTION_POLICY_TASK_BEHAVIOR_OK negative_result=\d+ positive_result=0",
+        )
 
     def test_registered_task_accepts_windows_default_omissions(self):
         task_name = f"Codex Enabled Normalization Test {uuid.uuid4().hex}"

@@ -72,9 +72,14 @@ class DemoCleanupWindowsStaticTests(unittest.TestCase):
         combined = read(TASKS) + read(COMMON)
         self.assertIn("$repositoryRoot = Assert-AuraRepositoryLayout", combined)
         self.assertIn("<WorkingDirectory>$workingDirectory</WorkingDirectory>", combined)
-        self.assertIn('-File `"$CleanupScript`"', combined)
+        self.assertIn(
+            '-NoProfile -NonInteractive -ExecutionPolicy Bypass '
+            '-File `"$CleanupScript`"',
+            combined,
+        )
         self.assertIn("-Mode Execute", combined)
         self.assertIn("-Confirmation RUN_AURA_DEMO_CLEANUP", combined)
+        self.assertNotIn("Set-ExecutionPolicy", combined)
 
     def test_wrapper_fails_closed_and_enters_verified_repository(self):
         wrapper = read(WRAPPER)
@@ -213,6 +218,77 @@ Write-Output 'TASK_XML_OK'
         result = self.invoke(body)
         self.assert_ok(result)
         self.assertEqual(result.stdout.strip(), "TASK_XML_OK")
+
+    def test_task_action_requires_exact_bounded_execution_policy(self):
+        body = r"""
+$powerShell = 'C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe'
+$cleanup = 'C:\repo with spaces & safe\deploy\windows\Run-DemoCleanup.ps1'
+$root = 'C:\repo with spaces & safe'
+$canonical = New-AuraCleanupTaskXml -PowerShellPath $powerShell -CleanupScript $cleanup -RepositoryRoot $root -Enabled $false
+$namespace = 'http://schemas.microsoft.com/windows/2004/02/mit/task'
+function New-Variant { [xml]$document = $canonical; return $document }
+function Manager($document) {
+    $manager = [Xml.XmlNamespaceManager]::new($document.NameTable)
+    $manager.AddNamespace('t', $namespace)
+    return ,$manager
+}
+function Get-Node($document, [string]$xpath) {
+    $node = $document.SelectSingleNode($xpath, (Manager $document))
+    if ($null -eq $node) { throw 'test-node-missing' }
+    return $node
+}
+function Set-Value($document, [string]$xpath, [string]$value) {
+    (Get-Node $document $xpath).InnerText = $value
+}
+function Valid($document) {
+    return Test-AuraCleanupTaskXml -Xml $document.OuterXml -PowerShellPath $powerShell -CleanupScript $cleanup -RepositoryRoot $root -Enabled $false -EffectiveRunLevel 'Limited' -EffectiveStartWhenAvailable $false -EffectiveEnabled $false
+}
+$expected = '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + $cleanup + '" -Profile production -Mode Execute -Confirmation RUN_AURA_DEMO_CLEANUP'
+$actual = [string](Get-Node ([xml]$canonical) '/t:Task/t:Actions/t:Exec/t:Arguments').InnerText
+if ($actual -cne $expected) { throw 'approved-arguments-not-exact' }
+if (-not (Valid ([xml]$canonical))) { throw 'approved-action-rejected' }
+
+$case = New-Variant
+Set-Value $case '/t:Task/t:Actions/t:Exec/t:Arguments' ($expected.Replace('-ExecutionPolicy Bypass ', ''))
+if (Valid $case) { throw 'missing-execution-policy-accepted' }
+
+$case = New-Variant
+Set-Value $case '/t:Task/t:Actions/t:Exec/t:Arguments' ($expected.Replace('-ExecutionPolicy Bypass', '-ExecutionPolicy RemoteSigned'))
+if (Valid $case) { throw 'wrong-execution-policy-accepted' }
+
+$case = New-Variant
+Set-Value $case '/t:Task/t:Actions/t:Exec/t:Arguments' '-NoProfile -NonInteractive -Command "Set-ExecutionPolicy Bypass -Scope LocalMachine"'
+if (Valid $case) { throw 'persistent-policy-command-accepted' }
+
+$case = New-Variant
+Set-Value $case '/t:Task/t:Actions/t:Exec/t:Command' 'C:\Program Files\PowerShell\7\pwsh.exe'
+if (Valid $case) { throw 'wrong-powershell-host-accepted' }
+
+$case = New-Variant
+Set-Value $case '/t:Task/t:Actions/t:Exec/t:Arguments' ($expected.Replace($cleanup, 'C:\wrong\Run-DemoCleanup.ps1'))
+if (Valid $case) { throw 'wrong-script-path-accepted' }
+
+$case = New-Variant
+Set-Value $case '/t:Task/t:Actions/t:Exec/t:Arguments' ($expected + ' -Command "Write-Output unsafe"')
+if (Valid $case) { throw 'extra-command-accepted' }
+
+$case = New-Variant
+Set-Value $case '/t:Task/t:Actions/t:Exec/t:Arguments' ($expected.Replace('-Profile production', '-Profile staging'))
+if (Valid $case) { throw 'wrong-profile-accepted' }
+
+$case = New-Variant
+Set-Value $case '/t:Task/t:Actions/t:Exec/t:WorkingDirectory' 'C:\wrong'
+if (Valid $case) { throw 'wrong-working-directory-accepted' }
+
+if (-not (Valid ([xml]$canonical))) { throw 'canonical-action-regressed' }
+Write-Output 'TASK_EXECUTION_POLICY_MATRIX_OK'
+"""
+        result = self.invoke(body)
+        self.assert_ok(result)
+        self.assertEqual(
+            result.stdout.strip(),
+            "TASK_EXECUTION_POLICY_MATRIX_OK",
+        )
 
     def test_task_validator_normalizes_only_proven_effective_defaults(self):
         body = r"""
