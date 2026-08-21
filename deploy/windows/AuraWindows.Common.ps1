@@ -1507,7 +1507,7 @@ function Remove-AuraCleanupActivationMarker {
 
 function Get-AuraCleanupTaskArguments {
     param([Parameter(Mandatory)][string]$CleanupScript)
-    return "-NoProfile -NonInteractive -File `"$CleanupScript`" -Profile production -Mode Execute -Confirmation RUN_AURA_DEMO_CLEANUP"
+    return "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$CleanupScript`" -Profile production -Mode Execute -Confirmation RUN_AURA_DEMO_CLEANUP"
 }
 
 function New-AuraCleanupTaskXml {
