@@ -135,11 +135,13 @@ eligibility/attempt/success/failure counts, final result, and elapsed time.
 An authorized `Register-AuraTasks.ps1` run only stages cleanup disabled. Its
 fixed XML definition uses an hourly `PT1H` repetition from local minute 17,
 SYSTEM/ServiceAccount/LeastPrivilege, and `IgnoreNew` overlap handling.
-A registered/exported Windows definition may omit the explicit default
-`RunLevel=LeastPrivilege` and `StartWhenAvailable=false` elements. Canonical
-validation accepts only those two omissions when the exact registered task
-object independently reports Limited and `StartWhenAvailable=false`; arbitrary
-missing or changed XML fields remain invalid. A separate elevated
+A registered/exported Windows definition may omit the explicit defaults
+`RunLevel=LeastPrivilege` and `StartWhenAvailable=false`, and Windows may omit
+`Enabled=true` after a disabled task is enabled. Canonical validation accepts
+those omissions only when a fresh read of the exact registered task independently
+reports Limited, `StartWhenAvailable=false`, and the expected enabled state.
+Disabled staging still requires explicit `Enabled=false`; arbitrary missing,
+malformed, contradictory, or changed values remain invalid. A separate elevated
 `Activate-AuraDemoCleanup.ps1` confirmation validates the
 task and prerequisites, writes a non-secret version-2 `activating` marker under
 `C:\ProgramData\AURA\run`, enables and revalidates the task, then atomically
