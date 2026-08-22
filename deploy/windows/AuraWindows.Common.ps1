@@ -1510,6 +1510,11 @@ function Get-AuraCleanupTaskArguments {
     return "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$CleanupScript`" -Profile production -Mode Execute -Confirmation RUN_AURA_DEMO_CLEANUP"
 }
 
+function Get-AuraCleanupTaskPrePr43Arguments {
+    param([Parameter(Mandatory)][string]$CleanupScript)
+    return "-NoProfile -NonInteractive -File `"$CleanupScript`" -Profile production -Mode Execute -Confirmation RUN_AURA_DEMO_CLEANUP"
+}
+
 function New-AuraCleanupTaskXml {
     param(
         [Parameter(Mandatory)][string]$PowerShellPath,
@@ -1667,6 +1672,303 @@ function Get-AuraCleanupTaskSnapshot {
         Disabled = $disabled
         DefinitionMatches = $matches
         Xml = $xml
+    }
+}
+
+function Test-AuraCleanupTaskPrePr43Xml {
+    param(
+        [Parameter(Mandatory)][string]$Xml,
+        [Parameter(Mandatory)][string]$PowerShellPath,
+        [Parameter(Mandatory)][string]$CleanupScript,
+        [Parameter(Mandatory)][string]$RepositoryRoot,
+        [AllowNull()][object]$EffectiveRunLevel,
+        [AllowNull()][object]$EffectiveStartWhenAvailable,
+        [AllowNull()][object]$EffectiveEnabled,
+        [AllowNull()][object]$EffectiveTriggerEnabled,
+        [AllowNull()][object]$EffectiveStopAtDurationEnd
+    )
+    try {
+        [xml]$document = $Xml
+        $manager = [Xml.XmlNamespaceManager]::new($document.NameTable)
+        $manager.AddNamespace(
+            't', 'http://schemas.microsoft.com/windows/2004/02/mit/task'
+        )
+        function Get-PrePr43TaskValue([string]$XPath) {
+            $node = $document.SelectSingleNode($XPath, $manager)
+            if ($null -eq $node) { return $null }
+            return [string]$node.InnerText
+        }
+        $actionNodes = @($document.SelectNodes(
+            '/t:Task/t:Actions/*', $manager
+        ))
+        $triggerNodes = @($document.SelectNodes(
+            '/t:Task/t:Triggers/*', $manager
+        ))
+        $principalNodes = @($document.SelectNodes(
+            '/t:Task/t:Principals/t:Principal', $manager
+        ))
+        $argumentNodes = @($document.SelectNodes(
+            '/t:Task/t:Actions/t:Exec/t:Arguments', $manager
+        ))
+        $triggerEnabled = Get-PrePr43TaskValue `
+            '/t:Task/t:Triggers/t:CalendarTrigger/t:Enabled'
+        $triggerEnabledSafe = if ($null -eq $triggerEnabled) {
+            $EffectiveTriggerEnabled -is [bool] `
+                -and [bool]$EffectiveTriggerEnabled
+        } else {
+            $triggerEnabled -ceq 'true' -and (
+                $null -eq $EffectiveTriggerEnabled `
+                -or ($EffectiveTriggerEnabled -is [bool] `
+                    -and [bool]$EffectiveTriggerEnabled)
+            )
+        }
+        $stopAtDurationEnd = Get-PrePr43TaskValue `
+            '/t:Task/t:Triggers/t:CalendarTrigger/t:Repetition/t:StopAtDurationEnd'
+        $stopAtDurationEndSafe = if ($null -eq $stopAtDurationEnd) {
+            $EffectiveStopAtDurationEnd -is [bool] `
+                -and -not [bool]$EffectiveStopAtDurationEnd
+        } else {
+            $stopAtDurationEnd -ceq 'false' -and (
+                $null -eq $EffectiveStopAtDurationEnd `
+                -or ($EffectiveStopAtDurationEnd -is [bool] `
+                    -and -not [bool]$EffectiveStopAtDurationEnd)
+            )
+        }
+        if (
+            $actionNodes.Count -ne 1 `
+            -or $actionNodes[0].LocalName -cne 'Exec' `
+            -or $triggerNodes.Count -ne 1 `
+            -or $triggerNodes[0].LocalName -cne 'CalendarTrigger' `
+            -or $principalNodes.Count -ne 1 `
+            -or [string]$principalNodes[0].GetAttribute('id') -cne 'System' `
+            -or [string]$document.Task.version -cne '1.4' `
+            -or (Get-PrePr43TaskValue `
+                '/t:Task/t:RegistrationInfo/t:Description') -cne `
+                'Hourly bounded demo cleanup at minute 17.' `
+            -or -not $triggerEnabledSafe `
+            -or -not $stopAtDurationEndSafe `
+            -or (Get-PrePr43TaskValue `
+                '/t:Task/t:Settings/t:DisallowStartIfOnBatteries') -cne `
+                'false' `
+            -or (Get-PrePr43TaskValue `
+                '/t:Task/t:Settings/t:StopIfGoingOnBatteries') -cne `
+                'false' `
+            -or [string]$document.Task.Actions.Context -cne 'System' `
+            -or $argumentNodes.Count -ne 1 `
+            -or [string]$argumentNodes[0].InnerText -cne `
+                (Get-AuraCleanupTaskPrePr43Arguments `
+                    -CleanupScript $CleanupScript)
+        ) { return $false }
+        $argumentNodes[0].InnerText = Get-AuraCleanupTaskArguments `
+            -CleanupScript $CleanupScript
+        return Test-AuraCleanupTaskXml -Xml $document.OuterXml `
+            -PowerShellPath $PowerShellPath -CleanupScript $CleanupScript `
+            -RepositoryRoot $RepositoryRoot -Enabled $false `
+            -EffectiveRunLevel $EffectiveRunLevel `
+            -EffectiveStartWhenAvailable $EffectiveStartWhenAvailable `
+            -EffectiveEnabled $EffectiveEnabled
+    } catch { return $false }
+}
+
+function Test-AuraCleanupTaskSystemPrincipal {
+    param([AllowNull()][object]$UserId)
+    if ($null -eq $UserId) { return $false }
+    try {
+        $text = [string]$UserId
+        $sid = if ($text -match '^S-\d-(?:\d+-)+\d+$') {
+            [Security.Principal.SecurityIdentifier]::new($text)
+        } else {
+            [Security.Principal.NTAccount]::new($text).Translate(
+                [Security.Principal.SecurityIdentifier]
+            )
+        }
+        return $sid.Value -ceq 'S-1-5-18'
+    } catch { return $false }
+}
+
+function Get-AuraCleanupTaskPrePr43Snapshot {
+    param(
+        [string]$TaskName = 'AURA Demo Cleanup',
+        [Parameter(Mandatory)][string]$PowerShellPath,
+        [Parameter(Mandatory)][string]$CleanupScript,
+        [Parameter(Mandatory)][string]$RepositoryRoot
+    )
+    $tasks = @(Get-ScheduledTask -TaskName $TaskName `
+        -ErrorAction SilentlyContinue)
+    if ($tasks.Count -eq 0) { return $null }
+    if ($tasks.Count -ne 1) {
+        throw 'AURA_CLEANUP_TASK_IDENTITY_AMBIGUOUS'
+    }
+    $task = $tasks[0]
+    $xml = [string](Export-ScheduledTask -TaskName $TaskName -ErrorAction Stop)
+    $disabled = (
+        [string]$task.State -ceq 'Disabled' `
+        -and $task.Settings.Enabled -is [bool] `
+        -and -not [bool]$task.Settings.Enabled
+    )
+    $matches = (
+        [string]$task.TaskPath -ceq '\' `
+        -and (Test-AuraCleanupTaskSystemPrincipal `
+            -UserId $task.Principal.UserId) `
+        -and [string]$task.Principal.LogonType -ceq 'ServiceAccount' `
+        -and @($task.Triggers).Count -eq 1 `
+        -and (Test-AuraCleanupTaskPrePr43Xml -Xml $xml `
+            -PowerShellPath $PowerShellPath -CleanupScript $CleanupScript `
+            -RepositoryRoot $RepositoryRoot `
+            -EffectiveRunLevel $task.Principal.RunLevel `
+            -EffectiveStartWhenAvailable `
+                $task.Settings.StartWhenAvailable `
+            -EffectiveEnabled $task.Settings.Enabled `
+            -EffectiveTriggerEnabled $task.Triggers[0].Enabled `
+            -EffectiveStopAtDurationEnd `
+                $task.Triggers[0].Repetition.StopAtDurationEnd)
+    )
+    return [PSCustomObject]@{
+        State = [string]$task.State
+        Disabled = $disabled
+        DefinitionMatches = $matches
+        Xml = $xml
+    }
+}
+
+function Test-AuraCleanupProcessActive {
+    param([Parameter(Mandatory)][string]$CleanupScript)
+    $escapedScript = [regex]::Escape([IO.Path]::GetFullPath($CleanupScript))
+    $processes = @(Get-CimInstance Win32_Process -ErrorAction Stop)
+    return @($processes | Where-Object {
+        $commandLine = [string]$_.CommandLine
+        [int]$_.ProcessId -ne $PID `
+        -and -not [string]::IsNullOrEmpty($commandLine) -and (
+            $commandLine -match $escapedScript `
+            -or $commandLine -match '(?i)(^|\s)-m\s+app\.jobs\.demo_cleanup(?:\s|$)'
+        )
+    }).Count -gt 0
+}
+
+function Assert-AuraCleanupTaskUpgradeHostSafe {
+    param([Parameter(Mandatory)][string]$CleanupScript)
+    $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+    $principal = [Security.Principal.WindowsPrincipal]::new($identity)
+    if (-not $principal.IsInRole(
+        [Security.Principal.WindowsBuiltInRole]::Administrator
+    )) { throw 'AURA_ADMIN_REQUIRED' }
+    foreach ($kind in @('aura', 'funnel')) {
+        $state = Get-AuraOwnedProcessState -Kind $kind -Profile production
+        if ([string]$state.State -cne 'absent') {
+            throw 'AURA_CLEANUP_TASK_UPGRADE_PRODUCTION_NOT_OFFLINE'
+        }
+    }
+    if (-not (Test-AuraPortClosed -Port 8000)) {
+        throw 'AURA_CLEANUP_TASK_UPGRADE_PRODUCTION_NOT_OFFLINE'
+    }
+    if (Test-AuraCleanupProcessActive -CleanupScript $CleanupScript) {
+        throw 'AURA_CLEANUP_TASK_UPGRADE_PROCESS_ACTIVE'
+    }
+}
+
+function Restore-AuraCleanupTaskPrePr43 {
+    param(
+        [Parameter(Mandatory)][string]$OldXml,
+        [Parameter(Mandatory)][string]$PowerShellPath,
+        [Parameter(Mandatory)][string]$CleanupScript,
+        [Parameter(Mandatory)][string]$RepositoryRoot,
+        [string]$TaskName = 'AURA Demo Cleanup'
+    )
+    try {
+        Register-ScheduledTask -TaskName $TaskName -Xml $OldXml -Force `
+            -ErrorAction Stop | Out-Null
+        $restored = Get-AuraCleanupTaskPrePr43Snapshot -TaskName $TaskName `
+            -PowerShellPath $PowerShellPath -CleanupScript $CleanupScript `
+            -RepositoryRoot $RepositoryRoot
+        $marker = Read-AuraCleanupActivationMarker -Profile production
+        if (
+            $null -eq $restored -or -not $restored.Disabled `
+            -or -not $restored.DefinitionMatches -or $null -ne $marker
+        ) { throw 'AURA_CLEANUP_TASK_UPGRADE_ROLLBACK_VALIDATION_FAILED' }
+    } catch {
+        throw 'AURA_CLEANUP_TASK_UPGRADE_ROLLBACK_FAILED'
+    }
+}
+
+function Upgrade-AuraCleanupTaskVersioned {
+    param(
+        [Parameter(Mandatory)][string]$PowerShellPath,
+        [Parameter(Mandatory)][string]$CleanupScript,
+        [Parameter(Mandatory)][string]$RepositoryRoot,
+        [string]$TaskName = 'AURA Demo Cleanup'
+    )
+    Assert-AuraProductionProfile -Profile production
+    if ($TaskName -cne 'AURA Demo Cleanup') {
+        if (
+            $env:AURA_TEST_ALLOW_CLEANUP_TASK_UPGRADE -cne '1' `
+            -or $TaskName -cnotmatch `
+                '^AURA Cleanup Upgrade Test [a-f0-9]{32}$'
+        ) { throw 'AURA_CLEANUP_TASK_UPGRADE_IDENTITY_INVALID' }
+    }
+    Assert-AuraCleanupTaskUpgradeHostSafe -CleanupScript $CleanupScript
+    $marker = Read-AuraCleanupActivationMarker -Profile production
+    $current = Get-AuraCleanupTaskSnapshot -TaskName $TaskName `
+        -PowerShellPath $PowerShellPath -CleanupScript $CleanupScript `
+        -RepositoryRoot $RepositoryRoot
+    if ($null -ne $current -and $current.DefinitionMatches) {
+        if (
+            $null -ne $marker -and $marker.State -ceq 'active' `
+            -and -not $current.Disabled
+        ) { return 'AURA_CLEANUP_TASK_ALREADY_ACTIVE' }
+        if ($null -eq $marker -and $current.Disabled) {
+            return 'AURA_CLEANUP_TASK_ALREADY_STAGED'
+        }
+        throw 'AURA_CLEANUP_TASK_STATE_MISMATCH'
+    }
+    if ($null -ne $marker) {
+        throw 'AURA_CLEANUP_TASK_UPGRADE_MARKER_PRESENT'
+    }
+    $old = Get-AuraCleanupTaskPrePr43Snapshot -TaskName $TaskName `
+        -PowerShellPath $PowerShellPath -CleanupScript $CleanupScript `
+        -RepositoryRoot $RepositoryRoot
+    if (
+        $null -eq $old -or -not $old.Disabled `
+        -or -not $old.DefinitionMatches
+    ) { throw 'AURA_CLEANUP_TASK_DEFINITION_MISMATCH' }
+
+    $captured = Get-AuraCleanupTaskPrePr43Snapshot -TaskName $TaskName `
+        -PowerShellPath $PowerShellPath -CleanupScript $CleanupScript `
+        -RepositoryRoot $RepositoryRoot
+    Assert-AuraCleanupTaskUpgradeHostSafe -CleanupScript $CleanupScript
+    if (
+        $null -eq $captured -or -not $captured.Disabled `
+        -or -not $captured.DefinitionMatches `
+        -or $captured.Xml -cne $old.Xml `
+        -or $null -ne (Read-AuraCleanupActivationMarker -Profile production) `
+        -or (Test-AuraCleanupProcessActive -CleanupScript $CleanupScript)
+    ) { throw 'AURA_CLEANUP_TASK_UPGRADE_PRECONDITION_CHANGED' }
+    $oldXml = $captured.Xml
+    $newXml = New-AuraCleanupTaskXml -PowerShellPath $PowerShellPath `
+        -CleanupScript $CleanupScript -RepositoryRoot $RepositoryRoot `
+        -Enabled $false
+    $registered = $false
+    try {
+        Register-ScheduledTask -TaskName $TaskName -Xml $newXml -Force `
+            -ErrorAction Stop | Out-Null
+        $registered = $true
+        $upgraded = Get-AuraCleanupTaskSnapshot -TaskName $TaskName `
+            -PowerShellPath $PowerShellPath -CleanupScript $CleanupScript `
+            -RepositoryRoot $RepositoryRoot
+        if (
+            $null -eq $upgraded -or -not $upgraded.Disabled `
+            -or -not $upgraded.DefinitionMatches `
+            -or $null -ne (Read-AuraCleanupActivationMarker `
+                -Profile production)
+        ) { throw 'AURA_CLEANUP_TASK_UPGRADE_VALIDATION_FAILED' }
+        return 'AURA_CLEANUP_TASK_UPGRADED_DISABLED'
+    } catch {
+        $failureCode = if ($registered) {
+            'AURA_CLEANUP_TASK_UPGRADE_VALIDATION_FAILED'
+        } else { 'AURA_CLEANUP_TASK_UPGRADE_REGISTRATION_FAILED' }
+        Restore-AuraCleanupTaskPrePr43 -OldXml $oldXml `
+            -PowerShellPath $PowerShellPath -CleanupScript $CleanupScript `
+            -RepositoryRoot $RepositoryRoot -TaskName $TaskName
+        throw $failureCode
     }
 }
 

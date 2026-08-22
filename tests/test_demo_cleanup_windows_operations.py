@@ -23,6 +23,7 @@ TASKS = WINDOWS_ROOT / "Register-AuraTasks.ps1"
 STATUS = WINDOWS_ROOT / "Get-AuraPublicDemoStatus.ps1"
 ACTIVATE = WINDOWS_ROOT / "Activate-AuraDemoCleanup.ps1"
 DEACTIVATE = WINDOWS_ROOT / "Deactivate-AuraDemoCleanup.ps1"
+UPGRADE = WINDOWS_ROOT / "Upgrade-AuraDemoCleanupTask.ps1"
 
 
 def read(path: Path) -> str:
@@ -105,7 +106,13 @@ class DemoCleanupWindowsStaticTests(unittest.TestCase):
         self.assertIn("Write-AuraCleanupOperationLog", wrapper)
 
     def test_task_and_wrapper_do_not_embed_secret_values(self):
-        combined = read(TASKS) + read(WRAPPER) + read(ACTIVATE) + read(DEACTIVATE)
+        combined = (
+            read(TASKS)
+            + read(WRAPPER)
+            + read(ACTIVATE)
+            + read(DEACTIVATE)
+            + read(UPGRADE)
+        )
         for forbidden in (
             "postgresql+psycopg://",
             "DEMO_BFF_SERVICE_TOKEN=",
@@ -113,6 +120,15 @@ class DemoCleanupWindowsStaticTests(unittest.TestCase):
             "PGPASSWORD",
         ):
             self.assertNotIn(forbidden.casefold(), combined.casefold())
+
+    def test_versioned_upgrade_entrypoint_is_cleanup_only_and_confirmed(self):
+        upgrade = read(UPGRADE)
+        self.assertIn("UPGRADE_AURA_DEMO_CLEANUP_TASK", upgrade)
+        self.assertIn("Upgrade-AuraCleanupTaskVersioned", upgrade)
+        self.assertNotIn("AURA Demo Backup", upgrade)
+        self.assertNotIn("AURA API Production", upgrade)
+        self.assertNotIn("Register-AuraTasks.ps1", upgrade)
+        self.assertNotIn("Set-ExecutionPolicy", upgrade)
 
     def test_status_exposes_cleanup_health_without_requiring_configuration(self):
         common = read(COMMON)
@@ -550,6 +566,84 @@ Write-Output 'REGISTRATION_OK'
         result = self.invoke(body)
         self.assert_ok(result)
         self.assertEqual(result.stdout.strip(), "REGISTRATION_OK")
+
+    def test_pre_pr43_recognizer_requires_the_complete_known_definition(self):
+        body = r"""
+$powerShell = 'C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe'
+$cleanup = 'C:\repo with spaces & safe\deploy\windows\Run-DemoCleanup.ps1'
+$root = 'C:\repo with spaces & safe'
+$current = New-AuraCleanupTaskXml -PowerShellPath $powerShell -CleanupScript $cleanup -RepositoryRoot $root -Enabled $false
+$namespace = 'http://schemas.microsoft.com/windows/2004/02/mit/task'
+function Manager($document) { $manager=[Xml.XmlNamespaceManager]::new($document.NameTable);$manager.AddNamespace('t',$namespace);return ,$manager }
+function Node($document,[string]$xpath) { $node=$document.SelectSingleNode($xpath,(Manager $document));if($null-eq$node){throw 'node-missing'};return $node }
+function OldDocument { [xml]$document=$current;(Node $document '/t:Task/t:Actions/t:Exec/t:Arguments').InnerText=Get-AuraCleanupTaskPrePr43Arguments -CleanupScript $cleanup;return $document }
+function OldValid($document,[object]$runLevel='Limited',[object]$start=$false,[object]$enabled=$false,[object]$triggerEnabled=$null,[object]$stopAtDurationEnd=$null) { Test-AuraCleanupTaskPrePr43Xml -Xml $document.OuterXml -PowerShellPath $powerShell -CleanupScript $cleanup -RepositoryRoot $root -EffectiveRunLevel $runLevel -EffectiveStartWhenAvailable $start -EffectiveEnabled $enabled -EffectiveTriggerEnabled $triggerEnabled -EffectiveStopAtDurationEnd $stopAtDurationEnd }
+function RejectChanged([string]$xpath,[string]$value) { $case=OldDocument;(Node $case $xpath).InnerText=$value;if(OldValid $case){throw ('old-drift-accepted-'+$xpath)} }
+$old=OldDocument
+if(-not(OldValid $old)){throw 'exact-old-rejected'}
+if(Test-AuraCleanupTaskXml -Xml $old.OuterXml -PowerShellPath $powerShell -CleanupScript $cleanup -RepositoryRoot $root -Enabled $false -EffectiveRunLevel 'Limited' -EffectiveStartWhenAvailable $false -EffectiveEnabled $false){throw 'old-accepted-by-current'}
+if(-not(Test-AuraCleanupTaskXml -Xml $current -PowerShellPath $powerShell -CleanupScript $cleanup -RepositoryRoot $root -Enabled $false -EffectiveRunLevel 'Limited' -EffectiveStartWhenAvailable $false -EffectiveEnabled $false)){throw 'current-rejected'}
+RejectChanged '/t:Task/t:Principals/t:Principal/t:UserId' 'S-1-5-21-1'
+$case=OldDocument;(Node $case '/t:Task/t:Principals/t:Principal').SetAttribute('id','Author');if(OldValid $case){throw 'wrong-principal-id-accepted'}
+RejectChanged '/t:Task/t:Principals/t:Principal/t:RunLevel' 'HighestAvailable'
+RejectChanged '/t:Task/t:Actions/t:Exec/t:Command' 'C:\Program Files\PowerShell\7\pwsh.exe'
+$case=OldDocument;(Node $case '/t:Task/t:Actions/t:Exec/t:Arguments').InnerText=(Get-AuraCleanupTaskPrePr43Arguments -CleanupScript 'C:\wrong\Run-DemoCleanup.ps1');if(OldValid $case){throw 'wrong-script-accepted'}
+$case=OldDocument;(Node $case '/t:Task/t:Actions/t:Exec/t:Arguments').InnerText=(Get-AuraCleanupTaskPrePr43Arguments -CleanupScript $cleanup).Replace('-Profile production','-Profile staging');if(OldValid $case){throw 'wrong-profile-accepted'}
+$case=OldDocument;(Node $case '/t:Task/t:Actions/t:Exec/t:Arguments').InnerText=(Get-AuraCleanupTaskPrePr43Arguments -CleanupScript $cleanup)+' -Command "Set-ExecutionPolicy Bypass"';if(OldValid $case){throw 'extra-command-accepted'}
+$case=OldDocument;(Node $case '/t:Task/t:Actions/t:Exec/t:Arguments').InnerText=(Get-AuraCleanupTaskArguments -CleanupScript $cleanup).Replace('Bypass','RemoteSigned');if(OldValid $case){throw 'unknown-policy-accepted'}
+$case=OldDocument;$extra=$case.CreateElement('Exec',$namespace);$null=$case.Task.Actions.AppendChild($extra);if(OldValid $case){throw 'extra-action-accepted'}
+$case=OldDocument;$extra=$case.CreateElement('TimeTrigger',$namespace);$null=$case.Task.Triggers.AppendChild($extra);if(OldValid $case){throw 'extra-trigger-accepted'}
+RejectChanged '/t:Task/t:Actions/t:Exec/t:WorkingDirectory' 'C:\wrong'
+RejectChanged '/t:Task/t:Triggers/t:CalendarTrigger/t:StartBoundary' '2024-01-01T00:18:00'
+RejectChanged '/t:Task/t:Triggers/t:CalendarTrigger/t:ScheduleByDay/t:DaysInterval' '2'
+RejectChanged '/t:Task/t:Triggers/t:CalendarTrigger/t:Repetition/t:Interval' 'PT2H'
+RejectChanged '/t:Task/t:Triggers/t:CalendarTrigger/t:Repetition/t:Duration' 'P2D'
+RejectChanged '/t:Task/t:Settings/t:StartWhenAvailable' 'true'
+RejectChanged '/t:Task/t:Settings/t:MultipleInstancesPolicy' 'Parallel'
+RejectChanged '/t:Task/t:Settings/t:ExecutionTimeLimit' 'PT30M'
+$case=OldDocument;$null=(Node $case '/t:Task/t:Triggers/t:CalendarTrigger').RemoveChild((Node $case '/t:Task/t:Triggers/t:CalendarTrigger/t:Enabled'));$null=(Node $case '/t:Task/t:Triggers/t:CalendarTrigger/t:Repetition').RemoveChild((Node $case '/t:Task/t:Triggers/t:CalendarTrigger/t:Repetition/t:StopAtDurationEnd'));if(-not(OldValid $case 'Limited' $false $false $true $false)){throw 'proven-trigger-defaults-rejected'};if(OldValid $case 'Limited' $false $false $false $false){throw 'disabled-trigger-accepted'};if(OldValid $case 'Limited' $false $false $true $true){throw 'stop-at-duration-accepted'}
+$case=OldDocument;(Node $case '/t:Task/t:Settings/t:Enabled').InnerText='true';if(OldValid $case 'Limited' $false $true){throw 'enabled-old-accepted'}
+if(OldValid (OldDocument) 'HighestAvailable' $false $false){throw 'effective-highest-accepted'}
+if(OldValid (OldDocument) 'Limited' $true $false){throw 'effective-start-accepted'}
+Write-Output 'PRE_PR43_RECOGNIZER_MATRIX_OK'
+"""
+        result = self.invoke(body)
+        self.assert_ok(result)
+        self.assertEqual(result.stdout.strip(), "PRE_PR43_RECOGNIZER_MATRIX_OK")
+
+    def test_versioned_upgrade_success_preconditions_idempotency_and_rollback(self):
+        body = r"""
+$powerShell='C:\powershell.exe';$cleanup='C:\repo\Run-DemoCleanup.ps1';$root='C:\repo';$taskName='AURA Demo Cleanup'
+$script:Marker=$null;$script:TaskState='Disabled';$script:TaskEnabled=$false;$script:TaskUser='S-1-5-18';$script:TaskLogon='ServiceAccount';$script:TaskPath='\';$script:ProcessActive=$false;$script:RegisterCount=0;$script:FailReplacement=$false;$script:CorruptReplacement=$false;$script:FailRollback=$false;$script:RollbackXml=$null;$script:BackupSentinel='backup-unchanged';$script:ApiSentinel='api-unchanged'
+$currentDisabled=New-AuraCleanupTaskXml -PowerShellPath $powerShell -CleanupScript $cleanup -RepositoryRoot $root -Enabled $false
+[xml]$oldDocument=$currentDisabled;$manager=[Xml.XmlNamespaceManager]::new($oldDocument.NameTable);$manager.AddNamespace('t','http://schemas.microsoft.com/windows/2004/02/mit/task');$oldDocument.SelectSingleNode('/t:Task/t:Actions/t:Exec/t:Arguments',$manager).InnerText=Get-AuraCleanupTaskPrePr43Arguments -CleanupScript $cleanup;$oldDisabled=$oldDocument.OuterXml
+function Reset-Old { $script:Marker=$null;$script:TaskState='Disabled';$script:TaskEnabled=$false;$script:TaskUser='S-1-5-18';$script:TaskLogon='ServiceAccount';$script:TaskPath='\';$script:ProcessActive=$false;$script:TaskXml=$oldDisabled;$script:RegisterCount=0;$script:FailReplacement=$false;$script:CorruptReplacement=$false;$script:FailRollback=$false;$script:RollbackXml=$null }
+function Assert-AuraCleanupTaskUpgradeHostSafe { param($CleanupScript) }
+function Test-AuraCleanupProcessActive { param($CleanupScript) $script:ProcessActive }
+function Read-AuraCleanupActivationMarker { param($Profile) $script:Marker }
+function Get-ScheduledTask { param($TaskName,$ErrorAction) if($null-ne$script:TaskXml){[PSCustomObject]@{TaskPath=$script:TaskPath;State=$script:TaskState;Principal=[PSCustomObject]@{UserId=$script:TaskUser;RunLevel='Limited';LogonType=$script:TaskLogon};Settings=[PSCustomObject]@{StartWhenAvailable=$false;Enabled=$script:TaskEnabled};Triggers=@([PSCustomObject]@{Enabled=$true;Repetition=[PSCustomObject]@{StopAtDurationEnd=$false}})}} }
+function Export-ScheduledTask { param($TaskName,$ErrorAction) $script:TaskXml }
+function Register-ScheduledTask { param($TaskName,$Xml,[switch]$Force,$ErrorAction) $script:RegisterCount++;if($script:RegisterCount-eq 1){if($script:FailReplacement){$script:TaskXml='<Task />';throw 'injected-register-failure'};if($script:CorruptReplacement){$script:TaskXml='<Task />';return};$script:TaskXml=$Xml;return};if($script:FailRollback){throw 'injected-rollback-failure'};$script:RollbackXml=$Xml;$script:TaskXml=$Xml;$script:TaskState='Disabled';$script:TaskEnabled=$false;$script:TaskLogon='ServiceAccount';$script:TaskPath='\' }
+Reset-Old
+if((Upgrade-AuraCleanupTaskVersioned -PowerShellPath $powerShell -CleanupScript $cleanup -RepositoryRoot $root)-cne'AURA_CLEANUP_TASK_UPGRADED_DISABLED'){throw 'upgrade-result'}
+$fresh=Get-AuraCleanupTaskSnapshot -PowerShellPath $powerShell -CleanupScript $cleanup -RepositoryRoot $root;if($null-eq$fresh-or-not$fresh.Disabled-or-not$fresh.DefinitionMatches){throw 'upgrade-invalid'}
+$count=$script:RegisterCount;if((Upgrade-AuraCleanupTaskVersioned -PowerShellPath $powerShell -CleanupScript $cleanup -RepositoryRoot $root)-cne'AURA_CLEANUP_TASK_ALREADY_STAGED'){throw 'current-idempotency'};if($script:RegisterCount-ne$count){throw 'current-replaced'}
+[xml]$active=New-AuraCleanupTaskXml -PowerShellPath $powerShell -CleanupScript $cleanup -RepositoryRoot $root -Enabled $true;$script:TaskXml=$active.OuterXml;$script:TaskState='Ready';$script:TaskEnabled=$true;$script:Marker=[PSCustomObject]@{State='active'};if((Upgrade-AuraCleanupTaskVersioned -PowerShellPath $powerShell -CleanupScript $cleanup -RepositoryRoot $root)-cne'AURA_CLEANUP_TASK_ALREADY_ACTIVE'){throw 'active-idempotency'}
+foreach($state in @('active','activating')){Reset-Old;$script:Marker=[PSCustomObject]@{State=$state};try{Upgrade-AuraCleanupTaskVersioned -PowerShellPath $powerShell -CleanupScript $cleanup -RepositoryRoot $root;throw 'marker-accepted'}catch{if($_.Exception.Message-ceq'marker-accepted'){throw}};if($script:RegisterCount-ne 0){throw 'marker-mutated'}}
+Reset-Old;[xml]$enabledOld=New-AuraCleanupTaskXml -PowerShellPath $powerShell -CleanupScript $cleanup -RepositoryRoot $root -Enabled $true;$enabledManager=[Xml.XmlNamespaceManager]::new($enabledOld.NameTable);$enabledManager.AddNamespace('t','http://schemas.microsoft.com/windows/2004/02/mit/task');$enabledOld.SelectSingleNode('/t:Task/t:Actions/t:Exec/t:Arguments',$enabledManager).InnerText=Get-AuraCleanupTaskPrePr43Arguments -CleanupScript $cleanup;$script:TaskXml=$enabledOld.OuterXml;$script:TaskState='Ready';$script:TaskEnabled=$true;try{Upgrade-AuraCleanupTaskVersioned -PowerShellPath $powerShell -CleanupScript $cleanup -RepositoryRoot $root;throw 'enabled-accepted'}catch{if($_.Exception.Message-ceq'enabled-accepted'){throw}};if($script:RegisterCount-ne 0-or$script:TaskState-cne'Ready'){throw 'enabled-mutated'}
+Reset-Old;$script:TaskLogon='Interactive';try{Upgrade-AuraCleanupTaskVersioned -PowerShellPath $powerShell -CleanupScript $cleanup -RepositoryRoot $root;throw 'logon-accepted'}catch{if($_.Exception.Message-ceq'logon-accepted'){throw}};if($script:RegisterCount-ne 0){throw 'logon-mutated'}
+Reset-Old;$script:TaskUser='S-1-5-20';try{Upgrade-AuraCleanupTaskVersioned -PowerShellPath $powerShell -CleanupScript $cleanup -RepositoryRoot $root;throw 'effective-principal-accepted'}catch{if($_.Exception.Message-ceq'effective-principal-accepted'){throw}};if($script:RegisterCount-ne 0){throw 'principal-mutated'}
+Reset-Old;$script:TaskPath='\Other\';try{Upgrade-AuraCleanupTaskVersioned -PowerShellPath $powerShell -CleanupScript $cleanup -RepositoryRoot $root;throw 'path-accepted'}catch{if($_.Exception.Message-ceq'path-accepted'){throw}};if($script:RegisterCount-ne 0){throw 'path-mutated'}
+Reset-Old;$script:ProcessActive=$true;try{Upgrade-AuraCleanupTaskVersioned -PowerShellPath $powerShell -CleanupScript $cleanup -RepositoryRoot $root;throw 'process-accepted'}catch{if($_.Exception.Message-ceq'process-accepted'){throw}};if($script:RegisterCount-ne 0){throw 'process-mutated'}
+Reset-Old;$captured=$script:TaskXml;$script:FailReplacement=$true;try{Upgrade-AuraCleanupTaskVersioned -PowerShellPath $powerShell -CleanupScript $cleanup -RepositoryRoot $root;throw 'register-failure-accepted'}catch{if($_.Exception.Message-cne'AURA_CLEANUP_TASK_UPGRADE_REGISTRATION_FAILED'){throw}};if($script:RegisterCount-ne 2-or$script:RollbackXml-cne$captured-or$script:TaskXml-cne$captured){throw 'registration-rollback'}
+Reset-Old;$captured=$script:TaskXml;$script:CorruptReplacement=$true;try{Upgrade-AuraCleanupTaskVersioned -PowerShellPath $powerShell -CleanupScript $cleanup -RepositoryRoot $root;throw 'validation-failure-accepted'}catch{if($_.Exception.Message-cne'AURA_CLEANUP_TASK_UPGRADE_VALIDATION_FAILED'){throw}};if($script:RegisterCount-ne 2-or$script:RollbackXml-cne$captured-or$script:TaskXml-cne$captured){throw 'validation-rollback'}
+Reset-Old;$script:FailReplacement=$true;$script:FailRollback=$true;try{Upgrade-AuraCleanupTaskVersioned -PowerShellPath $powerShell -CleanupScript $cleanup -RepositoryRoot $root;throw 'rollback-failure-accepted'}catch{if($_.Exception.Message-cne'AURA_CLEANUP_TASK_UPGRADE_ROLLBACK_FAILED'){throw}};if($script:TaskState-cne'Disabled'-or$null-ne$script:Marker){throw 'rollback-failure-unsafe'}
+if($script:BackupSentinel-cne'backup-unchanged'-or$script:ApiSentinel-cne'api-unchanged'){throw 'unrelated-mutated'}
+Write-Output 'VERSIONED_UPGRADE_LIFECYCLE_OK'
+"""
+        result = self.invoke(body)
+        self.assert_ok(result)
+        self.assertEqual(result.stdout.strip(), "VERSIONED_UPGRADE_LIFECYCLE_OK")
 
     def test_activation_marker_order_and_rollback(self):
         body = r"""

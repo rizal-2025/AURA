@@ -60,7 +60,7 @@ class DemoCleanupWindowsRegisteredTaskTests(unittest.TestCase):
             },
             capture_output=True,
             text=True,
-            timeout=60,
+            timeout=120,
             check=False,
         )
 
@@ -405,3 +405,159 @@ if ($null -ne $failure) { throw $failure }
         result = self.invoke(body, task_name)
         self.assert_ok(result)
         self.assertIn("REGISTERED_ENABLED_OMISSION_OK", result.stdout)
+
+    def test_versioned_upgrade_replaces_only_a_disposable_disabled_task(self):
+        task_name = f"AURA Cleanup Upgrade Test {uuid.uuid4().hex}"
+        body = r"""
+$taskName = $env:AURA_TEST_TASK_NAME
+$neighborName = $taskName + ' Neighbor'
+if ($taskName -notmatch '^AURA Cleanup Upgrade Test [a-f0-9]{32}$') { throw 'test-task-name-invalid' }
+$env:AURA_TEST_ALLOW_CLEANUP_TASK_UPGRADE = '1'
+function Get-TaskFingerprint([string]$name) {
+    $tasks = @(Get-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue)
+    if ($tasks.Count -eq 0) { return '__ABSENT__' }
+    if ($tasks.Count -ne 1) { throw ('task-ambiguous-' + $name) }
+    return [string](Export-ScheduledTask -TaskName $name -ErrorAction Stop)
+}
+function Remove-DisposableTask([string]$name) {
+    $tasks = @(Get-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue)
+    if ($tasks.Count -eq 1) {
+        if ([string]$tasks[0].State -cne 'Disabled') {
+            Disable-ScheduledTask -TaskName $name -ErrorAction Stop | Out-Null
+        }
+        Unregister-ScheduledTask -TaskName $name -Confirm:$false -ErrorAction Stop
+    }
+}
+$productionBefore = Get-TaskFingerprint 'AURA Demo Cleanup'
+$backupBefore = Get-TaskFingerprint 'AURA Demo Backup'
+$apiBefore = Get-TaskFingerprint 'AURA API Production'
+if ($productionBefore -ceq '__ABSENT__') { throw 'production-task-missing' }
+if ($null -ne (Read-AuraCleanupActivationMarker -Profile production)) { throw 'activation-marker-present' }
+$failure = $null
+try {
+    $root = Assert-AuraRepositoryLayout
+    $cleanup = [IO.Path]::GetFullPath($env:AURA_TEST_NOOP_ACTION)
+    $powerShell = (Get-Command powershell.exe -ErrorAction Stop).Source
+    [xml]$oldDocument = New-AuraCleanupTaskXml -PowerShellPath $powerShell -CleanupScript $cleanup -RepositoryRoot $root -Enabled $false
+    $manager = [Xml.XmlNamespaceManager]::new($oldDocument.NameTable)
+    $manager.AddNamespace('t', 'http://schemas.microsoft.com/windows/2004/02/mit/task')
+    $arguments = $oldDocument.SelectSingleNode('/t:Task/t:Actions/t:Exec/t:Arguments', $manager)
+    $arguments.InnerText = Get-AuraCleanupTaskPrePr43Arguments -CleanupScript $cleanup
+    Register-ScheduledTask -TaskName $taskName -Xml $oldDocument.OuterXml -ErrorAction Stop | Out-Null
+    $neighborXml = New-AuraCleanupTaskXml -PowerShellPath $powerShell -CleanupScript $cleanup -RepositoryRoot $root -Enabled $false
+    Register-ScheduledTask -TaskName $neighborName -Xml $neighborXml -ErrorAction Stop | Out-Null
+    $neighborBefore = Get-TaskFingerprint $neighborName
+    $old = Get-AuraCleanupTaskPrePr43Snapshot -TaskName $taskName -PowerShellPath $powerShell -CleanupScript $cleanup -RepositoryRoot $root
+    if ($null -eq $old -or -not $old.Disabled -or -not $old.DefinitionMatches) { throw 'old-task-not-recognized' }
+    $lastRunBefore = (Get-ScheduledTaskInfo -TaskName $taskName -ErrorAction Stop).LastRunTime
+    $result = Upgrade-AuraCleanupTaskVersioned -TaskName $taskName -PowerShellPath $powerShell -CleanupScript $cleanup -RepositoryRoot $root
+    if ($result -cne 'AURA_CLEANUP_TASK_UPGRADED_DISABLED') { throw 'upgrade-result-invalid' }
+    $fresh = Get-AuraCleanupTaskSnapshot -TaskName $taskName -PowerShellPath $powerShell -CleanupScript $cleanup -RepositoryRoot $root
+    if ($null -eq $fresh -or -not $fresh.Disabled -or -not $fresh.DefinitionMatches) { throw 'upgraded-task-invalid' }
+    if ($fresh.Xml -notmatch [regex]::Escape((Get-AuraCleanupTaskArguments -CleanupScript $cleanup))) { throw 'current-action-missing' }
+    $lastRunAfter = (Get-ScheduledTaskInfo -TaskName $taskName -ErrorAction Stop).LastRunTime
+    if ($lastRunAfter -ne $lastRunBefore) { throw 'upgrade-triggered-task' }
+    if ((Get-TaskFingerprint $neighborName) -cne $neighborBefore) { throw 'neighbor-task-changed' }
+    if ((Get-TaskFingerprint 'AURA Demo Backup') -cne $backupBefore) { throw 'backup-task-changed' }
+    if ((Get-TaskFingerprint 'AURA API Production') -cne $apiBefore) { throw 'api-task-changed' }
+    if ((Get-TaskFingerprint 'AURA Demo Cleanup') -cne $productionBefore) { throw 'production-task-changed' }
+    if ($null -ne (Read-AuraCleanupActivationMarker -Profile production)) { throw 'activation-marker-created' }
+    Write-Output 'REAL_WINDOWS_VERSION_UPGRADE_OK'
+} catch { $failure = $_ } finally {
+    Remove-DisposableTask $neighborName
+    Remove-DisposableTask $taskName
+    Remove-Item Env:AURA_TEST_ALLOW_CLEANUP_TASK_UPGRADE -ErrorAction SilentlyContinue
+}
+if (@(Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue).Count -ne 0) { throw 'upgrade-task-cleanup-failed' }
+if (@(Get-ScheduledTask -TaskName $neighborName -ErrorAction SilentlyContinue).Count -ne 0) { throw 'neighbor-task-cleanup-failed' }
+if ((Get-TaskFingerprint 'AURA Demo Cleanup') -cne $productionBefore) { throw 'production-task-finally-changed' }
+if ($null -ne $failure) { throw $failure }
+"""
+        result = self.invoke(body, task_name)
+        self.assert_ok(result)
+        self.assertIn("REAL_WINDOWS_VERSION_UPGRADE_OK", result.stdout)
+
+    def test_versioned_upgrade_real_validation_failure_restores_old_xml(self):
+        task_name = f"AURA Cleanup Upgrade Test {uuid.uuid4().hex}"
+        body = r"""
+$taskName = $env:AURA_TEST_TASK_NAME
+if ($taskName -notmatch '^AURA Cleanup Upgrade Test [a-f0-9]{32}$') { throw 'test-task-name-invalid' }
+$env:AURA_TEST_ALLOW_CLEANUP_TASK_UPGRADE = '1'
+function Get-TaskFingerprint([string]$name) {
+    $tasks = @(Get-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue)
+    if ($tasks.Count -eq 0) { return '__ABSENT__' }
+    if ($tasks.Count -ne 1) { throw ('task-ambiguous-' + $name) }
+    return [string](Export-ScheduledTask -TaskName $name -ErrorAction Stop)
+}
+function Remove-DisposableTask([string]$name) {
+    $tasks = @(Get-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue)
+    if ($tasks.Count -eq 1) {
+        if ([string]$tasks[0].State -cne 'Disabled') {
+            Disable-ScheduledTask -TaskName $name -ErrorAction Stop | Out-Null
+        }
+        Unregister-ScheduledTask -TaskName $name -Confirm:$false -ErrorAction Stop
+    }
+}
+$productionBefore = Get-TaskFingerprint 'AURA Demo Cleanup'
+$backupBefore = Get-TaskFingerprint 'AURA Demo Backup'
+$apiBefore = Get-TaskFingerprint 'AURA API Production'
+if ($productionBefore -ceq '__ABSENT__') { throw 'production-task-missing' }
+if ($null -ne (Read-AuraCleanupActivationMarker -Profile production)) { throw 'activation-marker-present' }
+$originalSnapshot = ${function:Get-AuraCleanupTaskSnapshot}
+$failure = $null
+try {
+    $root = Assert-AuraRepositoryLayout
+    $cleanup = [IO.Path]::GetFullPath($env:AURA_TEST_NOOP_ACTION)
+    $powerShell = (Get-Command powershell.exe -ErrorAction Stop).Source
+    [xml]$oldDocument = New-AuraCleanupTaskXml -PowerShellPath $powerShell -CleanupScript $cleanup -RepositoryRoot $root -Enabled $false
+    $manager = [Xml.XmlNamespaceManager]::new($oldDocument.NameTable)
+    $manager.AddNamespace('t', 'http://schemas.microsoft.com/windows/2004/02/mit/task')
+    $arguments = $oldDocument.SelectSingleNode('/t:Task/t:Actions/t:Exec/t:Arguments', $manager)
+    $arguments.InnerText = Get-AuraCleanupTaskPrePr43Arguments -CleanupScript $cleanup
+    Register-ScheduledTask -TaskName $taskName -Xml $oldDocument.OuterXml -ErrorAction Stop | Out-Null
+    $capturedOld = Get-TaskFingerprint $taskName
+    $old = Get-AuraCleanupTaskPrePr43Snapshot -TaskName $taskName -PowerShellPath $powerShell -CleanupScript $cleanup -RepositoryRoot $root
+    if ($null -eq $old -or -not $old.Disabled -or -not $old.DefinitionMatches) { throw 'old-task-not-recognized' }
+    $lastRunBefore = (Get-ScheduledTaskInfo -TaskName $taskName -ErrorAction Stop).LastRunTime
+    function Get-AuraCleanupTaskSnapshot {
+        param(
+            [string]$TaskName = 'AURA Demo Cleanup',
+            [Parameter(Mandatory)][string]$PowerShellPath,
+            [Parameter(Mandatory)][string]$CleanupScript,
+            [Parameter(Mandatory)][string]$RepositoryRoot
+        )
+        $snapshot = & $originalSnapshot -TaskName $TaskName -PowerShellPath $PowerShellPath -CleanupScript $CleanupScript -RepositoryRoot $RepositoryRoot
+        if ($null -ne $snapshot -and $snapshot.Xml -match '(?i)-ExecutionPolicy\s+Bypass') {
+            return [PSCustomObject]@{State=$snapshot.State;Disabled=$snapshot.Disabled;DefinitionMatches=$false;Xml=$snapshot.Xml}
+        }
+        return $snapshot
+    }
+    try {
+        Upgrade-AuraCleanupTaskVersioned -TaskName $taskName -PowerShellPath $powerShell -CleanupScript $cleanup -RepositoryRoot $root
+        throw 'validation-failure-not-injected'
+    } catch {
+        if ($_.Exception.Message -cne 'AURA_CLEANUP_TASK_UPGRADE_VALIDATION_FAILED') { throw }
+    }
+    Set-Item -Path Function:\Get-AuraCleanupTaskSnapshot -Value $originalSnapshot
+    $restored = Get-AuraCleanupTaskPrePr43Snapshot -TaskName $taskName -PowerShellPath $powerShell -CleanupScript $cleanup -RepositoryRoot $root
+    if ($null -eq $restored -or -not $restored.Disabled -or -not $restored.DefinitionMatches) { throw 'old-task-not-restored' }
+    if ($restored.Xml -cne $capturedOld) { throw 'captured-old-xml-not-restored' }
+    $lastRunAfter = (Get-ScheduledTaskInfo -TaskName $taskName -ErrorAction Stop).LastRunTime
+    if ($lastRunAfter -ne $lastRunBefore) { throw 'rollback-triggered-task' }
+    if ((Get-TaskFingerprint 'AURA Demo Backup') -cne $backupBefore) { throw 'backup-task-changed' }
+    if ((Get-TaskFingerprint 'AURA API Production') -cne $apiBefore) { throw 'api-task-changed' }
+    if ((Get-TaskFingerprint 'AURA Demo Cleanup') -cne $productionBefore) { throw 'production-task-changed' }
+    if ($null -ne (Read-AuraCleanupActivationMarker -Profile production)) { throw 'activation-marker-created' }
+    Write-Output 'REAL_WINDOWS_VERSION_UPGRADE_ROLLBACK_OK'
+} catch { $failure = $_ } finally {
+    Set-Item -Path Function:\Get-AuraCleanupTaskSnapshot -Value $originalSnapshot
+    Remove-DisposableTask $taskName
+    Remove-Item Env:AURA_TEST_ALLOW_CLEANUP_TASK_UPGRADE -ErrorAction SilentlyContinue
+}
+if (@(Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue).Count -ne 0) { throw 'rollback-task-cleanup-failed' }
+if ((Get-TaskFingerprint 'AURA Demo Cleanup') -cne $productionBefore) { throw 'production-task-finally-changed' }
+if ($null -ne $failure) { throw $failure }
+"""
+        result = self.invoke(body, task_name)
+        self.assert_ok(result)
+        self.assertIn("REAL_WINDOWS_VERSION_UPGRADE_ROLLBACK_OK", result.stdout)
