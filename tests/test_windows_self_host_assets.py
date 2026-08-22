@@ -22,6 +22,7 @@ EXPECTED_SCRIPTS = {
     "Run-DemoCleanup.ps1",
     "Activate-AuraDemoCleanup.ps1",
     "Deactivate-AuraDemoCleanup.ps1",
+    "Upgrade-AuraDemoCleanupTask.ps1",
     "Backup-DemoDatabase.ps1",
     "Protect-AuraBackup.ps1",
     "Restore-DemoDatabase-Test.ps1",

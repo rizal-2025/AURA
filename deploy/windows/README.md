@@ -43,6 +43,22 @@ five internal demo operations. The full AURA app is never the Funnel target.
    SYSTEM service account, uses the verified repository root as its working
    directory, and ignores a new invocation while one is already running.
 
+   A host with the one exact pre-PR43 canonical cleanup task may use the
+   dedicated cleanup-only upgrade after separate authorization:
+
+   ```powershell
+   .\Upgrade-AuraDemoCleanupTask.ps1 `
+     -Confirmation UPGRADE_AURA_DEMO_CLEANUP_TASK
+   ```
+
+   This operation accepts only that known definition while it is effectively
+   disabled and has no activation marker. It captures the registered XML,
+   replaces the task with the current canonical definition, and fresh-validates
+   that the task remains disabled. Registration or validation failure restores
+   and revalidates the captured disabled version. Arbitrary drift still fails
+   closed. The operation does not update backup/API tasks, run cleanup, or
+   activate cleanup; activation remains the separate explicit command below.
+
 ## Cleanup hardening contract
 
 The cleanup wrapper is Production-only, defaults to a zero-mutation dry-run,

@@ -143,6 +143,26 @@ machine-wide or user-wide policy is changed, and no `Set-ExecutionPolicy`
 operation is performed. The action remains canonical and exact; omitting,
 changing, or adding to the approved execution-policy arguments makes task
 validation fail.
+The one supported staged-definition transition is exposed separately from
+general task registration:
+
+```powershell
+.\Upgrade-AuraDemoCleanupTask.ps1 `
+  -Confirmation UPGRADE_AURA_DEMO_CLEANUP_TASK
+```
+
+It recognizes only the complete pre-PR43 canonical `AURA Demo Cleanup`
+definition with the prior action (which omitted `-ExecutionPolicy Bypass`),
+and only when fresh effective state is disabled, no activation marker exists,
+no cleanup process is active, and Production is offline. It captures the exact
+registered old XML immediately before replacement, installs only the trusted
+current canonical XML, and fresh-validates the resulting disabled task. A
+registration or post-registration validation failure restores and validates
+the captured old disabled XML; rollback failure is a distinct hard failure.
+This is not a generic task migration mechanism: an enabled old task, marker
+state, unknown version, or any unrelated definition drift still fails closed.
+The operation touches no backup or API task, never starts cleanup, and leaves
+activation as the separate explicit step.
 A registered/exported Windows definition may omit the explicit defaults
 `RunLevel=LeastPrivilege` and `StartWhenAvailable=false`, and Windows may omit
 `Enabled=true` after a disabled task is enabled. Canonical validation accepts
