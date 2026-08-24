@@ -29,9 +29,6 @@ from app.db.repositories.demo_persistence_repository import (
     demo_session_rate_limit_subject,
 )
 from app.db.repositories.reservation_repository import ReservationRepository
-from app.services.conversation_workflow_state_service import (
-    ConversationWorkflowStateService,
-)
 from app.services.demo_chat_errors import DemoChatServiceUnavailableError
 from app.services.demo_chat_service import (
     DemoPostgreSQLAdvisoryLock,
@@ -136,12 +133,6 @@ class DemoCleanupService:
         return f"demo-chat-session-{demo_session_id}"
 
     @staticmethod
-    def _workflow_hash(demo_session_id: int) -> str:
-        return ConversationWorkflowStateService.hash_session_reference(
-            f"demo-session-{demo_session_id}"
-        )
-
-    @staticmethod
     def _close_session(db) -> None:
         try:
             if db.in_transaction():
@@ -172,6 +163,16 @@ class DemoCleanupService:
             )
         )
         return has_ticket or has_telegram_identity
+
+    def _owner_is_dedicated_demo(self, db, owner_customer_id) -> bool:
+        """Fail closed unless this owner belongs to exactly one demo session."""
+        return (
+            self.sessions.count_by_owner(
+                db,
+                owner_customer_id=owner_customer_id,
+            )
+            == 1
+        )
 
     def _scan(self, now: datetime, batch_size: int) -> tuple[int, ...]:
         db = self.session_factory()
@@ -228,15 +229,11 @@ class DemoCleanupService:
                             owner_customer_id,
                         )
                     )
-                    counts["workflow_states"] += int(
-                        self.workflows.get_by_scope(
+                    counts["workflow_states"] += (
+                        self.workflows.count_by_owner(
                             db,
                             owner_customer_id=owner_customer_id,
-                            session_reference_hash=self._workflow_hash(
-                                session_id
-                            ),
                         )
-                        is not None
                     )
                     counts["handoffs"] += (
                         self.handoffs.count_by_demo_session(
@@ -253,7 +250,11 @@ class DemoCleanupService:
                         )
                     )
                     counts["blocked_sessions"] += int(
-                        self._owner_has_non_demo_references(
+                        not self._owner_is_dedicated_demo(
+                            db,
+                            owner_customer_id,
+                        )
+                        or self._owner_has_non_demo_references(
                             db,
                             owner_customer_id,
                         )
@@ -303,16 +304,18 @@ class DemoCleanupService:
                 owner_customer_id,
             ):
                 raise _UnsafeDemoOwnerReferences()
+            if not self._owner_is_dedicated_demo(
+                db,
+                owner_customer_id,
+            ):
+                raise _UnsafeDemoOwnerReferences()
             self.messages.delete_by_demo_session(
                 db,
                 demo_session_id=demo_session_id,
             )
-            self.workflows.delete_by_scope(
+            self.workflows.delete_by_owner(
                 db,
                 owner_customer_id=owner_customer_id,
-                session_reference_hash=self._workflow_hash(
-                    demo_session_id
-                ),
             )
             self.handoffs.delete_by_demo_session(
                 db,

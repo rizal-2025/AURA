@@ -8,6 +8,21 @@ Audit Phase F menemukan lock handoff memory dapat tetap aktif setelah tiket dise
 
 Pencarian pada source juga tidak menemukan penanda `TODO`, `FIXME`, `BUG`, atau `HACK` yang menunjuk ke issue terbuka.
 
+## Production demo cleanup partial failure - workflow scope mismatch fixed
+
+- Forensik read-only menemukan tiga owner survivor, masing-masing dengan satu
+  DemoSession dan satu workflow row yang hash-nya tidak cocok dengan scope
+  `demo-session-{id}` yang dihitung cleanup.
+- Delete workflow berbasis hash melewatkan row tersebut; delete Customer lalu
+  diblokir FK `fk_conversation_workflow_states_owner_customer_id_customers`.
+  Transaksi per-session rollback dengan benar, menghasilkan 10 sukses dan 3
+  failure tanpa row setengah terhapus.
+- Cleanup sekarang memakai complete owner scope hanya setelah membuktikan owner
+  terikat ke tepat satu DemoSession dan tidak memiliki SupportTicket atau
+  TelegramIdentity. Dry-run memakai scope hitung yang sama.
+- Tidak ada cascade FK, migration, perubahan retention, atau perluasan cleanup
+  ke owner non-demo/shared.
+
 ## G1D-A2.3 - placeholder greeting dan tebakan waktu diperbaiki
 
 - Greeting customer tidak lagi memuat label `placeholder`, pesan mentah,

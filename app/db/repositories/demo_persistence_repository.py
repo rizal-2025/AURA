@@ -137,6 +137,18 @@ class DemoSessionRepository:
         db.flush()
         return row
 
+    def count_by_owner(self, db, *, owner_customer_id) -> int:
+        """Count demo sessions attached to one validated owner."""
+        require_owner_customer_id(owner_customer_id)
+        return int(
+            db.scalar(
+                select(func.count())
+                .select_from(DemoSession)
+                .where(DemoSession.owner_customer_id == owner_customer_id)
+            )
+            or 0
+        )
+
     def get_by_token_digest(self, db, *, token_digest: str):
         validate_demo_digest(token_digest)
         return db.execute(

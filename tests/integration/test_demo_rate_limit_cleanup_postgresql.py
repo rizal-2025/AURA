@@ -611,6 +611,92 @@ class DemoRateLimitCleanupPostgreSQLTests(unittest.TestCase):
                 3,
             )
 
+    def test_owner_scoped_legacy_workflow_cleanup_matches_preview(self):
+        expired_id = self.expire(TOKEN_A)
+        with self.Session() as db:
+            expired = db.get(DemoSession, expired_id)
+            active = db.scalar(
+                select(DemoSession).where(
+                    DemoSession.token_digest == self.digest(TOKEN_B)
+                )
+            )
+            legacy_hash = (
+                ConversationWorkflowStateService.hash_session_reference(
+                    "structural-legacy-demo-scope"
+                )
+            )
+            expected_hash = (
+                ConversationWorkflowStateService.hash_session_reference(
+                    f"demo-session-{expired_id}"
+                )
+            )
+            self.assertNotEqual(legacy_hash, expected_hash)
+            db.add_all(
+                [
+                    ConversationWorkflowState(
+                        owner_customer_id=expired.owner_customer_id,
+                        session_reference_hash=legacy_hash,
+                        schema_version=2,
+                        payload={},
+                        is_active=False,
+                        revision=1,
+                        created_at=self.now,
+                        updated_at=self.now,
+                    ),
+                    ConversationWorkflowState(
+                        owner_customer_id=active.owner_customer_id,
+                        session_reference_hash=(
+                            ConversationWorkflowStateService
+                            .hash_session_reference(
+                                "unrelated-active-workflow-scope"
+                            )
+                        ),
+                        schema_version=2,
+                        payload={},
+                        is_active=True,
+                        revision=1,
+                        created_at=self.now,
+                        updated_at=self.now,
+                    ),
+                ]
+            )
+            expired_owner = expired.owner_customer_id
+            active_owner = active.owner_customer_id
+            db.commit()
+
+        service = DemoCleanupService(
+            session_factory=self.Session,
+            app_env="demo",
+            clock=lambda: self.now,
+        )
+        first_preview = service.dry_run_once()
+        second_preview = service.dry_run_once()
+        self.assertEqual(first_preview, second_preview)
+        self.assertEqual(first_preview.eligible_sessions, 1)
+        self.assertEqual(first_preview.eligible_workflow_states, 1)
+        self.assertEqual(first_preview.blocked_sessions, 0)
+
+        summary = asyncio.run(service.run_once())
+        self.assertEqual(summary.scanned, 1)
+        self.assertEqual(summary.cleaned_sessions, 1)
+        self.assertEqual(summary.failed_sessions, 0)
+        with self.Session() as db:
+            self.assertIsNone(db.get(DemoSession, expired_id))
+            self.assertIsNone(db.get(Customer, expired_owner))
+            self.assertIsNotNone(db.get(Customer, active_owner))
+            remaining_workflows = list(
+                db.scalars(select(ConversationWorkflowState))
+            )
+            self.assertEqual(len(remaining_workflows), 1)
+            self.assertEqual(
+                remaining_workflows[0].owner_customer_id,
+                active_owner,
+            )
+            self.assertEqual(
+                db.scalar(select(func.count()).select_from(DemoSession)),
+                1,
+            )
+
     def test_handoff_delete_failure_rolls_back_and_next_session_continues(self):
         failed_session_id = self.expire(TOKEN_A)
         next_session_id = self.expire(TOKEN_B)

@@ -77,8 +77,8 @@ class _FailAfterMessageDelete(DemoChatMessageRepository):
 
 
 class _FailAfterWorkflowDelete(ConversationWorkflowStateRepository):
-    def delete_by_scope(self, db, **values):
-        super().delete_by_scope(db, **values)
+    def delete_by_owner(self, db, **values):
+        super().delete_by_owner(db, **values)
         raise RuntimeError("forced workflow cleanup failure")
 
 
@@ -154,6 +154,11 @@ class _UncertainReleaseAdvisoryLock(DemoPostgreSQLAdvisoryLock):
 class _RevalidatedInactiveRepository(DemoSessionRepository):
     def get_expired_by_id_for_update(self, *_args, **_values):
         return None
+
+
+class _SharedOwnerSessionRepository(DemoSessionRepository):
+    def count_by_owner(self, _db, *, owner_customer_id):
+        return 2
 
 
 class _CountingExpiredBucketRepository:
@@ -531,6 +536,73 @@ class DemoCleanupServiceTests(unittest.TestCase):
             self.assertEqual(self.count(model), 0)
         self.assertEqual(self.count(DemoRateLimitBucket), 0)
 
+    def test_owner_scoped_legacy_workflow_is_previewed_and_cleaned(self):
+        session_id, owner_id, _ = self.create_session("legacy-workflow")
+        _, unrelated_owner, _ = self.create_session(
+            "unrelated-workflow",
+            idle_delta=timedelta(minutes=5),
+        )
+        legacy_hash = ConversationWorkflowStateService.hash_session_reference(
+            "legacy-demo-scope"
+        )
+        unrelated_hash = (
+            ConversationWorkflowStateService.hash_session_reference(
+                "unrelated-active-scope"
+            )
+        )
+        self.assertNotEqual(
+            legacy_hash,
+            ConversationWorkflowStateService.hash_session_reference(
+                f"demo-session-{session_id}"
+            ),
+        )
+        db = self.Session()
+        db.add_all(
+            [
+                ConversationWorkflowState(
+                    owner_customer_id=owner_id,
+                    session_reference_hash=legacy_hash,
+                    schema_version=2,
+                    payload={},
+                    is_active=False,
+                    revision=1,
+                    created_at=self.now,
+                    updated_at=self.now,
+                ),
+                ConversationWorkflowState(
+                    owner_customer_id=unrelated_owner,
+                    session_reference_hash=unrelated_hash,
+                    schema_version=2,
+                    payload={},
+                    is_active=True,
+                    revision=1,
+                    created_at=self.now,
+                    updated_at=self.now,
+                ),
+            ]
+        )
+        db.commit()
+        db.close()
+
+        preview = self.service().dry_run_once()
+        self.assertEqual(preview.eligible_sessions, 1)
+        self.assertEqual(preview.eligible_workflow_states, 1)
+        self.assertEqual(preview.blocked_sessions, 0)
+        self.assertEqual(self.count(ConversationWorkflowState), 2)
+
+        summary = self.run_cleanup()
+        self.assertEqual(summary.cleaned_sessions, 1)
+        self.assertEqual(summary.failed_sessions, 0)
+        db = self.Session()
+        try:
+            remaining = list(db.scalars(select(ConversationWorkflowState)))
+            self.assertEqual(len(remaining), 1)
+            self.assertEqual(remaining[0].owner_customer_id, unrelated_owner)
+        finally:
+            db.close()
+        self.assertEqual(self.count(DemoSession), 1)
+        self.assertEqual(self.count(Customer), 1)
+
     def test_expired_all_scope_buckets_deleted_active_buckets_retained(self):
         db = self.Session()
         for index, scope in enumerate(("session", "global", "ip")):
@@ -589,6 +661,18 @@ class DemoCleanupServiceTests(unittest.TestCase):
         self.assertEqual(summary.skipped_not_eligible, 1)
         self.assertEqual(self.count(DemoSession), 1)
 
+    def test_non_dedicated_demo_owner_fails_closed(self):
+        self.create_session("shared-owner-guard")
+        summary = self.run_cleanup(
+            self.service(
+                session_repository=_SharedOwnerSessionRepository(),
+            )
+        )
+        self.assertEqual(summary.failed_sessions, 1)
+        self.assertEqual(summary.cleaned_sessions, 0)
+        self.assertEqual(self.count(DemoSession), 1)
+        self.assertEqual(self.count(Customer), 1)
+
     def test_one_failure_rolls_back_and_next_session_continues(self):
         first = self.create_session(
             "unsafe",
@@ -622,12 +706,34 @@ class DemoCleanupServiceTests(unittest.TestCase):
         self.assert_cleanup_failure_rolls_back(service)
 
     def test_workflow_delete_failure_rolls_back_entire_session(self):
-        self.create_session_with_message("workflow-rollback")
+        _, owner_id, _ = self.create_session_with_message(
+            "workflow-rollback"
+        )
+        db = self.Session()
+        db.add(
+            ConversationWorkflowState(
+                owner_customer_id=owner_id,
+                session_reference_hash=(
+                    ConversationWorkflowStateService.hash_session_reference(
+                        "legacy-rollback-scope"
+                    )
+                ),
+                schema_version=2,
+                payload={},
+                is_active=False,
+                revision=1,
+                created_at=self.now,
+                updated_at=self.now,
+            )
+        )
+        db.commit()
+        db.close()
         self.assert_cleanup_failure_rolls_back(
             self.service(
                 workflow_repository=_FailAfterWorkflowDelete()
             )
         )
+        self.assertEqual(self.count(ConversationWorkflowState), 1)
 
     def test_handoff_delete_failure_rolls_back_entire_session(self):
         self.create_session_with_message("handoff-rollback")
@@ -662,7 +768,28 @@ class DemoCleanupServiceTests(unittest.TestCase):
         )
 
     def test_customer_delete_failure_rolls_back_entire_session(self):
-        self.create_session_with_message("customer-rollback")
+        _, owner_id, _ = self.create_session_with_message(
+            "customer-rollback"
+        )
+        db = self.Session()
+        db.add(
+            ConversationWorkflowState(
+                owner_customer_id=owner_id,
+                session_reference_hash=(
+                    ConversationWorkflowStateService.hash_session_reference(
+                        "legacy-customer-rollback-scope"
+                    )
+                ),
+                schema_version=2,
+                payload={},
+                is_active=True,
+                revision=1,
+                created_at=self.now,
+                updated_at=self.now,
+            )
+        )
+        db.commit()
+        db.close()
 
         def fail_customer_delete(
             _connection,
@@ -690,6 +817,7 @@ class DemoCleanupServiceTests(unittest.TestCase):
                 "before_cursor_execute",
                 fail_customer_delete,
             )
+        self.assertEqual(self.count(ConversationWorkflowState), 1)
 
     def assert_uncertain_unlock_preserves_committed_cleanup(
         self,

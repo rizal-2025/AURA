@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 
 from app.core.ownership import require_owner_customer_id
 from app.db.models.conversation_workflow_state import ConversationWorkflowState
@@ -43,6 +43,32 @@ class ConversationWorkflowStateRepository:
                 == owner_customer_id,
                 ConversationWorkflowState.session_reference_hash
                 == session_reference_hash,
+            )
+        )
+        return int(result.rowcount or 0)
+
+    def count_by_owner(self, db, *, owner_customer_id) -> int:
+        """Count the complete workflow scope for one validated owner."""
+        require_owner_customer_id(owner_customer_id)
+        return int(
+            db.scalar(
+                select(func.count())
+                .select_from(ConversationWorkflowState)
+                .where(
+                    ConversationWorkflowState.owner_customer_id
+                    == owner_customer_id
+                )
+            )
+            or 0
+        )
+
+    def delete_by_owner(self, db, *, owner_customer_id) -> int:
+        """Stage deletion of every workflow row for one validated owner."""
+        require_owner_customer_id(owner_customer_id)
+        result = db.execute(
+            delete(ConversationWorkflowState).where(
+                ConversationWorkflowState.owner_customer_id
+                == owner_customer_id
             )
         )
         return int(result.rowcount or 0)
