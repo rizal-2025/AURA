@@ -357,10 +357,80 @@ function Assert-AuraSecretAcl {
 function Assert-AuraOperatorSecretAcl {
     param([Parameter(Mandatory)][string]$Path)
     Assert-AuraSecretAcl -Path $Path
+    $item = Get-Item -LiteralPath $Path -Force
+    $acl = Get-Acl -LiteralPath $item.FullName
     $currentSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
-    $allowed = @($currentSid, 'S-1-5-18', 'S-1-5-32-544')
+    $systemSid = 'S-1-5-18'
+    $administratorsSid = 'S-1-5-32-544'
+    $operatorSid = $currentSid
+
+    if ($currentSid -ceq $systemSid) {
+        $rules = @($acl.Access)
+        if ($rules.Count -ne 3) {
+            throw 'AURA_SECRET_ACL_SYSTEM_SHAPE_INVALID'
+        }
+        $candidateSids = @(
+            @(
+                foreach ($rule in $rules) {
+                    try {
+                        $sid = $rule.IdentityReference.Translate(
+                            [Security.Principal.SecurityIdentifier]
+                        ).Value
+                    } catch {
+                        throw 'AURA_SECRET_ACL_IDENTITY_INVALID'
+                    }
+                    if ($sid -notin @($systemSid, $administratorsSid)) {
+                        $sid
+                    }
+                }
+            ) | Sort-Object -Unique
+        )
+        if (
+            $candidateSids.Count -ne 1 `
+            -or $candidateSids[0] -cnotmatch '^S-1-5-21-(?:\d+-){3}\d+$'
+        ) {
+            throw 'AURA_SECRET_ACL_SYSTEM_OPERATOR_INVALID'
+        }
+        $operatorSid = $candidateSids[0]
+        $expectedInheritance = if ($item.PSIsContainer) {
+            [Security.AccessControl.InheritanceFlags]::ContainerInherit -bor
+            [Security.AccessControl.InheritanceFlags]::ObjectInherit
+        } else {
+            [Security.AccessControl.InheritanceFlags]::None
+        }
+        $seen = @{}
+        foreach ($rule in $rules) {
+            $sid = $rule.IdentityReference.Translate(
+                [Security.Principal.SecurityIdentifier]
+            ).Value
+            if (
+                $rule.AccessControlType -ne
+                    [Security.AccessControl.AccessControlType]::Allow `
+                -or $rule.IsInherited `
+                -or $rule.FileSystemRights -ne
+                    [Security.AccessControl.FileSystemRights]::FullControl `
+                -or $rule.InheritanceFlags -ne $expectedInheritance `
+                -or $rule.PropagationFlags -ne
+                    [Security.AccessControl.PropagationFlags]::None `
+                -or $seen.ContainsKey($sid)
+            ) {
+                throw 'AURA_SECRET_ACL_SYSTEM_SHAPE_INVALID'
+            }
+            $seen[$sid] = $true
+        }
+        foreach ($requiredSid in @(
+            $systemSid, $administratorsSid, $operatorSid
+        )) {
+            if (-not $seen.ContainsKey($requiredSid)) {
+                throw 'AURA_SECRET_ACL_SYSTEM_SHAPE_INVALID'
+            }
+        }
+    }
+
+    $allowed = @($operatorSid, $systemSid, $administratorsSid)
     $currentUserAllowed = $false
-    foreach ($rule in (Get-Acl -LiteralPath $Path).Access) {
+    $operatorAllowed = $false
+    foreach ($rule in $acl.Access) {
         try {
             $sid = $rule.IdentityReference.Translate(
                 [Security.Principal.SecurityIdentifier]
@@ -380,8 +450,16 @@ function Assert-AuraOperatorSecretAcl {
         ) {
             $currentUserAllowed = $true
         }
+        if (
+            $rule.AccessControlType -eq [Security.AccessControl.AccessControlType]::Allow `
+            -and $sid -eq $operatorSid
+        ) {
+            $operatorAllowed = $true
+        }
     }
-    if (-not $currentUserAllowed) { throw 'AURA_SECRET_ACL_OPERATOR_MISSING' }
+    if (-not $currentUserAllowed -or -not $operatorAllowed) {
+        throw 'AURA_SECRET_ACL_OPERATOR_MISSING'
+    }
 }
 
 function Set-AuraOperatorProtectedAcl {

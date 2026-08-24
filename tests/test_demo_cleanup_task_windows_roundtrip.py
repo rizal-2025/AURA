@@ -23,6 +23,13 @@ EXECUTION_POLICY_PROBE = (
     / "windows"
     / "ExecutionPolicyProbe-ScheduledTaskAction.ps1"
 )
+SYSTEM_SECRET_ACL_PROBE = (
+    PROJECT_ROOT
+    / "tests"
+    / "fixtures"
+    / "windows"
+    / "SystemSecretAclProbe-ScheduledTaskAction.ps1"
+)
 
 
 @unittest.skipUnless(os.name == "nt", "Real Task Scheduler tests require Windows")
@@ -229,6 +236,103 @@ if ($null -ne $failure) { throw $failure }
             result.stdout,
             r"EXECUTION_POLICY_TASK_BEHAVIOR_OK negative_result=\d+ positive_result=0",
         )
+
+    def test_system_accepts_only_exact_generated_operator_secret_acl(self):
+        now = datetime.now().astimezone()
+        next_boundary = now.replace(minute=17, second=0, microsecond=0)
+        if next_boundary <= now:
+            next_boundary += timedelta(hours=1)
+        if now.minute == 17 or next_boundary - now <= timedelta(minutes=2):
+            self.skipTest("Too close to the task's minute-17 trigger boundary")
+
+        task_name = f"AURA Secret ACL Test {uuid.uuid4().hex}"
+        with tempfile.TemporaryDirectory(prefix="aura-system-secret-acl-") as directory:
+            body = r"""
+$taskName = $env:AURA_TEST_TASK_NAME
+if ($taskName -notmatch '^AURA Secret ACL Test [a-f0-9]{32}$') { throw 'test-task-name-invalid' }
+$productionBefore = @(Get-ScheduledTask -TaskName 'AURA Demo Cleanup' -ErrorAction SilentlyContinue)
+if ($productionBefore.Count -ne 1) { throw 'production-task-count-invalid' }
+$productionStateBefore = [string]$productionBefore[0].State
+$productionEnabledBefore = [bool]$productionBefore[0].Settings.Enabled
+if ($productionStateBefore -cne 'Disabled' -or $productionEnabledBefore) { throw 'production-task-not-disabled' }
+if ($null -ne (Read-AuraCleanupActivationMarker -Profile production)) { throw 'activation-marker-present' }
+
+$testRoot = [IO.Path]::GetFullPath($env:AURA_TEST_SYSTEM_SECRET_ACL_ROOT).TrimEnd('\')
+$tempRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\') + '\'
+if (-not ($testRoot + '\').StartsWith($tempRoot, [StringComparison]::OrdinalIgnoreCase)) { throw 'test-root-not-temporary' }
+Set-AuraOperatorProtectedAcl -Path $testRoot -Container
+$sourceProbe = [IO.Path]::GetFullPath($env:AURA_TEST_SYSTEM_SECRET_ACL_PROBE)
+if (-not (Test-Path -LiteralPath $sourceProbe -PathType Leaf)) { throw 'probe-fixture-missing' }
+$probe = Join-Path $testRoot 'SystemSecretAclProbe-ScheduledTaskAction.ps1'
+Copy-Item -LiteralPath $sourceProbe -Destination $probe -ErrorAction Stop
+$validPath = Join-Path $testRoot 'valid-secret.txt'
+$invalidPath = Join-Path $testRoot 'invalid-secret.txt'
+$resultPath = Join-Path $testRoot 'system-secret-acl-probe-result.txt'
+[IO.File]::WriteAllText($validPath, 'synthetic-valid', [Text.Encoding]::ASCII)
+[IO.File]::WriteAllText($invalidPath, 'synthetic-invalid', [Text.Encoding]::ASCII)
+Set-AuraOperatorProtectedAcl -Path $validPath
+Set-AuraOperatorProtectedAcl -Path $invalidPath
+$invalidAcl = Get-Acl -LiteralPath $invalidPath
+$users = [Security.Principal.SecurityIdentifier]::new('S-1-5-32-545')
+$extraRule = [Security.AccessControl.FileSystemAccessRule]::new(
+    $users,
+    [Security.AccessControl.FileSystemRights]::Read,
+    [Security.AccessControl.AccessControlType]::Allow
+)
+$invalidAcl.AddAccessRule($extraRule)
+[IO.File]::SetAccessControl($invalidPath, $invalidAcl)
+
+$root = Assert-AuraRepositoryLayout
+$powerShell = (Get-Command powershell.exe -ErrorAction Stop).Source
+$xml = New-AuraCleanupTaskXml -PowerShellPath $powerShell -CleanupScript $probe -RepositoryRoot $root -Enabled $true
+$failure = $null
+try {
+    Register-ScheduledTask -TaskName $taskName -Xml $xml -ErrorAction Stop | Out-Null
+    $before = (Get-ScheduledTaskInfo -TaskName $taskName -ErrorAction Stop).LastRunTime
+    Start-ScheduledTask -TaskName $taskName -ErrorAction Stop
+    $deadline = [DateTime]::UtcNow.AddSeconds(20)
+    do {
+        Start-Sleep -Milliseconds 200
+        $task = Get-ScheduledTask -TaskName $taskName -ErrorAction Stop
+        $info = Get-ScheduledTaskInfo -TaskName $taskName -ErrorAction Stop
+        if ($info.LastRunTime -gt $before -and [string]$task.State -cne 'Running') { break }
+    } while ([DateTime]::UtcNow -lt $deadline)
+    if ($info.LastRunTime -le $before) { throw 'system-secret-acl-task-timeout' }
+    $probeResult = if (Test-Path -LiteralPath $resultPath -PathType Leaf) {
+        [IO.File]::ReadAllText($resultPath, [Text.Encoding]::ASCII)
+    } else { 'result-missing' }
+    if ($info.LastTaskResult -ne 0) {
+        throw ('system-secret-acl-task-failed-' + $info.LastTaskResult + '-' + $probeResult)
+    }
+    if (-not (Test-Path -LiteralPath $resultPath -PathType Leaf)) { throw 'system-secret-acl-result-missing' }
+    if ($probeResult -cne 'AURA_SYSTEM_SECRET_ACL_PROBE_OK') { throw 'system-secret-acl-result-invalid' }
+    Write-Output 'SYSTEM_SECRET_ACL_TASK_BEHAVIOR_OK'
+} catch { $failure = $_ } finally {
+    $remaining = @(Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue)
+    if ($remaining.Count -eq 1) {
+        if ([string]$remaining[0].State -cne 'Disabled') {
+            Disable-ScheduledTask -TaskName $taskName -ErrorAction Stop | Out-Null
+        }
+        Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction Stop
+    }
+}
+if (@(Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue).Count -ne 0) { throw 'system-secret-acl-task-cleanup-failed' }
+if ($null -ne (Read-AuraCleanupActivationMarker -Profile production)) { throw 'activation-marker-created' }
+$productionAfter = @(Get-ScheduledTask -TaskName 'AURA Demo Cleanup' -ErrorAction SilentlyContinue)
+if ($productionAfter.Count -ne 1) { throw 'production-task-count-changed' }
+if ([string]$productionAfter[0].State -cne $productionStateBefore -or [bool]$productionAfter[0].Settings.Enabled -ne $productionEnabledBefore) { throw 'production-task-state-changed' }
+if ($null -ne $failure) { throw $failure }
+"""
+            result = self.invoke(
+                body,
+                task_name,
+                environment={
+                    "AURA_TEST_SYSTEM_SECRET_ACL_ROOT": directory,
+                    "AURA_TEST_SYSTEM_SECRET_ACL_PROBE": str(SYSTEM_SECRET_ACL_PROBE),
+                },
+            )
+        self.assert_ok(result)
+        self.assertIn("SYSTEM_SECRET_ACL_TASK_BEHAVIOR_OK", result.stdout)
 
     def test_registered_task_accepts_windows_default_omissions(self):
         task_name = f"Codex Enabled Normalization Test {uuid.uuid4().hex}"
