@@ -2,6 +2,25 @@
 
 Semua perubahan penting pada AURA dicatat di dokumen ini. Repository belum memiliki tag rilis, sehingga entri berikut mengikuti riwayat commit proyek.
 
+## 2026-08-24 - Demo cleanup workflow owner scope
+
+### Fixed
+
+- Cleanup sesi demo menghapus seluruh workflow state milik dedicated demo
+  owner di dalam transaksi per-session yang sama, termasuk row legacy dengan
+  hash scope yang berbeda dari `demo-session-{id}`.
+- Dry-run menghitung scope workflow owner yang sama dengan execute sehingga
+  preview tidak lagi melaporkan nol untuk row legacy yang akan dibersihkan.
+- Cleanup fail closed bila owner tidak terikat ke tepat satu DemoSession;
+  perlindungan SupportTicket dan TelegramIdentity tetap berlaku.
+
+### Validation
+
+- Regression unit dan PostgreSQL disposable-schema mencakup mismatch hash,
+  isolasi owner lain, zero-mutation dry-run, rollback workflow/customer,
+  partial-failure isolation, dan guard shared owner. Tidak ada migration atau
+  perubahan schema.
+
 ## 2026-08-03 - Public Reference Adoption Phase C
 
 ### Added
