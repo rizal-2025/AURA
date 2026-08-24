@@ -71,6 +71,20 @@ class WindowsBackupAclTests(unittest.TestCase):
             self.assertEqual(result.stdout.strip(), "AURA_DUMMY_ACL_PROTECTED")
             self.assertEqual(result.stderr, "")
 
+    def test_system_validation_keeps_the_generated_acl_shape_exact(self):
+        common = COMMON.read_text(encoding="utf-8")
+        for expected in (
+            "$currentSid -ceq $systemSid",
+            "$rules.Count -ne 3",
+            "AURA_SECRET_ACL_SYSTEM_SHAPE_INVALID",
+            "AURA_SECRET_ACL_SYSTEM_OPERATOR_INVALID",
+            "^S-1-5-21-(?:\\d+-){3}\\d+$",
+            "FileSystemRights]::FullControl",
+            "$rule.IsInherited",
+            "$seen.ContainsKey($sid)",
+        ):
+            self.assertIn(expected, common)
+
 
 if __name__ == "__main__":
     unittest.main()

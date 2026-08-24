@@ -66,6 +66,12 @@ and validates the repository layout, secret ACLs, exact Production database
 target, loopback PostgreSQL listener, and schema readiness before invoking the
 Python job.
 
+When the wrapper runs as the scheduled SYSTEM identity, secret and activation
+marker ACL validation accepts only the exact protected shape created by
+`Set-AuraOperatorProtectedAcl`: one non-inherited FullControl ACE each for
+SYSTEM, Administrators, and exactly one local/domain operator SID. Additional,
+duplicate, inherited, broad, or reduced-rights ACEs still fail closed.
+
 Preview bounded aggregate counts while Production remains offline:
 
 ```powershell

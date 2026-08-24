@@ -178,6 +178,11 @@ the marker is `active` and the exact task is enabled, so a scheduled launch
 during transition cannot mutate cleanup data. Enable, validation, or transition
 failure disables the task before removing the marker. `Deactivate-AuraDemoCleanup.ps1`
 disables and validates first, then removes either valid marker state.
+The scheduled SYSTEM wrapper validates protected config, pgpass, and marker
+files against the exact generated three-principal ACL: SYSTEM, Administrators,
+and one local/domain operator SID, all non-inherited FullControl. This preserves
+the operator ACE required for administration without accepting any additional
+identity or weakening the fail-closed ACL boundary.
 Repository Python readiness operations launched by the elevated activation path
 derive and explicitly use the repository root as their working directory; they
 do not depend on the caller's current directory.
