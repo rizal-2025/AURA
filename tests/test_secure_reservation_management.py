@@ -274,9 +274,9 @@ class TestSecureReservationManagement(unittest.TestCase):
         )
 
         self.assertEqual(select_a.status_code, 200)
-        self.assertIn("field mana", select_a.json()["reply"].lower())
+        self.assertIn("bagian mana", select_a.json()["reply"].lower())
         self.assertEqual(select_b.status_code, 200)
-        self.assertIn("field mana", select_b.json()["reply"].lower())
+        self.assertIn("bagian mana", select_b.json()["reply"].lower())
         self.assertEqual(
             state_a["reservation_reference"],
             "RSV_11111111111111111111111111111111",

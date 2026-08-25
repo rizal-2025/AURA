@@ -10,11 +10,13 @@ from app.api.internal_demo_dependencies import (
     get_demo_rate_limit_service,
     require_demo_service_auth,
     require_demo_client_subject,
+    require_demo_locale,
     require_empty_request_body,
     require_no_query_parameters,
     require_demo_session_token,
 )
 from app.db.database import get_db
+from app.core.locale import SupportedLocale
 from app.schemas.demo_session import (
     DemoSessionCreateResponse,
     DemoSessionCurrentResponse,
@@ -41,6 +43,7 @@ router = APIRouter(
 def create_demo_session(
     response: Response,
     client_subject: Annotated[str, Depends(require_demo_client_subject)],
+    _locale: Annotated[SupportedLocale, Depends(require_demo_locale)],
     _empty_body: None = Depends(require_empty_request_body),
     _no_query: None = Depends(require_no_query_parameters),
     db: Session = Depends(get_db),
@@ -71,6 +74,7 @@ def get_current_demo_session(
     ],
     response: Response,
     client_subject: Annotated[str, Depends(require_demo_client_subject)],
+    _locale: Annotated[SupportedLocale, Depends(require_demo_locale)],
     _empty_body: None = Depends(require_empty_request_body),
     _no_query: None = Depends(require_no_query_parameters),
     db: Session = Depends(get_db),

@@ -100,10 +100,10 @@ class TestViewReservation(unittest.TestCase):
             result["response"].index(reference_for(2)),
         )
         self.assertIn("Nama: User 6", result["response"])
-        self.assertIn("Jumlah Orang: 6", result["response"])
-        self.assertIn("Tanggal: 2026-07-20", result["response"])
-        self.assertIn("Jam: 19:00", result["response"])
-        self.assertIn("Status: pending", result["response"])
+        self.assertIn("Jumlah orang: 6 orang", result["response"])
+        self.assertIn("Status: Menunggu", result["response"])
+        self.assertIn("Tanggal: 20 Juli 2026", result["response"])
+        self.assertIn("Waktu: 19.00", result["response"])
 
     def test_view_reply_omits_exact_seeded_ids_for_distinct_references(self):
         reservations = [

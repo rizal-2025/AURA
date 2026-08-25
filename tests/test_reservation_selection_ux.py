@@ -167,7 +167,7 @@ class ReservationSelectionUxTests(unittest.TestCase):
         memory, service, agent = self.update_agent([row])
         start = self.send(agent, "u-one", "ubah reservasi")
         self.assertNotIn("RSV_", start["response"])
-        self.assertIn("10 Agu 2026", start["response"])
+        self.assertIn("10 Agustus 2026", start["response"])
         self.assertEqual(
             memory.get_session("u-one")["update_reservation_stage"],
             agent.CONFIRM_RESERVATION_SELECTION,

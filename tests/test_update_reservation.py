@@ -266,7 +266,8 @@ class TestUpdateReservation(unittest.TestCase):
         result = self._send("table")
 
         session = self.memory.get_session(self.session_id)
-        self.assertIn("Field tidak valid", result["response"])
+        self.assertIn("Pilihan tidak dikenali", result["response"])
+        self.assertNotIn("name, people, date", result["response"])
         self.assertEqual(
             session["update_reservation_stage"],
             UpdateReservationAgent.SELECT_FIELD,
@@ -284,7 +285,7 @@ class TestUpdateReservation(unittest.TestCase):
             self.service.update_calls[-1],
             (reference_for(2), "people", 7, self.service.OWNER_ID),
         )
-        self.assertIn("Jumlah Orang: 7", result["response"])
+        self.assertIn("Jumlah orang: 7 orang", result["response"])
 
     def test_people_value_accepts_natural_positive_integer_forms(self):
         for value in ("9", "9 orang", "menjadi 9 orang", "ubah jadi 9"):
@@ -497,7 +498,7 @@ class TestUpdateReservation(unittest.TestCase):
             self.service.update_calls[-1],
             (reference_for(2), "date", "2026-07-25", self.service.OWNER_ID),
         )
-        self.assertIn("Tanggal: 2026-07-25", result["response"])
+        self.assertIn("Tanggal: 25 Juli 2026", result["response"])
 
     def test_update_time(self):
         self._start_and_select_reservation()
@@ -510,7 +511,7 @@ class TestUpdateReservation(unittest.TestCase):
             self.service.update_calls[-1],
             (reference_for(2), "time", "20:00", self.service.OWNER_ID),
         )
-        self.assertIn("Jam: 20:00", result["response"])
+        self.assertIn("Waktu: 20.00", result["response"])
 
     def test_repository_updates_allowed_field_and_rejects_invalid_field(self):
         reservation = SimpleNamespace(

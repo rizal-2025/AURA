@@ -13,13 +13,9 @@ from app.brain.indonesian_nlu import (
 )
 from app.brain.memory_manager import MemoryManager
 from app.brain.reservation_entity_extractor import (
-    REFERENCE_AMBIGUITY_GUIDANCE,
-    REFERENCE_DATA_UNAVAILABLE_RESPONSE,
-    REFERENCE_NOT_FOUND_RESPONSE,
     normalize_natural_reservation_name,
 )
 from app.brain.reservation_memory import (
-    COMMITTED_OPERATION_FORMAT_FALLBACK_RESPONSE,
     OUTCOME_UNKNOWN,
     SESSION_UNUSABLE,
     has_reservation_persistence_blocker,
@@ -33,6 +29,7 @@ from app.core.input_validation import (
     validate_reservation_field,
 )
 from app.core.ownership import MissingOwnerCustomerError, require_owner_customer_id
+from app.core.locale import SupportedLocale, current_locale, format_reservation, tr
 from app.core.transaction_errors import (
     PersistenceOperationError,
     PersistenceOutcomeUnknownError,
@@ -94,7 +91,7 @@ class UpdateReservationAgent:
         except MissingOwnerCustomerError:
             return {
                 "status": "authorization_required",
-                "response": "Identitas pelanggan tidak valid atau telah kedaluwarsa.",
+                "response": tr("authorization_required"),
             }
 
         session = self.memory_manager.get_session(session_id)
@@ -179,7 +176,7 @@ class UpdateReservationAgent:
             self._clear_update_state(session)
             return {
                 "status": "reference_unavailable",
-                "response": REFERENCE_DATA_UNAVAILABLE_RESPONSE,
+                "response": tr("reference_unavailable"),
             }
         recent_reservations = tuple(page.reservations)
 
@@ -187,7 +184,7 @@ class UpdateReservationAgent:
         if not recent_reservations:
             return {
                 "status": "no_reservations",
-                "response": "Saya tidak menemukan reservasi aktif yang dapat diubah.",
+                "response": tr("update_none"),
             }
 
         candidate_references = [
@@ -206,10 +203,9 @@ class UpdateReservationAgent:
             )
             return {
                 "status": "awaiting_update",
-                "response": (
-                    f"Saya menemukan reservasi ini:\n\n"
-                    f"{format_reservation_summary(reservation)}\n\n"
-                    "Apakah ini reservasi yang ingin diubah? Ya / Tidak"
+                "response": tr(
+                    "select_update_single",
+                    summary=format_reservation_summary(reservation),
                 ),
             }
 
@@ -263,25 +259,34 @@ class UpdateReservationAgent:
         if selection.status == "ambiguous":
             return {
                 "status": "awaiting_update",
-                "response": REFERENCE_AMBIGUITY_GUIDANCE,
+                "response": tr("reference_ambiguous"),
                 "invalid_input": True,
             }
         if selection.status != "valid":
             navigation = []
             if page_has_more:
-                navigation.append('"berikutnya"')
+                navigation.append(
+                    '"next"'
+                    if current_locale() is SupportedLocale.EN_US
+                    else '"berikutnya"'
+                )
             if session.get("update_reservation_page_cursor") is not None:
-                navigation.append('"awal"')
+                navigation.append(
+                    '"first"'
+                    if current_locale() is SupportedLocale.EN_US
+                    else '"awal"'
+                )
             navigation_guidance = (
-                f", atau ketik {' / '.join(navigation)}."
+                tr("selection_navigation", commands=" / ".join(navigation))
                 if navigation
-                else "."
+                else ""
             )
             return {
                 "status": "awaiting_update",
-                "response": (
-                    f"Pilihan tidak valid. Masukkan angka 1 sampai "
-                    f"{len(candidate_references)}{navigation_guidance}"
+                "response": tr(
+                    "invalid_selection",
+                    count=len(candidate_references),
+                    guidance=navigation_guidance,
                 ),
                 "invalid_input": True,
             }
@@ -296,7 +301,7 @@ class UpdateReservationAgent:
             if reservation_reference not in candidate_references:
                 return {
                     "status": "awaiting_update",
-                    "response": REFERENCE_NOT_FOUND_RESPONSE,
+                    "response": tr("reference_not_found"),
                     "invalid_input": True,
                 }
             return self._restart_after_stale(db, session, owner_customer_id)
@@ -313,9 +318,9 @@ class UpdateReservationAgent:
         )
         return {
             "status": "awaiting_update",
-            "response": (
-                f"Reservasi dipilih:\n\n{format_reservation_summary(reservation)}\n\n"
-                "Field mana yang ingin diubah? Pilih: name, people, date, atau time."
+            "response": tr(
+                "selected_update",
+                summary=format_reservation_summary(reservation),
             ),
         }
 
@@ -331,12 +336,12 @@ class UpdateReservationAgent:
             self._clear_update_state(session)
             return {
                 "status": "update_rejected",
-                "response": "Baik, proses perubahan reservasi dihentikan. Tidak ada perubahan.",
+                "response": tr("update_stopped"),
             }
         if confirmation != "confirm":
             return {
                 "status": "awaiting_update",
-                "response": "Mohon jawab Ya atau Tidak. Apakah ini reservasi yang ingin diubah?",
+                "response": tr("update_yes_no"),
                 "invalid_input": True,
             }
 
@@ -359,7 +364,7 @@ class UpdateReservationAgent:
         )
         return {
             "status": "awaiting_update",
-            "response": "Field mana yang ingin diubah? Pilih: name, people, date, atau time.",
+            "response": tr("choose_update_field"),
         }
 
     def _select_field(self, session: dict[str, Any], user_message: str) -> dict[str, Any]:
@@ -367,7 +372,7 @@ class UpdateReservationAgent:
         if field_name is None:
             return {
                 "status": "awaiting_update",
-                "response": "Field tidak valid. Pilih: name, people, date, atau time.",
+                "response": tr("invalid_update_field"),
                 "invalid_input": True,
             }
 
@@ -406,7 +411,7 @@ class UpdateReservationAgent:
             self._clear_update_state(session)
             return {
                 "status": "awaiting_update",
-                "response": "Sesi update tidak valid. Mulai lagi dengan 'ubah reservasi saya'.",
+                "response": tr("update_session_invalid"),
             }
 
         snapshot = self.memory_manager.snapshot_conversation(session_id)
@@ -449,7 +454,7 @@ class UpdateReservationAgent:
             self.memory_manager.replace_conversation(session_id, snapshot)
             return {
                 "status": "reference_unavailable",
-                "response": REFERENCE_DATA_UNAVAILABLE_RESPONSE,
+                "response": tr("reference_unavailable"),
             }
         except PersistenceOutcomeUnknownError:
             publish_reservation_persistence_blocker(
@@ -492,7 +497,7 @@ class UpdateReservationAgent:
                 )
             return {
                 "status": "awaiting_update",
-                "response": REFERENCE_NOT_FOUND_RESPONSE,
+                "response": tr("reference_not_found"),
             }
 
         publication_failed = False
@@ -512,12 +517,12 @@ class UpdateReservationAgent:
                 operation="update",
             )
         try:
-            response = (
-                "Reservasi berhasil diperbarui:\n\n"
-                f"{self._format_reservation(updated_reservation)}"
+            response = tr(
+                "update_success",
+                reservation=self._format_reservation(updated_reservation),
             )
         except Exception:
-            response = COMMITTED_OPERATION_FORMAT_FALLBACK_RESPONSE
+            response = tr("committed_format_fallback")
         return {
             "status": "updated",
             "response": response,
@@ -544,16 +549,13 @@ class UpdateReservationAgent:
     ) -> dict[str, Any]:
         if not session.get("update_reservation_page_has_more"):
             return_guidance = (
-                ' atau ketik "awal" untuk kembali ke daftar awal'
+                tr("return_to_first")
                 if session.get("update_reservation_page_cursor") is not None
                 else ""
             )
             return {
                 "status": "awaiting_update",
-                "response": (
-                    "Tidak ada reservasi berikutnya. Pilih nomor pada halaman "
-                    f"ini{return_guidance}."
-                ),
+                "response": tr("no_next_page", guidance=return_guidance),
                 "invalid_input": True,
             }
         cursor = candidate_references[-1]
@@ -567,7 +569,7 @@ class UpdateReservationAgent:
             self._clear_update_state(session)
             return {
                 "status": "reference_unavailable",
-                "response": REFERENCE_DATA_UNAVAILABLE_RESPONSE,
+                "response": tr("reference_unavailable"),
             }
         if not page.reservations:
             return self._restart_after_stale(db, session, owner_customer_id)
@@ -595,7 +597,7 @@ class UpdateReservationAgent:
         if session.get("update_reservation_page_cursor") is None:
             return {
                 "status": "awaiting_update",
-                "response": "Anda sudah berada di daftar awal. Pilih nomor reservasi.",
+                "response": tr("already_first_page"),
                 "invalid_input": True,
             }
         return self._start_update(db, session, owner_customer_id)
@@ -628,9 +630,9 @@ class UpdateReservationAgent:
         owner_customer_id,
     ) -> dict[str, Any]:
         refreshed = self._start_update(db, session, owner_customer_id)
-        refreshed["response"] = (
-            "Reservasi yang dipilih tidak lagi tersedia untuk diubah.\n\n"
-            + refreshed["response"]
+        refreshed["response"] = tr(
+            "update_stale",
+            selection=refreshed["response"],
         )
         return refreshed
 
@@ -759,35 +761,25 @@ class UpdateReservationAgent:
 
     def _question_for_field(self, field_name: str) -> str:
         questions = {
-            "name": "Nama baru menjadi siapa?",
-            "people": "Jumlah orang baru menjadi berapa?",
-            "date": "Tanggal baru menjadi kapan?",
-            "time": "Jam baru menjadi berapa?",
+            "name": "ask_new_name",
+            "people": "ask_new_people",
+            "date": "ask_new_date",
+            "time": "ask_new_time",
         }
-        return questions[field_name]
+        return tr(questions[field_name])
 
     def _invalid_value_response(self, field_name: str) -> str:
         if field_name == "people":
-            return (
-                "Jumlah orang harus berupa angka positif. "
-                "Silakan masukkan jumlah orang yang valid."
-            )
+            return tr("invalid_people")
 
         return self._clarification_for_field(field_name)
 
     def _clarification_for_field(self, field_name: str) -> str:
         if field_name == "date":
-            return "Tanggal belum jelas. Sebutkan tanggal lengkap, misalnya 30 Juli 2026."
+            return tr("unclear_date")
         if field_name == "time":
-            return "Jam belum jelas. Sebutkan pagi atau malam, misalnya 07.00 atau 19.00."
+            return tr("unclear_time")
         return self._question_for_field(field_name)
 
     def _format_reservation(self, reservation: Any) -> str:
-        return (
-            f"Referensi reservasi: {reservation.reference}\n"
-            f"Nama: {reservation.name}\n"
-            f"Jumlah Orang: {reservation.people}\n"
-            f"Tanggal: {reservation.date}\n"
-            f"Jam: {reservation.time}\n"
-            f"Status: {reservation.status}"
-        )
+        return format_reservation(reservation)

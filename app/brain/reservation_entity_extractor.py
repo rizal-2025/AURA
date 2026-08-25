@@ -21,7 +21,8 @@ _NAME_FIELD_TRANSITION = re.compile(
     r"(?:"
     r"untuk|tanggal|pada\s+tanggal|"
     r"hari\s+(?:ini|senin|selasa|rabu|kamis|jumat|sabtu|minggu)|"
-    r"besok|lusa|jam|pukul|waktu|jumlah\s+orang"
+    r"besok|lusa|jam|pukul|waktu|jumlah\s+orang|"
+    r"for|on|date|time|people|party\s+size"
     r")\b"
     r")",
     re.IGNORECASE,
@@ -153,7 +154,11 @@ class ReservationEntityExtractor:
     async def extract(self, message: str) -> dict[str, Any]:
         result: dict[str, Any] = {}
 
-        name_match = re.search(r"\batas nama\s+(.+)$", message, re.IGNORECASE)
+        name_match = re.search(
+            r"\b(?:atas nama|under the name(?: of)?|name is)\s+(.+)$",
+            message,
+            re.IGNORECASE,
+        )
         if name_match:
             try:
                 result["name"] = normalize_natural_reservation_name(

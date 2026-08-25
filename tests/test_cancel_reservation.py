@@ -189,7 +189,7 @@ class TestCancelReservation(unittest.TestCase):
             self.service.cancel_calls,
             [(self.db, reference_for(2), self.service.OWNER_ID)],
         )
-        self.assertIn("Status: cancelled", result["response"])
+        self.assertIn("Status: Dibatalkan", result["response"])
         self.assertEqual(
             result["reservation_operation"].operation,
             ReservationOperationType.CANCELLED,

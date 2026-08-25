@@ -9,6 +9,7 @@ from app.core.memory_errors import (
     ConversationMemoryValidationError,
     PostCommitMemoryPublicationError,
 )
+from app.core.locale import tr
 from app.services.reservation.dto import PersistedReservationDTO
 from app.services.reservation.public_reference import (
     InvalidPublicReservationReferenceError,
@@ -92,10 +93,10 @@ def reservation_persistence_blocker_response(
         state,
     )
     return (
-        COMMITTED_OPERATION_STATE_UNAVAILABLE_RESPONSE
+        tr("committed_state_unavailable")
         if blocker is not None
         and blocker.get("status") == COMMITTED_MEMORY_UNAVAILABLE
-        else RESERVATION_PERSISTENCE_UNCERTAIN_RESPONSE
+        else tr("persistence_uncertain")
     )
 
 

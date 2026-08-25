@@ -10,6 +10,7 @@ from fastapi.exceptions import RequestValidationError
 from pydantic import SecretStr
 
 from app.core.config import DemoSettings, get_demo_settings
+from app.core.locale import DEFAULT_LOCALE, SupportedLocale
 from app.services.demo_session_service import (
     DemoServiceAuthRequiredError,
     DemoSessionRequiredError,
@@ -97,6 +98,21 @@ def require_demo_client_subject(
     ):
         raise DemoServiceAuthRequiredError()
     return client_subject
+
+
+def require_demo_locale(
+    locale: Annotated[
+        SupportedLocale | None,
+        Header(alias="X-AURA-Locale"),
+    ] = None,
+) -> SupportedLocale:
+    """Resolve the trusted BFF locale as a closed enum.
+
+    Absence preserves backwards compatibility with existing internal callers;
+    unsupported values are rejected by FastAPI/Pydantic before orchestration.
+    """
+
+    return locale or DEFAULT_LOCALE
 
 
 def get_demo_session_service() -> DemoSessionService:

@@ -578,7 +578,7 @@ class TestReservationConfirmationFlow(unittest.TestCase):
         session = memory.get_session("s-edit")
         self.assertEqual(session["date"], "2026-07-25")
         self.assertIsNone(session["editing_field"])
-        self.assertIn("Tanggal: 2026-07-25", result["response"])
+        self.assertIn("Tanggal: 25 Juli 2026", result["response"])
 
     def test_edit_time(self):
         memory = MemoryManager()
@@ -591,7 +591,7 @@ class TestReservationConfirmationFlow(unittest.TestCase):
         session = memory.get_session("s-edit")
         self.assertEqual(session["time"], "20:00")
         self.assertIsNone(session["editing_field"])
-        self.assertIn("Jam: 20:00", result["response"])
+        self.assertIn("Jam: 20.00", result["response"])
 
     def test_direct_edit(self):
         memory = MemoryManager()
@@ -677,7 +677,7 @@ class TestReservationConfirmationFlow(unittest.TestCase):
             "jam 8 malam",
         )
         self.assertEqual(memory.get_session(session_id)["time"], "20:00")
-        self.assertIn("Jam: 20:00", summary["response"])
+        self.assertIn("Jam: 20.00", summary["response"])
 
         db = MagicMock()
         with patch.object(

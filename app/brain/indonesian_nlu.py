@@ -80,6 +80,7 @@ POSITIVE_CONFIRMATIONS = frozenset(
         "iya",
         "iya benar",
         "yes",
+        "yes please",
         "benar",
         "sudah benar",
         "betul",
@@ -111,6 +112,7 @@ NEGATIVE_CONFIRMATIONS = frozenset(
         "salah",
         "no",
         "nope",
+        "no thanks",
         "jangan",
         "jangan lanjut",
         "batal",
@@ -133,6 +135,11 @@ GREETING_PHRASES = frozenset(
         "hai",
         "hi",
         "hello",
+        "hello aura",
+        "hi aura",
+        "good morning",
+        "good afternoon",
+        "good evening",
         "halo min",
         "hai min",
         "pagi",
@@ -160,6 +167,11 @@ CREATE_RESERVATION_PHRASES = frozenset(
         "ada meja untuk besok",
         "ingin reservasi buat keluarga",
         "tolong siapkan meja",
+        "book a table",
+        "book me a table",
+        "make a reservation",
+        "i want to make a reservation",
+        "i would like a reservation",
     }
 )
 
@@ -175,6 +187,9 @@ UPDATE_RESERVATION_PHRASES = frozenset(
         "ada perubahan untuk reservasi saya",
         "jadwalnya geser",
         "ubah waktu reservasi saya",
+        "update my reservation",
+        "change my reservation",
+        "edit my reservation",
     }
 )
 
@@ -191,6 +206,8 @@ CANCEL_RESERVATION_PHRASES = frozenset(
         "saya ingin batal pesanan",
         "tidak jadi pakai reservasinya",
         "tolong cancel reservasi saya",
+        "cancel my reservation",
+        "cancel the reservation",
     }
 )
 
@@ -216,13 +233,28 @@ VIEW_RESERVATION_PHRASES = frozenset(
         "lihat pesanan meja saya",
         "reservasi besok masih aktif",
         "nomor reservasi saya berapa",
+        "show my reservation",
+        "show my reservations",
+        "view my reservation",
+        "view my reservations",
+        "list my reservations",
+        "check my reservation",
     }
 )
 
 FIELD_ALIASES = {
     "name": frozenset({"name", "nama", "namanya", "atas nama"}),
     "people": frozenset(
-        {"people", "jumlah", "jumlah orang", "orang", "orangnya", "peserta"}
+        {
+            "people",
+            "number of people",
+            "party size",
+            "jumlah",
+            "jumlah orang",
+            "orang",
+            "orangnya",
+            "peserta",
+        }
     ),
     "date": frozenset(
         {"date", "tanggal", "tanggalnya", "hari", "jadwal", "jadwalnya"}
@@ -313,6 +345,8 @@ def parse_people_count(value: str, *, allow_bare: bool = True) -> int | None:
         patterns = (
             r"\b(?:untuk|buat|meja untuk)\s+([0-9]+)\s*(?:orang)?\b",
             r"\b([0-9]+)\s+orang\b",
+            r"\b(?:for|party of)\s+([0-9]+)\s*(?:people|persons|guests)?\b",
+            r"\b([0-9]+)\s+(?:people|persons|guests)\b",
             r"\b(?:jadi|menjadi|ke)\s+([0-9]+)\b",
         )
         numeric_matches: list[str] = []

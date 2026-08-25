@@ -3,14 +3,10 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from app.core.ownership import MissingOwnerCustomerError, require_owner_customer_id
+from app.core.locale import format_reservation, tr
 from app.services.reservation.service import ReservationService
 from app.services.reservation.public_reference import (
     PublicReservationReferenceUnavailableError,
-)
-
-
-VIEW_REFERENCE_UNAVAILABLE_RESPONSE = (
-    "Data reservasi belum dapat ditampilkan dengan aman. Silakan coba lagi nanti."
 )
 
 
@@ -36,19 +32,19 @@ class ViewReservationAgent:
         except MissingOwnerCustomerError:
             return {
                 "status": "authorization_required",
-                "response": "Identitas pelanggan tidak valid atau telah kedaluwarsa.",
+                "response": tr("authorization_required"),
             }
         except PublicReservationReferenceUnavailableError:
             return {
                 "status": "reference_unavailable",
-                "response": VIEW_REFERENCE_UNAVAILABLE_RESPONSE,
+                "response": tr("reference_unavailable_view"),
             }
         recent_reservations = reservations[:5]
 
         if not recent_reservations:
             return {
                 "status": "viewed",
-                "response": "Belum ada reservasi.",
+                "response": tr("no_reservations"),
             }
 
         records = "\n\n".join(
@@ -57,15 +53,8 @@ class ViewReservationAgent:
         )
         return {
             "status": "viewed",
-            "response": f"Daftar reservasi terbaru:\n\n{records}",
+            "response": tr("reservation_list", records=records),
         }
 
     def _format_reservation(self, reservation: Any) -> str:
-        return (
-            f"Referensi reservasi: {reservation.reference}\n"
-            f"Nama: {reservation.name}\n"
-            f"Jumlah Orang: {reservation.people}\n"
-            f"Tanggal: {reservation.date}\n"
-            f"Jam: {reservation.time}\n"
-            f"Status: {reservation.status}"
-        )
+        return format_reservation(reservation)

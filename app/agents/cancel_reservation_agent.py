@@ -4,13 +4,7 @@ from sqlalchemy.orm import Session
 
 from app.brain.indonesian_nlu import parse_confirmation
 from app.brain.memory_manager import MemoryManager
-from app.brain.reservation_entity_extractor import (
-    REFERENCE_AMBIGUITY_GUIDANCE,
-    REFERENCE_DATA_UNAVAILABLE_RESPONSE,
-    REFERENCE_NOT_FOUND_RESPONSE,
-)
 from app.brain.reservation_memory import (
-    COMMITTED_OPERATION_FORMAT_FALLBACK_RESPONSE,
     OUTCOME_UNKNOWN,
     SESSION_UNUSABLE,
     has_reservation_persistence_blocker,
@@ -20,6 +14,7 @@ from app.brain.reservation_memory import (
     reservation_persistence_blocker_response,
 )
 from app.core.ownership import MissingOwnerCustomerError, require_owner_customer_id
+from app.core.locale import SupportedLocale, current_locale, format_reservation, tr
 from app.core.transaction_errors import (
     PersistenceOperationError,
     PersistenceOutcomeUnknownError,
@@ -69,7 +64,7 @@ class CancelReservationAgent:
         except MissingOwnerCustomerError:
             return {
                 "status": "authorization_required",
-                "response": "Identitas pelanggan tidak valid atau telah kedaluwarsa.",
+                "response": tr("authorization_required"),
             }
 
         session = self.memory_manager.get_session(session_id)
@@ -130,7 +125,7 @@ class CancelReservationAgent:
             self._clear_cancellation_state(session)
             return {
                 "status": "reference_unavailable",
-                "response": REFERENCE_DATA_UNAVAILABLE_RESPONSE,
+                "response": tr("reference_unavailable"),
             }
         recent_reservations = tuple(page.reservations)
 
@@ -138,7 +133,7 @@ class CancelReservationAgent:
         if not recent_reservations:
             return {
                 "status": "no_reservations",
-                "response": "Saya tidak menemukan reservasi aktif yang dapat dibatalkan.",
+                "response": tr("cancel_none"),
             }
 
         candidate_references = [
@@ -157,10 +152,9 @@ class CancelReservationAgent:
             )
             return {
                 "status": "awaiting_cancellation",
-                "response": (
-                    f"Saya menemukan reservasi ini:\n\n"
-                    f"{format_reservation_summary(reservation)}\n\n"
-                    "Apakah ini reservasi yang ingin dibatalkan? Ya / Tidak"
+                "response": tr(
+                    "select_cancel_single",
+                    summary=format_reservation_summary(reservation),
                 ),
             }
 
@@ -214,25 +208,34 @@ class CancelReservationAgent:
         if selection.status == "ambiguous":
             return {
                 "status": "awaiting_cancellation",
-                "response": REFERENCE_AMBIGUITY_GUIDANCE,
+                "response": tr("reference_ambiguous"),
                 "invalid_input": True,
             }
         if selection.status != "valid":
             navigation = []
             if page_has_more:
-                navigation.append('"berikutnya"')
+                navigation.append(
+                    '"next"'
+                    if current_locale() is SupportedLocale.EN_US
+                    else '"berikutnya"'
+                )
             if session.get("cancel_reservation_page_cursor") is not None:
-                navigation.append('"awal"')
+                navigation.append(
+                    '"first"'
+                    if current_locale() is SupportedLocale.EN_US
+                    else '"awal"'
+                )
             navigation_guidance = (
-                f", atau ketik {' / '.join(navigation)}."
+                tr("selection_navigation", commands=" / ".join(navigation))
                 if navigation
-                else "."
+                else ""
             )
             return {
                 "status": "awaiting_cancellation",
-                "response": (
-                    f"Pilihan tidak valid. Masukkan angka 1 sampai "
-                    f"{len(candidate_references)}{navigation_guidance}"
+                "response": tr(
+                    "invalid_selection",
+                    count=len(candidate_references),
+                    guidance=navigation_guidance,
                 ),
                 "invalid_input": True,
             }
@@ -247,7 +250,7 @@ class CancelReservationAgent:
             if reservation_reference not in candidate_references:
                 return {
                     "status": "awaiting_cancellation",
-                    "response": REFERENCE_NOT_FOUND_RESPONSE,
+                    "response": tr("reference_not_found"),
                     "invalid_input": True,
                 }
             return self._restart_after_stale(db, session, owner_customer_id)
@@ -263,9 +266,9 @@ class CancelReservationAgent:
         )
         return {
             "status": "awaiting_cancellation",
-            "response": (
-                f"Reservasi dipilih:\n\n{format_reservation_summary(reservation)}\n\n"
-                "Yakin ingin membatalkan reservasi ini? Ya / Tidak"
+            "response": tr(
+                "cancel_selected",
+                summary=format_reservation_summary(reservation),
             ),
         }
 
@@ -281,18 +284,12 @@ class CancelReservationAgent:
             self._clear_cancellation_state(session)
             return {
                 "status": "cancellation_rejected",
-                "response": (
-                    "Baik, proses pembatalan dihentikan. "
-                    "Tidak ada perubahan pada reservasi."
-                ),
+                "response": tr("cancel_selection_rejected"),
             }
         if confirmation != "confirm":
             return {
                 "status": "awaiting_cancellation",
-                "response": (
-                    "Mohon jawab Ya atau Tidak. Apakah ini reservasi yang "
-                    "ingin dibatalkan?"
-                ),
+                "response": tr("cancel_yes_no_selection"),
                 "invalid_input": True,
             }
 
@@ -314,9 +311,9 @@ class CancelReservationAgent:
         )
         return {
             "status": "awaiting_cancellation",
-            "response": (
-                f"Reservasi dipilih:\n\n{format_reservation_summary(reservation)}\n\n"
-                "Yakin ingin membatalkan reservasi ini? Ya / Tidak"
+            "response": tr(
+                "cancel_selected",
+                summary=format_reservation_summary(reservation),
             ),
         }
 
@@ -338,10 +335,7 @@ class CancelReservationAgent:
             self._clear_cancellation_state(session)
             return {
                 "status": "awaiting_cancellation",
-                "response": (
-                    "Sesi pembatalan tidak valid. Mulai lagi dengan "
-                    "'batalkan reservasi saya'."
-                ),
+                "response": tr("cancel_session_invalid"),
             }
 
         confirmation = parse_confirmation(user_message)
@@ -349,13 +343,13 @@ class CancelReservationAgent:
             self._clear_cancellation_state(session)
             return {
                 "status": "cancellation_rejected",
-                "response": "Pembatalan reservasi dibatalkan. Tidak ada perubahan pada reservasi.",
+                "response": tr("cancel_flow_stopped"),
             }
 
         if confirmation != "confirm":
             return {
                 "status": "awaiting_cancellation",
-                "response": "Yakin ingin membatalkan reservasi ini? Ya / Tidak",
+                "response": tr("cancel_confirm"),
             }
 
         current_reservation = (
@@ -402,7 +396,7 @@ class CancelReservationAgent:
             self.memory_manager.replace_conversation(session_id, snapshot)
             return {
                 "status": "reference_unavailable",
-                "response": REFERENCE_DATA_UNAVAILABLE_RESPONSE,
+                "response": tr("reference_unavailable"),
             }
         except PersistenceOutcomeUnknownError:
             publish_reservation_persistence_blocker(
@@ -444,21 +438,21 @@ class CancelReservationAgent:
             )
         if cancelled_reservation is None:
             if current_reservation is not None and self._is_cancelled(current_reservation):
-                response = "Reservasi ini sudah dibatalkan. Tidak ada perubahan tambahan."
+                response = tr("cancel_already")
             else:
-                response = REFERENCE_NOT_FOUND_RESPONSE
+                response = tr("reference_not_found")
             return {
                 "status": "awaiting_cancellation",
                 "response": response,
             }
 
         try:
-            response = (
-                "Reservasi berhasil dibatalkan:\n\n"
-                f"{self._format_reservation(cancelled_reservation)}"
+            response = tr(
+                "cancel_success",
+                reservation=self._format_reservation(cancelled_reservation),
             )
         except Exception:
-            response = COMMITTED_OPERATION_FORMAT_FALLBACK_RESPONSE
+            response = tr("committed_format_fallback")
         return {
             "status": "cancelled",
             "response": response,
@@ -484,16 +478,13 @@ class CancelReservationAgent:
     ) -> dict[str, Any]:
         if not session.get("cancel_reservation_page_has_more"):
             return_guidance = (
-                ' atau ketik "awal" untuk kembali ke daftar awal'
+                tr("return_to_first")
                 if session.get("cancel_reservation_page_cursor") is not None
                 else ""
             )
             return {
                 "status": "awaiting_cancellation",
-                "response": (
-                    "Tidak ada reservasi berikutnya. Pilih nomor pada halaman "
-                    f"ini{return_guidance}."
-                ),
+                "response": tr("no_next_page", guidance=return_guidance),
                 "invalid_input": True,
             }
         cursor = candidate_references[-1]
@@ -507,7 +498,7 @@ class CancelReservationAgent:
             self._clear_cancellation_state(session)
             return {
                 "status": "reference_unavailable",
-                "response": REFERENCE_DATA_UNAVAILABLE_RESPONSE,
+                "response": tr("reference_unavailable"),
             }
         if not page.reservations:
             return self._restart_after_stale(db, session, owner_customer_id)
@@ -535,7 +526,7 @@ class CancelReservationAgent:
         if session.get("cancel_reservation_page_cursor") is None:
             return {
                 "status": "awaiting_cancellation",
-                "response": "Anda sudah berada di daftar awal. Pilih nomor reservasi.",
+                "response": tr("already_first_page"),
                 "invalid_input": True,
             }
         return self._start_cancellation(db, session, owner_customer_id)
@@ -567,9 +558,9 @@ class CancelReservationAgent:
         owner_customer_id,
     ) -> dict[str, Any]:
         refreshed = self._start_cancellation(db, session, owner_customer_id)
-        refreshed["response"] = (
-            "Reservasi yang dipilih tidak lagi tersedia untuk dibatalkan.\n\n"
-            + refreshed["response"]
+        refreshed["response"] = tr(
+            "cancel_stale",
+            selection=refreshed["response"],
         )
         return refreshed
 
@@ -649,11 +640,4 @@ class CancelReservationAgent:
         return str(getattr(reservation, "status", "")).lower() == "cancelled"
 
     def _format_reservation(self, reservation: Any) -> str:
-        return (
-            f"Referensi reservasi: {reservation.reference}\n"
-            f"Nama: {reservation.name}\n"
-            f"Jumlah Orang: {reservation.people}\n"
-            f"Tanggal: {reservation.date}\n"
-            f"Jam: {reservation.time}\n"
-            f"Status: {reservation.status}"
-        )
+        return format_reservation(reservation)
