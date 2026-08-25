@@ -84,6 +84,7 @@ class LocaleTests(unittest.TestCase):
         self.assertEqual({value: parse_target_field(value) for value in expected}, expected)
 
     def test_english_reservation_intents_use_deterministic_routing(self):
+        self.assertEqual(IntentClassifier.detect_greeting_intent("Hai AURA"), "greeting")
         self.assertEqual(IntentClassifier.detect_greeting_intent("Hello AURA!"), "greeting")
         self.assertEqual(IntentClassifier.detect_reservation_intent("Book a table"), "reservation")
         self.assertEqual(IntentClassifier.detect_reservation_intent("Show my reservations"), "view_reservation")

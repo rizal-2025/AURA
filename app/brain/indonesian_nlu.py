@@ -149,6 +149,7 @@ GREETING_PHRASES = frozenset(
         "selamat malam",
         "permisi",
         "halo aura",
+        "hai aura",
         "pagi aura",
         "siang aura",
         "sore aura",
