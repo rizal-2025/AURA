@@ -11,6 +11,13 @@ WEEKDAYS = {
     "jumat": 4,
     "sabtu": 5,
     "minggu": 6,
+    "monday": 0,
+    "tuesday": 1,
+    "wednesday": 2,
+    "thursday": 3,
+    "friday": 4,
+    "saturday": 5,
+    "sunday": 6,
 }
 
 MONTHS = {
@@ -26,6 +33,16 @@ MONTHS = {
     "oktober": 10,
     "november": 11,
     "desember": 12,
+    "january": 1,
+    "february": 2,
+    "march": 3,
+    "may": 5,
+    "june": 6,
+    "july": 7,
+    "august": 8,
+    "october": 10,
+    "november": 11,
+    "december": 12,
 }
 
 NUMBER_HOURS = {
@@ -85,10 +102,10 @@ class DatetimeParser:
                 target = today + timedelta(days=days_ahead)
                 return target.isoformat()
 
-        if re.search(r"\bhari ini\b", normalized):
+        if re.search(r"\b(?:hari ini|today)\b", normalized):
             return today.isoformat()
 
-        if re.search(r"\bbesok\b", normalized):
+        if re.search(r"\b(?:besok|tomorrow)\b", normalized):
             return (today + timedelta(days=1)).isoformat()
 
         if re.search(r"\blusa\b", normalized):
@@ -134,6 +151,20 @@ class DatetimeParser:
                 candidate = DatetimeParser._valid_date(today.year + 1, month, day)
             return candidate
 
+        english_named_match = re.search(
+            rf"\b({month_names})\s+([0-9]{{1,2}})(?:st|nd|rd|th)?(?:,?\s+([0-9]{{4}}))?\b",
+            normalized,
+        )
+        if english_named_match:
+            month = MONTHS[english_named_match.group(1)]
+            day = int(english_named_match.group(2))
+            explicit_year = english_named_match.group(3)
+            year = int(explicit_year) if explicit_year else today.year
+            candidate = DatetimeParser._valid_date(year, month, day)
+            if candidate is not None and date.fromisoformat(candidate) < today and not explicit_year:
+                candidate = DatetimeParser._valid_date(year + 1, month, day)
+            return candidate
+
         return None
 
     @staticmethod
@@ -148,6 +179,19 @@ class DatetimeParser:
         )
         if canonical_match:
             return f"{int(canonical_match.group(1)):02d}:{canonical_match.group(3)}"
+
+        english_clock_match = re.search(
+            r"(?<![0-9])([0-9]{1,2})(?::([0-5][0-9]))?\s*(a\.?m\.?|p\.?m\.?)\b",
+            normalized,
+        )
+        if english_clock_match:
+            hour = int(english_clock_match.group(1))
+            if not 1 <= hour <= 12:
+                return None
+            minute = int(english_clock_match.group(2) or 0)
+            period = english_clock_match.group(3).replace(".", "")
+            converted = hour % 12 + (12 if period == "pm" else 0)
+            return f"{converted:02d}:{minute:02d}"
 
         qualifier_match = re.search(r"\b(pagi|siang|sore|malam)\b", normalized)
         qualifier = qualifier_match.group(1) if qualifier_match else None

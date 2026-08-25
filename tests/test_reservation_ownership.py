@@ -334,8 +334,8 @@ class TestReservationOwnership(unittest.TestCase):
             )
         )
 
-        self.assertIn("Field mana", selected["response"])
-        self.assertIn("Field mana", foreign_selection["response"])
+        self.assertIn("Bagian mana", selected["response"])
+        self.assertIn("Bagian mana", foreign_selection["response"])
         self.assertEqual(
             memory.get_session("session-a")["reservation_reference"],
             "RSV_22222222222222222222222222222222",

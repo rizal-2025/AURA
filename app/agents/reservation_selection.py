@@ -1,34 +1,26 @@
-"""Deterministic, public-safe reservation selection presentation helpers."""
+"""Deterministic, locale-aware reservation selection presentation helpers."""
 
 from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from datetime import datetime
 
 from app.brain.reservation_entity_extractor import (
     PublicReferenceParseStatus,
     parse_public_reservation_reference,
 )
-
-
-INDONESIAN_MONTHS = (
-    "",
-    "Jan",
-    "Feb",
-    "Mar",
-    "Apr",
-    "Mei",
-    "Jun",
-    "Jul",
-    "Agu",
-    "Sep",
-    "Okt",
-    "Nov",
-    "Des",
+from app.core.locale import (
+    SupportedLocale,
+    current_locale,
+    format_date,
+    format_time,
 )
+
+
 NEXT_PAGE_COMMAND = "berikutnya"
 FIRST_PAGE_COMMAND = "awal"
+_NEXT_PAGE_COMMANDS = frozenset({NEXT_PAGE_COMMAND, "next", "next page"})
+_FIRST_PAGE_COMMANDS = frozenset({FIRST_PAGE_COMMAND, "first", "first page"})
 
 
 @dataclass(frozen=True)
@@ -41,13 +33,13 @@ def parse_reservation_selection(
     value: str,
     candidate_references: tuple[str, ...],
 ) -> ReservationSelection:
-    """Resolve a displayed number or a backwards-compatible public reference."""
+    """Resolve a displayed number or backwards-compatible public reference."""
 
     normalized = value.strip() if isinstance(value, str) else ""
     command = " ".join(normalized.casefold().split())
-    if command == NEXT_PAGE_COMMAND:
+    if command in _NEXT_PAGE_COMMANDS:
         return ReservationSelection("next_page")
-    if command == FIRST_PAGE_COMMAND:
+    if command in _FIRST_PAGE_COMMANDS:
         return ReservationSelection("first_page")
     if re.fullmatch(r"[+-]?\d+", normalized):
         choice = int(normalized)
@@ -67,18 +59,28 @@ def parse_reservation_selection(
 
 
 def format_reservation_summary(reservation) -> str:
+    if current_locale() is SupportedLocale.EN_US:
+        return (
+            f"Name: {reservation.name}\n"
+            f"Date: {format_date(reservation.date)}\n"
+            f"Time: {format_time(reservation.time)}\n"
+            f"Party size: {reservation.people} people"
+        )
     return (
         f"Nama: {reservation.name}\n"
-        f"Tanggal: {_format_date(reservation.date)}\n"
-        f"Jam: {_format_time(reservation.time)}\n"
-        f"Jumlah: {reservation.people} orang"
+        f"Tanggal: {format_date(reservation.date)}\n"
+        f"Waktu: {format_time(reservation.time)}\n"
+        f"Jumlah orang: {reservation.people} orang"
     )
 
 
 def format_numbered_reservations(reservations) -> str:
+    people_label = (
+        "people" if current_locale() is SupportedLocale.EN_US else "orang"
+    )
     return "\n".join(
-        f"{index}. {_format_date(reservation.date)} · "
-        f"{_format_time(reservation.time)} · {reservation.people} orang"
+        f"{index}. {format_date(reservation.date, abbreviated=True)} · "
+        f"{format_time(reservation.time)} · {reservation.people} {people_label}"
         for index, reservation in enumerate(reservations, start=1)
     )
 
@@ -90,43 +92,49 @@ def format_paginated_selection(
     is_later_page: bool,
 ) -> str:
     count = len(reservations)
-    if is_later_page:
-        heading = "Reservasi lainnya:"
-    elif has_more:
-        heading = "Saya menemukan beberapa reservasi:"
+    if current_locale() is SupportedLocale.EN_US:
+        heading = (
+            "More reservations:"
+            if is_later_page
+            else "I found several reservations:"
+            if has_more
+            else f"I found {count} reservations:"
+        )
+        if not has_more and not is_later_page:
+            guidance = f"Choose a reservation from 1 to {count}."
+        else:
+            guidance_lines = [f"Enter 1 to {count} to choose."]
+            if has_more:
+                guidance_lines.append('Enter "next" to see more reservations.')
+            if is_later_page:
+                guidance_lines.append(
+                    'Enter "first" to return to the first page.'
+                )
+            guidance = "\n".join(guidance_lines)
     else:
-        heading = f"Saya menemukan {count} reservasi:"
-
-    if not has_more and not is_later_page:
-        guidance = f"Pilih reservasi: 1 sampai {count}."
-    else:
-        guidance_lines = [f"Ketik 1 sampai {count} untuk memilih."]
-        if has_more:
-            guidance_lines.append(
-                f'Ketik "{NEXT_PAGE_COMMAND}" untuk melihat reservasi lainnya.'
-            )
-        if is_later_page:
-            guidance_lines.append(
-                f'Ketik "{FIRST_PAGE_COMMAND}" untuk kembali ke daftar awal.'
-            )
-        guidance = "\n".join(guidance_lines)
+        heading = (
+            "Reservasi lainnya:"
+            if is_later_page
+            else "Saya menemukan beberapa reservasi:"
+            if has_more
+            else f"Saya menemukan {count} reservasi:"
+        )
+        if not has_more and not is_later_page:
+            guidance = f"Pilih reservasi: 1 sampai {count}."
+        else:
+            guidance_lines = [f"Ketik 1 sampai {count} untuk memilih."]
+            if has_more:
+                guidance_lines.append(
+                    f'Ketik "{NEXT_PAGE_COMMAND}" untuk melihat reservasi lainnya.'
+                )
+            if is_later_page:
+                guidance_lines.append(
+                    f'Ketik "{FIRST_PAGE_COMMAND}" untuk kembali ke daftar awal.'
+                )
+            guidance = "\n".join(guidance_lines)
 
     return (
         f"{heading}\n\n"
         f"{format_numbered_reservations(reservations)}\n\n"
         f"{guidance}"
     )
-
-
-def _format_date(value: object) -> str:
-    text = str(value)
-    try:
-        parsed = datetime.strptime(text, "%Y-%m-%d")
-    except ValueError:
-        return text
-    return f"{parsed.day} {INDONESIAN_MONTHS[parsed.month]} {parsed.year}"
-
-
-def _format_time(value: object) -> str:
-    text = str(value)
-    return text[:5].replace(":", ".") if re.fullmatch(r"\d{2}:\d{2}(?::\d{2})?", text) else text

@@ -8,6 +8,7 @@ from app.agents.stub_agents import (
     GreetingAgent,
 )
 from app.brain.memory_manager import MemoryManager
+from app.core.locale import tr
 
 
 class AgentWorkflow:
@@ -45,14 +46,14 @@ class AgentWorkflow:
         if not steps:
             return {
                 "status": "no_steps",
-                "response": "Tidak ada langkah yang dapat dijalankan.",
+                "response": tr("no_steps"),
             }
 
         agent = self._agents.get(intent)
         if agent is None:
             return {
                 "status": "unsupported_agent",
-                "response": "Tidak ada agent yang tersedia untuk intent ini.",
+                "response": tr("unsupported_agent"),
             }
 
         if intent == "reservation":

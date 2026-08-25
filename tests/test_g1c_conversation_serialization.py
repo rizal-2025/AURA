@@ -416,7 +416,7 @@ class ConversationSerializationServiceTests(unittest.IsolatedAsyncioTestCase):
             timeout=1,
         )
 
-        self.assertIn("Field mana", selected_response)
+        self.assertIn("Bagian mana", selected_response)
         self.assertIn("Jumlah orang baru", field_response)
         self.assertEqual(
             session["reservation_reference"],

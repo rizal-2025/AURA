@@ -25,6 +25,7 @@ from app.core.input_validation import (
     InputValidationError,
     normalize_chat_message,
 )
+from app.core.locale import tr
 from app.core.memory_errors import ConversationMemoryError
 from app.core.transaction_errors import (
     PersistenceOperationError,
@@ -67,9 +68,6 @@ from app.services.demo_session_service import (
 
 
 _ADVISORY_LOCK_NAMESPACE = 0x41555241
-_SIMULATED_HANDOFF_RESPONSE = (
-    "Permintaan bantuan admin telah disimulasikan pada demo ini."
-)
 DEMO_PROVIDER_OVERALL_TIMEOUT_SECONDS = 30.0
 MAX_DEMO_PROVIDER_TIMEOUT_SECONDS = 120.0
 
@@ -357,25 +355,25 @@ class DemoSimulatedHandoffService:
 
     @staticmethod
     def explicit_response(_memory_key: str | None = None) -> str:
-        return _SIMULATED_HANDOFF_RESPONSE
+        return tr("handoff_simulated")
 
     @staticmethod
     def required_response(_memory_key: str | None = None) -> str:
-        return _SIMULATED_HANDOFF_RESPONSE
+        return tr("handoff_simulated")
 
     @staticmethod
     def waiting_response(_memory_key: str | None = None) -> str:
-        return _SIMULATED_HANDOFF_RESPONSE
+        return tr("handoff_simulated")
 
     @staticmethod
     def recovery_error_response() -> str:
-        return _SIMULATED_HANDOFF_RESPONSE
+        return tr("handoff_simulated")
 
     def status_response(self, memory_key: str) -> str:
         return (
-            _SIMULATED_HANDOFF_RESPONSE
+            tr("handoff_simulated")
             if self.get_state(memory_key)
-            else "Tidak ada simulasi bantuan admin yang aktif."
+            else tr("handoff_none")
         )
 
 

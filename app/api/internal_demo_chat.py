@@ -9,10 +9,12 @@ from app.api.internal_demo_dependencies import (
     get_demo_rate_limit_service,
     require_demo_service_auth,
     require_demo_client_subject,
+    require_demo_locale,
     require_no_query_parameters,
     require_demo_session_token,
 )
 from app.db.database import get_db
+from app.core.locale import SupportedLocale, presentation_locale
 from app.schemas.demo_chat import DemoChatRequest, DemoChatResponse
 from app.services.demo_chat_service import (
     DemoChatService,
@@ -48,6 +50,7 @@ async def post_demo_chat(
     ],
     response: Response,
     client_subject: Annotated[str, Depends(require_demo_client_subject)],
+    locale: Annotated[SupportedLocale, Depends(require_demo_locale)],
     _no_query: None = Depends(require_no_query_parameters),
     db: Session = Depends(get_db),
     service: DemoChatService = Depends(get_demo_chat_service),
@@ -65,11 +68,12 @@ async def post_demo_chat(
         session_token_digest=token_digest,
         client_subject_digest=client_subject,
     )
-    result = await service.process(
-        db,
-        raw_session_token=session_token,
-        message=request.message,
-        request_id=request.request_id,
-    )
+    with presentation_locale(locale):
+        result = await service.process(
+            db,
+            raw_session_token=session_token,
+            message=request.message,
+            request_id=request.request_id,
+        )
     response.headers["Cache-Control"] = "no-store"
     return result

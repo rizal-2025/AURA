@@ -13,7 +13,6 @@ from app.brain.indonesian_nlu import (
 )
 from app.brain.memory_manager import MemoryManager
 from app.brain.reservation_memory import (
-    COMMITTED_OPERATION_FORMAT_FALLBACK_RESPONSE,
     OUTCOME_UNKNOWN,
     SESSION_UNUSABLE,
     has_reservation_persistence_blocker,
@@ -23,7 +22,6 @@ from app.brain.reservation_memory import (
     reservation_persistence_blocker_response,
 )
 from app.brain.reservation_entity_extractor import (
-    REFERENCE_DATA_UNAVAILABLE_RESPONSE,
     ReservationEntityExtractor,
     normalize_natural_reservation_name,
 )
@@ -32,6 +30,7 @@ from app.core.input_validation import (
     InputValidationError,
     validate_reservation_field,
 )
+from app.core.locale import format_date, format_time, tr
 from app.core.transaction_errors import (
     PersistenceOperationError,
     PersistenceOutcomeUnknownError,
@@ -107,7 +106,7 @@ class ReservationAgent:
         if step is None:
             return {
                 "status": "completed",
-                "response": "Tidak ada langkah yang tersedia.",
+                "response": tr("no_available_step"),
             }
 
         extracted = await self.entity_extractor.extract(user_message)
@@ -202,7 +201,7 @@ class ReservationAgent:
             if next_action["next_action"] == "complete":
                 return {
                     "status": "completed",
-                    "response": "Reservasi sudah lengkap.",
+                    "response": tr("reservation_complete"),
                 }
 
             field = next_action["field"]
@@ -212,7 +211,7 @@ class ReservationAgent:
 
             return {
                 "status": "awaiting_input",
-                "response": next_action["question"],
+                "response": self._question_for_field(field),
                 "field": field,
                 "next_action": next_action["next_action"],
             }
@@ -220,7 +219,7 @@ class ReservationAgent:
         if action == "save_reservation":
             return {
                 "status": "complete",
-                "response": "Reservasi siap disimpan.",
+                "response": tr("reservation_ready"),
                 "reservation": {
                     "name": session_state.get("name"),
                     "people": session_state.get("people"),
@@ -231,7 +230,7 @@ class ReservationAgent:
 
         return {
             "status": "unknown_action",
-            "response": f"Langkah tidak dikenal: {action}",
+            "response": tr("no_available_step"),
         }
 
     async def handle_confirmation(
@@ -278,12 +277,12 @@ class ReservationAgent:
             if owner_customer_id is None:
                 return {
                     "status": "awaiting_confirmation",
-                    "response": "Identitas pelanggan tidak tersedia. Silakan coba lagi.",
+                    "response": tr("customer_unavailable"),
                 }
             if db is None:
                 return {
                     "status": "awaiting_confirmation",
-                    "response": "Layanan reservasi belum tersedia. Silakan coba lagi.",
+                    "response": tr("reservation_service_unavailable"),
                 }
 
             snapshot = self.memory_manager.snapshot_conversation(session_id)
@@ -328,7 +327,7 @@ class ReservationAgent:
                 self.memory_manager.replace_conversation(session_id, snapshot)
                 return {
                     "status": "reference_unavailable",
-                    "response": REFERENCE_DATA_UNAVAILABLE_RESPONSE,
+                    "response": tr("reference_unavailable"),
                 }
             except PersistenceOutcomeUnknownError:
                 publish_reservation_persistence_blocker(
@@ -372,7 +371,7 @@ class ReservationAgent:
             try:
                 response = self._create_success_response(reservation_reference)
             except Exception:
-                response = COMMITTED_OPERATION_FORMAT_FALLBACK_RESPONSE
+                response = tr("committed_format_fallback")
             return {
                 "status": "completed",
                 "response": response,
@@ -389,7 +388,7 @@ class ReservationAgent:
             )
             return {
                 "status": "rejected",
-                "response": "Baik, reservasi tidak dilanjutkan.",
+                "response": tr("create_rejected"),
             }
 
         if intent == EDIT_FIELD and field:
@@ -557,33 +556,31 @@ class ReservationAgent:
         return parse_people_count(text)
 
     def _confirmation_message(self, session_state: dict[str, Any]) -> str:
-        return (
-            "Baik, saya konfirmasi reservasi Anda:\n\n"
-            f"Nama: {session_state.get('name', '-') }\n"
-            f"Jumlah: {session_state.get('people', '-')} orang\n"
-            f"Tanggal: {session_state.get('date', '-')}\n"
-            f"Jam: {session_state.get('time', '-')}\n\n"
-            "Apakah data ini sudah benar?\n"
-            "Balas: Ya / Tidak, atau sebutkan field yang ingin diubah."
+        return tr(
+            "create_confirmation",
+            name=session_state.get("name", "-"),
+            people=session_state.get("people", "-"),
+            date=format_date(session_state.get("date", "-")),
+            time=format_time(session_state.get("time", "-")),
         )
 
     def _question_for_edit_field(self, field_name: str) -> str:
         questions = {
-            "name": "Baik, nama menjadi siapa?",
-            "people": "Baik, jumlah orang menjadi berapa?",
-            "date": "Baik, tanggal menjadi kapan?",
-            "time": "Baik, jam menjadi berapa?",
+            "name": "ask_edit_name",
+            "people": "ask_edit_people",
+            "date": "ask_edit_date",
+            "time": "ask_edit_time",
         }
-        return questions.get(field_name, "Field mana yang ingin diubah?")
+        return tr(questions.get(field_name, "choose_update_field"))
 
     def _question_for_field(self, field_name: str) -> str:
         questions = {
-            "name": "Atas nama siapa reservasinya?",
-            "people": "Untuk berapa orang?",
-            "date": "Tanggal berapa?",
-            "time": "Jam berapa?",
+            "name": "ask_name",
+            "people": "ask_people",
+            "date": "ask_date",
+            "time": "ask_time",
         }
-        return questions.get(field_name, "Mohon lengkapi data reservasi.")
+        return tr(questions.get(field_name, "complete_reservation_details"))
 
     def _clarification_for_field(self, field_name: str, user_message: str) -> str:
         if (
@@ -592,18 +589,14 @@ class ReservationAgent:
         ):
             match = re.search(r"\btanggal\s+([0-9]{1,2})\b", user_message, re.IGNORECASE)
             day = match.group(1) if match else "tersebut"
-            return f"Tanggal {day} bulan dan tahun berapa?"
+            return tr("clarify_date_parts", day=day)
         if (
             field_name == "time"
             and DatetimeParser.time_ambiguity(user_message) == "missing_day_period"
         ):
-            return "Pukul tersebut pagi atau malam? Contoh: 07.00 atau 19.00."
+            return tr("clarify_day_period")
         return self._question_for_field(field_name)
 
     @staticmethod
     def _create_success_response(reservation_reference: str) -> str:
-        return (
-            "Reservasi berhasil dibuat.\n\n"
-            f"Referensi reservasi: {reservation_reference}\n\n"
-            "Sampai jumpa."
-        )
+        return tr("create_success", reference=reservation_reference)

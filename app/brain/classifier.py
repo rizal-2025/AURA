@@ -29,7 +29,14 @@ class IntentClassifier:
     DEFAULT_INTENT = "general"
     DEFAULT_CONFIDENCE = 0.0
 
-    _RESERVATION_WORDS = {"reservasi", "reservasinya", "pemesanan"}
+    _RESERVATION_WORDS = {
+        "reservasi",
+        "reservasinya",
+        "pemesanan",
+        "reservation",
+        "reservations",
+        "booking",
+    }
     _UPDATE_WORDS = {
         "ubah",
         "ganti",
@@ -41,6 +48,8 @@ class IntentClassifier:
         "pindah",
         "geser",
         "perubahan",
+        "change",
+        "modify",
     }
     _RESERVATION_FIELD_WORDS = {
         "nama",
@@ -55,6 +64,12 @@ class IntentClassifier:
         "waktu",
         "jadwal",
         "jadwalnya",
+        "name",
+        "people",
+        "party",
+        "size",
+        "date",
+        "time",
     }
     _CANCEL_WORDS = {"batal", "cancel", "hapus"}
     _VIEW_WORDS = {
@@ -66,8 +81,12 @@ class IntentClassifier:
         "status",
         "aktif",
         "ada",
+        "show",
+        "view",
+        "list",
+        "check",
     }
-    _NEGATION_WORDS = {"tidak", "jangan", "belum"}
+    _NEGATION_WORDS = {"tidak", "jangan", "belum", "not", "don't"}
     _INFORMATIONAL_PREFIXES = (
         "bagaimana",
         "apa itu",
