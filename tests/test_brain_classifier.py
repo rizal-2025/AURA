@@ -262,6 +262,7 @@ class TestBrainIntentClassifier(unittest.TestCase):
             "Pagi",
             "Permisi",
             "Halo Aura",
+            "Hai AURA",
         ):
             with self.subTest(message=message):
                 result = asyncio.run(classifier.classify(message))
