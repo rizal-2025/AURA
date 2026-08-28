@@ -281,6 +281,9 @@ class TestCustomerServiceScenarios(unittest.TestCase):
             "saya ingin bicara dengan manusia",
             "hubungkan ke customer service",
             "Hubungkan Saya ke RIZAL",
+            "connect me to an admin",
+            "I want to speak with a human agent",
+            "I need assistance from customer service",
         )
         token, _ = create_customer_access_token(
             self.customer_a.id,
@@ -320,7 +323,7 @@ class TestCustomerServiceScenarios(unittest.TestCase):
         }
         reset_result = self.simulator.run(reset_scenario)
         self.assertFalse(reset_result.handoff)
-        self.assertEqual(reset_result.state.get("misunderstanding_count"), 1)
+        self.assertEqual(reset_result.state.get("misunderstanding_count"), 0)
 
         invalid_scope_scenario = {
             "authenticated_customer": "customer_a",
@@ -350,7 +353,7 @@ class TestCustomerServiceScenarios(unittest.TestCase):
         self.assertEqual(result.ticket_category, "ambiguous_intent")
         self.assertIn("perlu diteruskan kepada petugas", result.replies[-1])
 
-    def test_repeated_misunderstanding_is_scoped_and_resets_after_valid_intent(self):
+    def test_unknown_input_always_falls_back_without_creating_handoff(self):
         session_id = "misunderstanding-shared-session"
 
         def send(customer, message):
@@ -361,20 +364,24 @@ class TestCustomerServiceScenarios(unittest.TestCase):
                 headers={"Authorization": f"Bearer {token}"},
             )
 
-        first_unclear = send(self.customer_a, "asdasdasd")
+        unclear_messages = (
+            "qwerty-test-audit",
+            "zxqv plmokn unrelated",
+            "blorp zazz",
+        )
+        responses = [send(self.customer_a, message) for message in unclear_messages]
         customer_b_unclear = send(self.customer_b, "asdasdasd")
-        second_unclear = send(self.customer_a, "zxqv qwerty tidak jelas")
         key_a = build_authenticated_memory_key(self.customer_a.id, session_id)
         key_b = build_authenticated_memory_key(self.customer_b.id, session_id)
 
-        self.assertIn("belum memahami", first_unclear.json()["reply"])
+        for response in responses:
+            self.assertIn("belum memahami", response.json()["reply"])
         self.assertIn("belum memahami", customer_b_unclear.json()["reply"])
-        self.assertIn("perlu diteruskan kepada petugas", second_unclear.json()["reply"])
-        self.assertTrue(chat_agent.memory_manager.get_session(key_a)["handoff_required"])
+        self.assertFalse(chat_agent.memory_manager.get_session(key_a).get("handoff_required"))
         self.assertFalse(chat_agent.memory_manager.get_session(key_b).get("handoff_required"))
         self.assertEqual(
             chat_agent.memory_manager.get_session(key_b)["misunderstanding_count"],
-            1,
+            0,
         )
         self.general_ai.assert_not_awaited()
 
@@ -399,7 +406,7 @@ class TestCustomerServiceScenarios(unittest.TestCase):
         self.assertIn("Customer A", valid.json()["reply"])
         self.assertIn("belum memahami", after_reset.json()["reply"])
         self.assertFalse(reset_state.get("handoff_required"))
-        self.assertEqual(reset_state["misunderstanding_count"], 1)
+        self.assertEqual(reset_state["misunderstanding_count"], 0)
 
     def test_informational_question_does_not_increment_misunderstanding(self):
         scenario = {

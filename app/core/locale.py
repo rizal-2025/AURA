@@ -285,8 +285,8 @@ _TEXT: dict[str, dict[SupportedLocale, str]] = {
         SupportedLocale.EN_US: "Please confirm your reservation:\n\nName: {name}\nParty size: {people}\nDate: {date}\nTime: {time}\n\nIs everything correct? Yes / No",
     },
     "create_success": {
-        SupportedLocale.ID_ID: "Reservasi berhasil dibuat.\n\nReferensi reservasi: {reference}\n\nSimpan referensi ini untuk melihat, mengubah, atau membatalkan reservasi.",
-        SupportedLocale.EN_US: "Reservation created successfully.\n\nReservation reference: {reference}\n\nKeep this reference to view, update, or cancel the reservation.",
+        SupportedLocale.ID_ID: "Reservasi berhasil dibuat.\n\nReferensi reservasi: {reference}\n\nAnda dapat melihat, mengubah, atau membatalkan reservasi langsung dari sesi demo ini tanpa memasukkan referensi secara manual.",
+        SupportedLocale.EN_US: "Reservation created successfully.\n\nReservation reference: {reference}\n\nYou can view, update, or cancel reservations directly in this demo session without entering the reference manually.",
     },
     "create_rejected": {
         SupportedLocale.ID_ID: "Baik, reservasi tidak dilanjutkan.",

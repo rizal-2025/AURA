@@ -338,15 +338,18 @@ class AgentOrchestrator:
             if safe_blocked_general:
                 self._reset_intent_attempts(session_id)
             elif intent == "general" and HandoffDetector.is_deterministically_misunderstood(message):
-                attempt_count = self.handoff_service.record_misunderstanding(session_id)
-                if attempt_count >= 2:
-                    self._create_handoff(session_id, "repeated_misunderstanding", attempt_count, db, owner_customer_id)
-                    return self.handoff_service.required_response(session_id)
+                # Unknown token-like input is not evidence that a person asked
+                # for an administrator. Keep explicit human requests and
+                # workflow ambiguity on their dedicated escalation paths.
+                self._reset_intent_attempts(session_id)
                 return tr("unknown_request")
 
             if not safe_blocked_general and HandoffDetector.is_low_confidence(intent, confidence):
                 if intent == "general" and HandoffDetector.is_safe_non_action_message(message):
                     self._reset_intent_attempts(session_id)
+                elif intent == "general":
+                    self._reset_intent_attempts(session_id)
+                    return tr("unknown_request")
                 elif intent in {"ambiguous", "update_reservation", "cancel_reservation"}:
                     attempt_count = self.handoff_service.record_ambiguity(session_id)
                     if attempt_count >= 2:

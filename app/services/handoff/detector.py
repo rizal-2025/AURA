@@ -18,6 +18,9 @@ class HandoffDetector:
         r"\b(?:butuh|perlu) bantuan (?:dari )?(admin|manusia|orang|petugas|staf|operator)\b",
         r"\bdilayani langsung\b",
         r"\bchat\b.*\bcustomer service\b",
+        r"\b(?:connect|transfer)\b.*\b(?:admin|human|agent|operator|staff|customer service|rizal)\b",
+        r"\b(?:talk|speak)\b.*\b(?:to|with)\b.*\b(?:admin|human|agent|operator|staff|customer service|rizal)\b",
+        r"\bneed\b.*\b(?:help|assistance)\b.*\bfrom\b.*\b(?:admin|human|agent|operator|staff|customer service)\b",
     )
     FRUSTRATION_PHRASES = frozenset(
         {
