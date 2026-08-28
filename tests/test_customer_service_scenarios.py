@@ -15,6 +15,7 @@ from app.core.conversation_memory import build_authenticated_memory_key
 from app.core.security import create_customer_access_token
 from app.db.database import get_db
 from app.main import app
+from app.services.handoff.detector import HandoffDetector
 from tests.customer_service.simulator import ConversationSimulator
 
 
@@ -407,6 +408,59 @@ class TestCustomerServiceScenarios(unittest.TestCase):
         self.assertIn("belum memahami", after_reset.json()["reply"])
         self.assertFalse(reset_state.get("handoff_required"))
         self.assertEqual(reset_state["misunderstanding_count"], 0)
+
+    def test_deterministic_unknown_bypasses_classifier_and_stale_counter(self):
+        session_id = "unknown-before-classifier-session"
+        memory_key = build_authenticated_memory_key(
+            self.customer_a.id,
+            session_id,
+        )
+        chat_agent.memory_manager.update_session(
+            memory_key,
+            {"ambiguity_count": 1, "misunderstanding_count": 1},
+        )
+        token, _ = create_customer_access_token(
+            self.customer_a.id,
+            self.customer_a.token_version,
+        )
+        with patch.object(
+            chat_agent.intent_classifier,
+            "classify",
+            AsyncMock(return_value={"intent": "ambiguous", "confidence": 0.1}),
+        ) as classify:
+            response = self.client.post(
+                "/chat",
+                json={"session_id": session_id, "message": "qwerty-test-audit"},
+                headers={"Authorization": f"Bearer {token}"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("belum memahami", response.json()["reply"])
+        classify.assert_not_awaited()
+        state = chat_agent.memory_manager.get_session(memory_key)
+        self.assertFalse(state.get("handoff_required"))
+        self.assertEqual(state["ambiguity_count"], 0)
+        self.assertEqual(state["misunderstanding_count"], 0)
+
+    def test_obvious_nonsense_shape_is_conservatively_bounded(self):
+        for message in (
+            "qwerty-test-audit",
+            "asdasdasd",
+            "zxqv",
+        ):
+            with self.subTest(message=message):
+                self.assertTrue(HandoffDetector.is_obvious_nonsense_shape(message))
+
+        for message in (
+            "banana",
+            "mama",
+            "hahaha",
+            "strength",
+            "help with HTML",
+            "tolong urus yang itu lagi",
+        ):
+            with self.subTest(message=message):
+                self.assertFalse(HandoffDetector.is_obvious_nonsense_shape(message))
 
     def test_informational_question_does_not_increment_misunderstanding(self):
         scenario = {

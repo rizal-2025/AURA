@@ -53,6 +53,18 @@ class HandoffDetector:
         "bagaimana ya",
         "bisa bantu",
     )
+    OBVIOUS_NONSENSE_PATTERNS = (
+        # Keyboard walks and adjacent-key runs, optionally embedded in a token.
+        r"\b[a-z]*(?:qwerty|asdf|zxcv|plmokn)[a-z]*\b",
+        # A standalone consonant run is suspicious only when it also contains
+        # a rare synthetic-input letter. This avoids ordinary words such as
+        # "strength" and common initialisms such as "HTML".
+        r"\b(?=[bcdfghjklmnpqrstvwxz]{4,}\b)(?=[a-z]*[qxz])"
+        r"[bcdfghjklmnpqrstvwxz]+\b",
+        # Require a 3-4 character fragment repeated at least three times.
+        # This catches asdasdasd without treating banana/mama/hahaha as noise.
+        r"\b([a-z]{3,4})\1{2,}\b",
+    )
 
     @classmethod
     def normalize(cls, message: str) -> str:
@@ -121,6 +133,15 @@ class HandoffDetector:
         if tokens.intersection(known_reservation_tokens):
             return False
         return True
+
+    @classmethod
+    def is_obvious_nonsense_shape(cls, message: str) -> bool:
+        """Conservatively identify machine-like gibberish before AI routing."""
+        normalized = cls.normalize(message)
+        return cls.is_deterministically_misunderstood(message) and any(
+            re.search(pattern, normalized)
+            for pattern in cls.OBVIOUS_NONSENSE_PATTERNS
+        )
 
     @staticmethod
     def is_low_confidence(intent: str, confidence) -> bool:
