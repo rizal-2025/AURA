@@ -168,6 +168,17 @@ class AgentOrchestrator:
                 return self.handoff_service.required_response(session_id)
             return tr("ambiguous_action")
 
+        if (
+            not active_workflow
+            and HandoffDetector.is_obvious_nonsense_shape(message)
+        ):
+            # Obvious synthetic/gibberish shapes are deterministic. Apply this
+            # narrow guard before the provider-backed classifier so they cannot
+            # inherit an earlier ambiguity/misunderstanding counter and become
+            # a handoff. Natural low-confidence text keeps its escalation path.
+            self._reset_intent_attempts(session_id)
+            return tr("unknown_request")
+
         try:
             return await self._handle_authenticated(
                 session_id,
