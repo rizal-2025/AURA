@@ -66,6 +66,23 @@ class LocaleTests(unittest.TestCase):
             self.assertEqual(session["editing_field"], "people")
             self.assertEqual(selected["response"], "What should the new party size be?")
 
+    def test_unknown_request_and_create_success_copy_follow_selected_locale(self):
+        reference = "RSV_" + "A" * 32
+        with presentation_locale(SupportedLocale.ID_ID):
+            fallback = tr("unknown_request")
+            success = tr("create_success", reference=reference)
+            self.assertIn("belum memahami", fallback)
+            self.assertIn(reference, success)
+            self.assertIn("tanpa memasukkan referensi secara manual", success)
+            self.assertNotIn("Simpan referensi", success)
+        with presentation_locale(SupportedLocale.EN_US):
+            fallback = tr("unknown_request")
+            success = tr("create_success", reference=reference)
+            self.assertIn("didn't understand", fallback)
+            self.assertIn(reference, success)
+            self.assertIn("without entering the reference manually", success)
+            self.assertNotIn("Keep this reference", success)
+
     def test_localized_field_aliases_map_to_canonical_keys(self):
         expected = {
             "nama": "name",
