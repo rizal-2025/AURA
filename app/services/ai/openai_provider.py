@@ -14,11 +14,19 @@ class OpenAIProvider(AIProvider):
             max_retries=0,
         )
 
-    async def chat(self, message: str) -> str:
+    async def chat(
+        self,
+        message: str,
+        *,
+        max_output_tokens: int | None = None,
+    ) -> str:
+        request = {
+            "model": self.config.OPENAI_MODEL,
+            "input": message,
+        }
+        if max_output_tokens is not None:
+            request["max_output_tokens"] = max_output_tokens
 
-        response = await self.client.responses.create(
-            model=self.config.OPENAI_MODEL,
-            input=message
-        )
+        response = await self.client.responses.create(**request)
 
         return response.output_text

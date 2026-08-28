@@ -68,6 +68,10 @@ _TEXT: dict[str, dict[SupportedLocale, str]] = {
         SupportedLocale.ID_ID: "Maaf, saya belum memahami permintaan Anda. Bisa dijelaskan kembali?",
         SupportedLocale.EN_US: "Sorry, I didn't understand your request. Could you explain it another way?",
     },
+    "general_conversation_unavailable": {
+        SupportedLocale.ID_ID: "Maaf, saya sedang tidak dapat menjawab percakapan umum. Silakan coba lagi.",
+        SupportedLocale.EN_US: "Sorry, I can't answer general conversation right now. Please try again.",
+    },
     "ambiguous_action": {
         SupportedLocale.ID_ID: "Apakah Anda ingin mengubah atau membatalkan reservasi?",
         SupportedLocale.EN_US: "Would you like to update or cancel a reservation?",

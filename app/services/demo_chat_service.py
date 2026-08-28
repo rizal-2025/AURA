@@ -20,6 +20,7 @@ from app.core.conversation_lock_manager import (
     ConversationBusyError,
     ConversationLockManager,
 )
+from app.core.conversation_memory import build_authenticated_memory_key
 from app.core.customer_identity import AuthenticatedCustomer
 from app.core.input_validation import (
     InputValidationError,
@@ -49,6 +50,9 @@ from app.schemas.demo_chat import (
     DemoChatResponse,
 )
 from app.services.authenticated_chat_service import AuthenticatedChatService
+from app.services.conversation.general_conversation import (
+    GENERAL_CONVERSATION_HISTORY_MESSAGE_LIMIT,
+)
 from app.services.demo_chat_errors import (
     DemoChatProviderError,
     DemoChatProviderTimeoutError,
@@ -412,7 +416,13 @@ class DemoChatService:
     def _now(self) -> datetime:
         return validate_utc_datetime(self.clock())
 
-    def _build_core(self, demo_session_id: int):
+    def _build_core(
+        self,
+        demo_session_id: int,
+        *,
+        memory_key: str | None = None,
+        conversation_history=None,
+    ):
         if self.core_factory is not None:
             return self.core_factory(demo_session_id)
         agent = AgentOrchestrator()
@@ -422,7 +432,28 @@ class DemoChatService:
             repository=self.handoffs,
             clock=self.clock,
         )
+        if memory_key is not None:
+            agent.seed_general_conversation_history(
+                memory_key,
+                conversation_history,
+            )
         return AuthenticatedChatService(agent=agent)
+
+    def _conversation_history(self, db, demo_session_id: int):
+        """Load only this demo session's newest safety-versioned messages."""
+
+        with UnitOfWork(db) as unit:
+            rows = self.messages.list_latest(
+                db,
+                demo_session_id=demo_session_id,
+                limit=GENERAL_CONVERSATION_HISTORY_MESSAGE_LIMIT,
+            )
+            history = [
+                {"role": row.role, "content": row.content}
+                for row in rows
+            ]
+            unit.commit()
+        return history
 
     def _resolve_session_id(self, db, raw_session_token: str) -> int:
         with UnitOfWork(db) as unit:
@@ -588,13 +619,26 @@ class DemoChatService:
                 rows=rows,
             )
 
-        core = self._build_core(demo_session_id)
+        session_reference = f"demo-session-{demo_session_id}"
+        memory_key = build_authenticated_memory_key(
+            customer.id,
+            session_reference,
+        )
+        conversation_history = self._conversation_history(
+            db,
+            demo_session_id,
+        )
+        core = self._build_core(
+            demo_session_id,
+            memory_key=memory_key,
+            conversation_history=conversation_history,
+        )
         try:
             async with asyncio.timeout(self.provider_timeout_seconds):
                 turn_result = await core.process_turn(
                     db=db,
                     customer=customer,
-                    session_reference=f"demo-session-{demo_session_id}",
+                    session_reference=session_reference,
                     message=message,
                 )
                 if type(turn_result) is not AgentTurnResult:

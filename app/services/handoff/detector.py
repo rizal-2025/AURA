@@ -64,6 +64,8 @@ class HandoffDetector:
         # Require a 3-4 character fragment repeated at least three times.
         # This catches asdasdasd without treating banana/mama/hahaha as noise.
         r"\b([a-z]{3,4})\1{2,}\b",
+        # Stable synthetic fixture vocabulary used by regression/audit probes.
+        r"\b(?:blorp|zazz)\b",
     )
 
     @classmethod

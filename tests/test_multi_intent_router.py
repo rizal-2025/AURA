@@ -96,7 +96,7 @@ class TestMultiIntentRouter(unittest.TestCase):
         provider.chat.assert_not_awaited()
         self.assertFalse(orchestrator.handoff_service.is_required("greeting-session"))
 
-    def test_non_greeting_provider_failure_creates_safe_internal_handoff_without_raw_log(self):
+    def test_non_greeting_classifier_failure_returns_safe_reply_without_handoff_or_raw_log(self):
         provider = type("FailingProvider", (), {
             "chat": AsyncMock(side_effect=ConnectionError("private provider failure")),
         })()
@@ -124,9 +124,9 @@ class TestMultiIntentRouter(unittest.TestCase):
             logger.removeHandler(handler)
 
         state = orchestrator.memory_manager.get_session("failure-session")
-        self.assertIn("perlu diteruskan", response)
-        self.assertEqual(state["handoff_state"]["category"], "internal_error")
-        self.assertEqual(len(recorder.created), 1)
+        self.assertIn("tidak dapat menjawab percakapan umum", response)
+        self.assertFalse(state.get("handoff_required"))
+        self.assertEqual(recorder.created, [])
         self.assertEqual(provider.chat.await_count, 1)
         self.assertNotIn("private provider failure", stream.getvalue())
 
