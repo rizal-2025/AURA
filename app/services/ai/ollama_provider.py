@@ -15,15 +15,24 @@ class OllamaProvider(AIProvider):
             max_retries=0,
         )
 
-    async def chat(self, message: str) -> str:
-        response = await self.client.chat.completions.create(
-            model=self.config.OLLAMA_MODEL,
-            messages=[
+    async def chat(
+        self,
+        message: str,
+        *,
+        max_output_tokens: int | None = None,
+    ) -> str:
+        request = {
+            "model": self.config.OLLAMA_MODEL,
+            "messages": [
                 {
                     "role": "user",
                     "content": message,
                 }
             ],
-        )
+        }
+        if max_output_tokens is not None:
+            request["max_tokens"] = max_output_tokens
+
+        response = await self.client.chat.completions.create(**request)
 
         return response.choices[0].message.content or ""

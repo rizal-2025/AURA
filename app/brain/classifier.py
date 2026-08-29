@@ -72,6 +72,15 @@ class IntentClassifier:
         "time",
     }
     _CANCEL_WORDS = {"batal", "cancel", "hapus"}
+    _CREATE_WORDS = {
+        "buat",
+        "buatkan",
+        "membuat",
+        "pesan",
+        "book",
+        "create",
+        "make",
+    }
     _VIEW_WORDS = {
         "lihat",
         "tampilkan",
@@ -92,6 +101,23 @@ class IntentClassifier:
         "apa itu",
         "jelaskan",
         "cara ",
+        "explain",
+        "how ",
+        "tell me",
+        "what are",
+        "what can",
+        "what is",
+    )
+    _INFORMATIONAL_RESERVATION_PATTERNS = (
+        r"\b(?:tentang|mengenai)\s+(?:cara kerja|fitur)\s+"
+        r"(?:pemesanan|reservasi)\b",
+        r"\b(?:explain|jelaskan|menjelaskan|tell me)\b.*\b"
+        r"(?:booking|pemesanan|reservation|reservations|reservasi)\b",
+    )
+    _TRANSACTION_ACTION_PATTERN = (
+        r"(?:batal|buat|buatkan|membuat|cancel|change|check|create|edit|"
+        r"ganti|hapus|lihat|list|make|modify|pesan|pindah|revisi|show|"
+        r"tampil|tampilkan|ubah|update|view)"
     )
     _GREETING_PHRASES = GREETING_PHRASES
     _STRUCTURED_KEYS = frozenset(
@@ -153,6 +179,31 @@ class IntentClassifier:
         return normalize_indonesian_text(message)
 
     @classmethod
+    def _is_informational_reservation_request(cls, normalized: str) -> bool:
+        return normalized.startswith(cls._INFORMATIONAL_PREFIXES) or any(
+            re.search(pattern, normalized)
+            for pattern in cls._INFORMATIONAL_RESERVATION_PATTERNS
+        )
+
+    @classmethod
+    def _has_negated_transaction_action(cls, normalized: str) -> bool:
+        """Detect negation attached to an action, not an unrelated later clause."""
+        modifier = r"(?:(?:bisa|can|ingin|to|want)\s+){0,3}"
+        negation = r"(?:belum|do not|don t|jangan|not|tidak)"
+        if re.search(
+            rf"\b{negation}\s+{modifier}{cls._TRANSACTION_ACTION_PATTERN}\b",
+            normalized,
+        ):
+            return True
+        return bool(
+            re.search(
+                rf"\b{negation}\s+(?:(?:ingin|want)\s+)"
+                r"(?:a\s+)?(?:booking|reservation|reservasi)\b",
+                normalized,
+            )
+        )
+
+    @classmethod
     def detect_reservation_intent(cls, message: str) -> str | None:
         """Return a safe, deterministic reservation action intent when explicit.
 
@@ -166,7 +217,7 @@ class IntentClassifier:
         if not normalized:
             return None
 
-        if normalized.startswith(cls._INFORMATIONAL_PREFIXES):
+        if cls._is_informational_reservation_request(normalized):
             return "general"
 
         explicit_update = contains_bounded_phrase(
@@ -205,12 +256,7 @@ class IntentClassifier:
             )
         )
         if (
-            tokens.intersection(cls._NEGATION_WORDS)
-            and "jangan" in tokens
-        ):
-            return "general"
-        if (
-            tokens.intersection(cls._NEGATION_WORDS)
+            cls._has_negated_transaction_action(normalized)
             and not (no_show_request or negated_cancel)
             and not status_question
         ):
@@ -260,12 +306,8 @@ class IntentClassifier:
         has_create = explicit_create
         if not (has_update or has_cancel or has_view):
             has_create = has_create or (
-                (has_reservation_object and bool(tokens.intersection({"buat", "buatkan", "pesan"})))
-                or (
-                    has_reservation_object
-                    and "ingin" in tokens
-                    and "reservasi" in tokens
-                )
+                has_reservation_object
+                and bool(tokens.intersection(cls._CREATE_WORDS))
                 or "pesan meja" in normalized
             )
 
