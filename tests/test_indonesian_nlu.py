@@ -174,6 +174,71 @@ class IndonesianIntentTests(unittest.TestCase):
                     "view_reservation",
                 )
 
+    def test_exact_mixed_transaction_handoff_detector_matrix(self):
+        cases = {
+            "Batalkan reservasi saya, kalau tidak bisa panggil admin.": "cancel_reservation",
+            "Ubah reservasi saya dan kalau gagal hubungkan manusia.": "update_reservation",
+            "Tampilkan reservasi saya lalu hubungkan admin kalau perlu.": "view_reservation",
+            "Buat reservasi, kalau tidak bisa saya ingin bicara dengan manusia.": "reservation",
+            "Cancel my reservation and get a human if that fails.": "cancel_reservation",
+            "Update my reservation and contact an admin if needed.": "update_reservation",
+            "Show my reservation and get a human if necessary.": "view_reservation",
+            "Create a reservation and contact a human if you cannot.": "reservation",
+        }
+        for message, expected in cases.items():
+            with self.subTest(message=message):
+                self.assertEqual(
+                    IntentClassifier.detect_reservation_intent(message),
+                    expected,
+                )
+
+    def test_create_action_precision_matrix(self):
+        positives = (
+            "Buat reservasi",
+            "Saya ingin membuat reservasi",
+            "Create a reservation",
+            "Make a reservation",
+            "Book a reservation",
+        )
+        for message in positives:
+            with self.subTest(message=message):
+                self.assertEqual(
+                    IntentClassifier.detect_reservation_intent(message),
+                    "reservation",
+                )
+
+        negatives = {
+            "Apakah admin bisa menjelaskan fitur reservasi?": "general",
+            "Saya ingin bicara dengan manusia tentang cara kerja reservasi.": "general",
+            "What can a human tell me about the reservation feature?": "general",
+            "I want an administrator to explain reservations.": "general",
+            "Tell me how reservations work.": "general",
+            "What is the reservation feature?": "general",
+            "Explain how to cancel a reservation.": "general",
+        }
+        for message, expected in negatives.items():
+            with self.subTest(message=message):
+                self.assertEqual(
+                    IntentClassifier.detect_reservation_intent(message),
+                    expected,
+                )
+
+    def test_negation_is_scoped_to_transaction_action(self):
+        cases = {
+            "Saya tidak ingin mengubah reservasi.": "general",
+            "Jangan batalkan reservasi saya.": "general",
+            "Saya belum mau booking.": "general",
+            "I do not want to cancel my reservation.": "general",
+            "Batalkan reservasi saya, kalau tidak bisa panggil admin.": "cancel_reservation",
+            "Buat reservasi, jika tidak bisa hubungkan manusia.": "reservation",
+        }
+        for message, expected in cases.items():
+            with self.subTest(message=message):
+                self.assertEqual(
+                    IntentClassifier.detect_reservation_intent(message),
+                    expected,
+                )
+
     def test_handoff_variants_are_explicit(self):
         for message in (
             "Saya mau bicara dengan admin",
@@ -189,6 +254,30 @@ class IndonesianIntentTests(unittest.TestCase):
         ):
             with self.subTest(message=message):
                 self.assertTrue(HandoffDetector.is_explicit_human_request(message))
+
+    def test_exact_english_handoff_semantics_and_false_positives(self):
+        for message in (
+            "I want a human agent.",
+            "Connect me to an administrator.",
+            "I want to speak with a human agent.",
+            "Talk to an admin.",
+            "Connect me with a human.",
+        ):
+            with self.subTest(message=message):
+                self.assertTrue(
+                    HandoffDetector.is_explicit_human_request(message)
+                )
+
+        for message in (
+            "What is a human agent?",
+            "Explain what an administrator does.",
+            "This project has an agent architecture.",
+            "Tell me about human-in-the-loop design.",
+        ):
+            with self.subTest(message=message):
+                self.assertFalse(
+                    HandoffDetector.is_explicit_human_request(message)
+                )
 
     def test_vague_help_is_safe_non_action_text_not_explicit_handoff(self):
         for message in (

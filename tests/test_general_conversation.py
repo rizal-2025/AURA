@@ -100,19 +100,19 @@ class GeneralConversationTests(unittest.TestCase):
             (
                 (
                     "cancel_reservation",
-                    "Batalkan reservasi saya dan panggil admin.",
+                    "Batalkan reservasi saya, kalau tidak bisa panggil admin.",
                 ),
                 (
                     "update_reservation",
-                    "Ubah reservasi saya dan hubungkan saya ke manusia.",
+                    "Ubah reservasi saya dan kalau gagal hubungkan manusia.",
                 ),
                 (
                     "view_reservation",
-                    "Tampilkan reservasi saya dan hubungkan ke admin.",
+                    "Tampilkan reservasi saya lalu hubungkan admin kalau perlu.",
                 ),
                 (
                     "reservation",
-                    "Buat reservasi dan hubungkan saya ke manusia.",
+                    "Buat reservasi, kalau tidak bisa saya ingin bicara dengan manusia.",
                 ),
             ),
         )
@@ -123,19 +123,19 @@ class GeneralConversationTests(unittest.TestCase):
             (
                 (
                     "cancel_reservation",
-                    "Cancel my reservation and connect me to a human agent.",
+                    "Cancel my reservation and get a human if that fails.",
                 ),
                 (
                     "update_reservation",
-                    "Update my reservation and connect me to an admin.",
+                    "Update my reservation and contact an admin if needed.",
                 ),
                 (
                     "view_reservation",
-                    "Show my reservation and connect me to a human agent.",
+                    "Show my reservation and get a human if necessary.",
                 ),
                 (
                     "reservation",
-                    "Make a reservation and connect me to a human agent.",
+                    "Create a reservation and contact a human if you cannot.",
                 ),
             ),
         )
@@ -148,13 +148,21 @@ class GeneralConversationTests(unittest.TestCase):
             ),
             (
                 SupportedLocale.EN_US,
-                "I want to speak with a human agent.",
+                "I want a human agent.",
+            ),
+            (
+                SupportedLocale.ID_ID,
+                "Tolong hubungkan saya dengan manusia.",
+            ),
+            (
+                SupportedLocale.EN_US,
+                "Connect me to an administrator.",
             ),
         )
-        for locale, message in cases:
-            with self.subTest(locale=locale.value):
+        for index, (locale, message) in enumerate(cases):
+            with self.subTest(locale=locale.value, message=message):
                 orchestrator, provider = self._orchestrator()
-                session_id = f"pure-handoff-{locale.value}"
+                session_id = f"pure-handoff-{locale.value}-{index}"
                 with presentation_locale(locale):
                     reply = asyncio.run(
                         orchestrator.handle(
@@ -176,21 +184,34 @@ class GeneralConversationTests(unittest.TestCase):
             (
                 SupportedLocale.ID_ID,
                 "Apakah admin bisa menjelaskan fitur reservasi?",
+                "general",
+            ),
+            (
+                SupportedLocale.ID_ID,
+                "Saya ingin bicara dengan manusia tentang cara kerja reservasi.",
+                "handoff",
             ),
             (
                 SupportedLocale.EN_US,
                 "What can a human tell me about the reservation feature?",
+                "general",
+            ),
+            (
+                SupportedLocale.EN_US,
+                "I want an administrator to explain reservations.",
+                "general",
             ),
         )
-        for locale, message in cases:
-            with self.subTest(locale=locale.value):
+        for index, (locale, message, expected_route) in enumerate(cases):
+            with self.subTest(locale=locale.value, message=message):
                 orchestrator, provider = self._orchestrator(
                     reply="general explanation"
                 )
+                orchestrator.workflow.execute = AsyncMock()
                 orchestrator.update_reservation_agent.run = AsyncMock()
                 orchestrator.cancel_reservation_agent.run = AsyncMock()
                 orchestrator.view_reservation_agent.run = AsyncMock()
-                session_id = f"casual-reservation-{locale.value}"
+                session_id = f"casual-reservation-{locale.value}-{index}"
                 with presentation_locale(locale):
                     reply = asyncio.run(
                         orchestrator.handle(
@@ -200,11 +221,18 @@ class GeneralConversationTests(unittest.TestCase):
                             self.OWNER,
                         )
                     )
-                self.assertEqual(reply, "general explanation")
-                self.assertFalse(
-                    orchestrator.handoff_service.is_required(session_id)
-                )
-                provider.chat.assert_awaited_once()
+                if expected_route == "handoff":
+                    self.assertTrue(
+                        orchestrator.handoff_service.is_required(session_id)
+                    )
+                    provider.chat.assert_not_awaited()
+                else:
+                    self.assertEqual(reply, "general explanation")
+                    self.assertFalse(
+                        orchestrator.handoff_service.is_required(session_id)
+                    )
+                    provider.chat.assert_awaited_once()
+                orchestrator.workflow.execute.assert_not_awaited()
                 orchestrator.update_reservation_agent.run.assert_not_awaited()
                 orchestrator.cancel_reservation_agent.run.assert_not_awaited()
                 orchestrator.view_reservation_agent.run.assert_not_awaited()
