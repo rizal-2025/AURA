@@ -148,6 +148,15 @@ class AgentOrchestrator:
 
         blocked_state = self.memory_manager.get_session(session_id)
         active_workflow = self._has_active_reservation_workflow(blocked_state)
+        detected_reservation_intent = (
+            IntentClassifier.detect_reservation_intent(message)
+        )
+        explicit_transactional_intent = detected_reservation_intent in {
+            "reservation",
+            "view_reservation",
+            "update_reservation",
+            "cancel_reservation",
+        }
         reservation_mutations_blocked = has_reservation_persistence_blocker(
             self.memory_manager,
             session_id,
@@ -156,12 +165,17 @@ class AgentOrchestrator:
 
         if (
             not active_workflow
+            and not explicit_transactional_intent
             and HandoffDetector.is_explicit_human_request(message)
         ):
             self._create_handoff(session_id, "explicit_human_request", 1, db, owner_customer_id)
             return self.handoff_service.explicit_response(session_id)
 
-        if not active_workflow and HandoffDetector.is_frustrated(message):
+        if (
+            not active_workflow
+            and not explicit_transactional_intent
+            and HandoffDetector.is_frustrated(message)
+        ):
             self._create_handoff(session_id, "customer_frustration", 1, db, owner_customer_id)
             return self.handoff_service.required_response(session_id)
         if reservation_mutations_blocked:
@@ -171,9 +185,6 @@ class AgentOrchestrator:
                     session_id,
                     owner_customer_id,
                 )
-            detected_reservation_intent = (
-                IntentClassifier.detect_reservation_intent(message)
-            )
             if detected_reservation_intent in {
                 "reservation",
                 "update_reservation",
