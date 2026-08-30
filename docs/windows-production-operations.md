@@ -134,7 +134,15 @@ Protected operation logs record timestamp, profile, mode, aggregate session
 eligibility/attempt/success/failure counts, final result, and elapsed time.
 An authorized `Register-AuraTasks.ps1` run only stages cleanup disabled. Its
 fixed XML definition uses an hourly `PT1H` repetition from local minute 17,
-SYSTEM/ServiceAccount/LeastPrivilege, and `IgnoreNew` overlap handling.
+SYSTEM/ServiceAccount/LeastPrivilege, `IgnoreNew` overlap handling, and explicit
+`UseUnifiedSchedulingEngine=false` because unified scheduling does not support
+calendar-trigger repetition. On the supported Windows host, Win7/Win8 task
+registration overrides that element to effective `true`. Registration therefore
+validates the explicit source XML and installs an equivalent Task Scheduler
+2.0/Vista schema-1.2 definition, for which the unified engine is unavailable.
+Exported XML legitimately omits the unsupported element; canonical validation
+accepts that omission only when the task schema is exactly 1.2 and a fresh COM
+read independently reports `UseUnifiedSchedulingEngine=false`.
 The exact cleanup action uses Windows PowerShell with `-NoProfile`,
 `-NonInteractive`, and process-scoped `-ExecutionPolicy Bypass` before `-File`
 so the repository-owned script can run unattended under restrictive host
@@ -152,8 +160,9 @@ general task registration:
 ```
 
 It recognizes only the complete pre-PR43 canonical `AURA Demo Cleanup`
-definition with the prior action (which omitted `-ExecutionPolicy Bypass`),
-and only when fresh effective state is disabled, no activation marker exists,
+definition with the prior action (which omitted `-ExecutionPolicy Bypass`) or
+the complete immediate prior definition whose registered effective unified
+engine is `true`, and only when fresh effective state is disabled, no activation marker exists,
 no cleanup process is active, and Production is offline. It captures the exact
 registered old XML immediately before replacement, installs only the trusted
 current canonical XML, and fresh-validates the resulting disabled task. A
@@ -161,6 +170,10 @@ registration or post-registration validation failure restores and validates
 the captured old disabled XML; rollback failure is a distinct hard failure.
 This is not a generic task migration mechanism: an enabled old task, marker
 state, unknown version, or any unrelated definition drift still fails closed.
+The official deactivation lifecycle recognizes an exact active immediate-prior
+unified-engine definition only so it can disable and validate that same version
+before removing the marker; execution and activation require the new canonical
+definition.
 The operation touches no backup or API task, never starts cleanup, and leaves
 activation as the separate explicit step.
 A registered/exported Windows definition may omit the explicit defaults
