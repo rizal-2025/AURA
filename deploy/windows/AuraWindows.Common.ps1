@@ -1626,6 +1626,7 @@ function New-AuraCleanupTaskXml {
     <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
     <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
     <StartWhenAvailable>false</StartWhenAvailable>
+    <UseUnifiedSchedulingEngine>false</UseUnifiedSchedulingEngine>
     <Enabled>$enabledText</Enabled>
     <ExecutionTimeLimit>PT20M</ExecutionTimeLimit>
   </Settings>
@@ -1634,6 +1635,42 @@ function New-AuraCleanupTaskXml {
   </Actions>
 </Task>
 "@
+}
+
+function ConvertTo-AuraCleanupTaskRegistrationXml {
+    param([Parameter(Mandatory)][string]$Xml)
+    [xml]$document = $Xml
+    $manager = [Xml.XmlNamespaceManager]::new($document.NameTable)
+    $manager.AddNamespace(
+        't', 'http://schemas.microsoft.com/windows/2004/02/mit/task'
+    )
+    $unifiedEngine = $document.SelectSingleNode(
+        '/t:Task/t:Settings/t:UseUnifiedSchedulingEngine', $manager
+    )
+    if (
+        [string]$document.Task.version -cne '1.4' `
+        -or $null -eq $unifiedEngine `
+        -or [string]$unifiedEngine.InnerText -cne 'false'
+    ) { throw 'AURA_CLEANUP_TASK_REGISTRATION_XML_INVALID' }
+    $document.Task.SetAttribute('version', '1.2')
+    $null = $unifiedEngine.ParentNode.RemoveChild($unifiedEngine)
+    return $document.OuterXml
+}
+
+function Register-AuraCleanupTaskDefinition {
+    param(
+        [Parameter(Mandatory)][string]$TaskName,
+        [Parameter(Mandatory)][string]$Xml,
+        [switch]$Force
+    )
+    $registrationXml = ConvertTo-AuraCleanupTaskRegistrationXml -Xml $Xml
+    $parameters = @{
+        TaskName = $TaskName
+        Xml = $registrationXml
+        ErrorAction = 'Stop'
+    }
+    if ($Force) { $parameters.Force = $true }
+    Register-ScheduledTask @parameters | Out-Null
 }
 
 function Test-AuraCleanupTaskXml {
@@ -1645,6 +1682,7 @@ function Test-AuraCleanupTaskXml {
         [Parameter(Mandatory)][bool]$Enabled,
         [AllowNull()][object]$EffectiveRunLevel,
         [AllowNull()][object]$EffectiveStartWhenAvailable,
+        [AllowNull()][object]$EffectiveUseUnifiedSchedulingEngine,
         [AllowNull()][object]$EffectiveEnabled
     )
     try {
@@ -1694,6 +1732,26 @@ function Test-AuraCleanupTaskXml {
                 -or $effectiveStartWhenAvailableSafe
             )
         }
+        $useUnifiedSchedulingEngine = Get-TaskValue `
+            '/t:Task/t:Settings/t:UseUnifiedSchedulingEngine'
+        $hasEffectiveUseUnifiedSchedulingEngine = $PSBoundParameters.ContainsKey(
+            'EffectiveUseUnifiedSchedulingEngine'
+        )
+        $effectiveUseUnifiedSchedulingEngineSafe = (
+            $hasEffectiveUseUnifiedSchedulingEngine `
+            -and $EffectiveUseUnifiedSchedulingEngine -is [bool] `
+            -and -not [bool]$EffectiveUseUnifiedSchedulingEngine
+        )
+        $useUnifiedSchedulingEngineSafe = if (
+            $null -eq $useUnifiedSchedulingEngine
+        ) {
+            [string]$document.Task.version -ceq '1.2' `
+                -and $effectiveUseUnifiedSchedulingEngineSafe
+        } else {
+            [string]$document.Task.version -ceq '1.4' `
+                -and $useUnifiedSchedulingEngine -ceq 'false' `
+                -and $effectiveUseUnifiedSchedulingEngineSafe
+        }
         $enabledValue = Get-TaskValue '/t:Task/t:Settings/t:Enabled'
         $hasEffectiveEnabled = $PSBoundParameters.ContainsKey(
             'EffectiveEnabled'
@@ -1718,6 +1776,7 @@ function Test-AuraCleanupTaskXml {
             -and $runLevelSafe `
             -and (Get-TaskValue '/t:Task/t:Settings/t:MultipleInstancesPolicy') -ceq 'IgnoreNew' `
             -and $startWhenAvailableSafe `
+            -and $useUnifiedSchedulingEngineSafe `
             -and $enabledSafe `
             -and (Get-TaskValue '/t:Task/t:Settings/t:ExecutionTimeLimit') -ceq 'PT20M' `
             -and (Get-TaskValue '/t:Task/t:Actions/t:Exec/t:Command') -ceq $PowerShellPath `
@@ -1725,6 +1784,29 @@ function Test-AuraCleanupTaskXml {
             -and (Get-TaskValue '/t:Task/t:Actions/t:Exec/t:WorkingDirectory') -ceq $RepositoryRoot
         )
     } catch { return $false }
+}
+
+function Get-AuraCleanupTaskEffectiveUseUnifiedSchedulingEngine {
+    param(
+        [Parameter(Mandatory)][string]$TaskName,
+        [AllowNull()][object]$Task
+    )
+    if ($null -ne $Task -and $null -ne $Task.Settings) {
+        $property = $Task.Settings.PSObject.Properties[
+            'UseUnifiedSchedulingEngine'
+        ]
+        if ($null -ne $property -and $property.Value -is [bool]) {
+            return [bool]$property.Value
+        }
+    }
+    $service = New-Object -ComObject 'Schedule.Service'
+    $service.Connect()
+    $registered = $service.GetFolder('\').GetTask('\' + $TaskName)
+    $value = $registered.Definition.Settings.UseUnifiedSchedulingEngine
+    if ($value -isnot [bool]) {
+        throw 'AURA_CLEANUP_TASK_UNIFIED_ENGINE_STATE_UNKNOWN'
+    }
+    return [bool]$value
 }
 
 function Get-AuraCleanupTaskSnapshot {
@@ -1739,17 +1821,170 @@ function Get-AuraCleanupTaskSnapshot {
     if ($tasks.Count -ne 1) { throw 'AURA_CLEANUP_TASK_IDENTITY_AMBIGUOUS' }
     $xml = [string](Export-ScheduledTask -TaskName $TaskName -ErrorAction Stop)
     $disabled = [string]$tasks[0].State -ceq 'Disabled'
+    $effectiveUseUnifiedSchedulingEngine = `
+        Get-AuraCleanupTaskEffectiveUseUnifiedSchedulingEngine `
+            -TaskName $TaskName -Task $tasks[0]
     $matches = Test-AuraCleanupTaskXml -Xml $xml -PowerShellPath $PowerShellPath `
         -CleanupScript $CleanupScript -RepositoryRoot $RepositoryRoot `
         -Enabled (-not $disabled) `
         -EffectiveRunLevel $tasks[0].Principal.RunLevel `
         -EffectiveStartWhenAvailable $tasks[0].Settings.StartWhenAvailable `
+        -EffectiveUseUnifiedSchedulingEngine `
+            $effectiveUseUnifiedSchedulingEngine `
         -EffectiveEnabled $tasks[0].Settings.Enabled
     return [PSCustomObject]@{
         State = [string]$tasks[0].State
         Disabled = $disabled
         DefinitionMatches = $matches
         Xml = $xml
+    }
+}
+
+function Test-AuraCleanupTaskPreUnifiedEngineXml {
+    param(
+        [Parameter(Mandatory)][string]$Xml,
+        [Parameter(Mandatory)][string]$PowerShellPath,
+        [Parameter(Mandatory)][string]$CleanupScript,
+        [Parameter(Mandatory)][string]$RepositoryRoot,
+        [Parameter(Mandatory)][bool]$Enabled,
+        [AllowNull()][object]$EffectiveRunLevel,
+        [AllowNull()][object]$EffectiveStartWhenAvailable,
+        [AllowNull()][object]$EffectiveUseUnifiedSchedulingEngine,
+        [AllowNull()][object]$EffectiveEnabled,
+        [AllowNull()][object]$EffectiveTriggerEnabled,
+        [AllowNull()][object]$EffectiveStopAtDurationEnd
+    )
+    try {
+        [xml]$document = $Xml
+        $manager = [Xml.XmlNamespaceManager]::new($document.NameTable)
+        $manager.AddNamespace(
+            't', 'http://schemas.microsoft.com/windows/2004/02/mit/task'
+        )
+        function Get-PreUnifiedTaskValue([string]$XPath) {
+            $node = $document.SelectSingleNode($XPath, $manager)
+            if ($null -eq $node) { return $null }
+            return [string]$node.InnerText
+        }
+        $actionNodes = @($document.SelectNodes(
+            '/t:Task/t:Actions/*', $manager
+        ))
+        $triggerNodes = @($document.SelectNodes(
+            '/t:Task/t:Triggers/*', $manager
+        ))
+        $principalNodes = @($document.SelectNodes(
+            '/t:Task/t:Principals/t:Principal', $manager
+        ))
+        $triggerEnabled = Get-PreUnifiedTaskValue `
+            '/t:Task/t:Triggers/t:CalendarTrigger/t:Enabled'
+        $triggerEnabledSafe = if ($null -eq $triggerEnabled) {
+            $EffectiveTriggerEnabled -is [bool] `
+                -and [bool]$EffectiveTriggerEnabled
+        } else {
+            $triggerEnabled -ceq 'true' -and (
+                $null -eq $EffectiveTriggerEnabled `
+                -or ($EffectiveTriggerEnabled -is [bool] `
+                    -and [bool]$EffectiveTriggerEnabled)
+            )
+        }
+        $stopAtDurationEnd = Get-PreUnifiedTaskValue `
+            '/t:Task/t:Triggers/t:CalendarTrigger/t:Repetition/t:StopAtDurationEnd'
+        $stopAtDurationEndSafe = if ($null -eq $stopAtDurationEnd) {
+            $EffectiveStopAtDurationEnd -is [bool] `
+                -and -not [bool]$EffectiveStopAtDurationEnd
+        } else {
+            $stopAtDurationEnd -ceq 'false' -and (
+                $null -eq $EffectiveStopAtDurationEnd `
+                -or ($EffectiveStopAtDurationEnd -is [bool] `
+                    -and -not [bool]$EffectiveStopAtDurationEnd)
+            )
+        }
+        $unifiedEngineNode = $document.SelectSingleNode(
+            '/t:Task/t:Settings/t:UseUnifiedSchedulingEngine', $manager
+        )
+        if (
+            $actionNodes.Count -ne 1 `
+            -or $actionNodes[0].LocalName -cne 'Exec' `
+            -or $triggerNodes.Count -ne 1 `
+            -or $triggerNodes[0].LocalName -cne 'CalendarTrigger' `
+            -or $principalNodes.Count -ne 1 `
+            -or [string]$principalNodes[0].GetAttribute('id') -cne 'System' `
+            -or [string]$document.Task.version -cne '1.4' `
+            -or (Get-PreUnifiedTaskValue `
+                '/t:Task/t:RegistrationInfo/t:Description') -cne `
+                'Hourly bounded demo cleanup at minute 17.' `
+            -or -not $triggerEnabledSafe `
+            -or -not $stopAtDurationEndSafe `
+            -or (Get-PreUnifiedTaskValue `
+                '/t:Task/t:Settings/t:DisallowStartIfOnBatteries') -cne `
+                'false' `
+            -or (Get-PreUnifiedTaskValue `
+                '/t:Task/t:Settings/t:StopIfGoingOnBatteries') -cne `
+                'false' `
+            -or [string]$document.Task.Actions.Context -cne 'System' `
+            -or $null -eq $unifiedEngineNode `
+            -or [string]$unifiedEngineNode.InnerText -cne 'true' `
+            -or $EffectiveUseUnifiedSchedulingEngine -isnot [bool] `
+            -or -not [bool]$EffectiveUseUnifiedSchedulingEngine
+        ) { return $false }
+        $unifiedEngineNode.InnerText = 'false'
+        return Test-AuraCleanupTaskXml -Xml $document.OuterXml `
+            -PowerShellPath $PowerShellPath -CleanupScript $CleanupScript `
+            -RepositoryRoot $RepositoryRoot -Enabled $Enabled `
+            -EffectiveRunLevel $EffectiveRunLevel `
+            -EffectiveStartWhenAvailable $EffectiveStartWhenAvailable `
+            -EffectiveUseUnifiedSchedulingEngine $false `
+            -EffectiveEnabled $EffectiveEnabled
+    } catch { return $false }
+}
+
+function Get-AuraCleanupTaskPreUnifiedEngineSnapshot {
+    param(
+        [string]$TaskName = 'AURA Demo Cleanup',
+        [Parameter(Mandatory)][string]$PowerShellPath,
+        [Parameter(Mandatory)][string]$CleanupScript,
+        [Parameter(Mandatory)][string]$RepositoryRoot
+    )
+    $tasks = @(Get-ScheduledTask -TaskName $TaskName `
+        -ErrorAction SilentlyContinue)
+    if ($tasks.Count -eq 0) { return $null }
+    if ($tasks.Count -ne 1) {
+        throw 'AURA_CLEANUP_TASK_IDENTITY_AMBIGUOUS'
+    }
+    $task = $tasks[0]
+    $xml = [string](Export-ScheduledTask -TaskName $TaskName -ErrorAction Stop)
+    $effectiveUseUnifiedSchedulingEngine = `
+        Get-AuraCleanupTaskEffectiveUseUnifiedSchedulingEngine `
+            -TaskName $TaskName -Task $task
+    $disabled = (
+        [string]$task.State -ceq 'Disabled' `
+        -and $task.Settings.Enabled -is [bool] `
+        -and -not [bool]$task.Settings.Enabled
+    )
+    $matches = (
+        [string]$task.TaskPath -ceq '\' `
+        -and (Test-AuraCleanupTaskSystemPrincipal `
+            -UserId $task.Principal.UserId) `
+        -and [string]$task.Principal.LogonType -ceq 'ServiceAccount' `
+        -and @($task.Triggers).Count -eq 1 `
+        -and (Test-AuraCleanupTaskPreUnifiedEngineXml -Xml $xml `
+            -PowerShellPath $PowerShellPath -CleanupScript $CleanupScript `
+            -RepositoryRoot $RepositoryRoot -Enabled (-not $disabled) `
+            -EffectiveRunLevel $task.Principal.RunLevel `
+            -EffectiveStartWhenAvailable `
+                $task.Settings.StartWhenAvailable `
+            -EffectiveUseUnifiedSchedulingEngine `
+                $effectiveUseUnifiedSchedulingEngine `
+            -EffectiveEnabled $task.Settings.Enabled `
+            -EffectiveTriggerEnabled $task.Triggers[0].Enabled `
+            -EffectiveStopAtDurationEnd `
+                $task.Triggers[0].Repetition.StopAtDurationEnd)
+    )
+    return [PSCustomObject]@{
+        State = [string]$task.State
+        Disabled = $disabled
+        DefinitionMatches = $matches
+        Xml = $xml
+        DefinitionVersion = 'pre-unified-engine-fix'
     }
 }
 
@@ -1761,6 +1996,7 @@ function Test-AuraCleanupTaskPrePr43Xml {
         [Parameter(Mandatory)][string]$RepositoryRoot,
         [AllowNull()][object]$EffectiveRunLevel,
         [AllowNull()][object]$EffectiveStartWhenAvailable,
+        [AllowNull()][object]$EffectiveUseUnifiedSchedulingEngine,
         [AllowNull()][object]$EffectiveEnabled,
         [AllowNull()][object]$EffectiveTriggerEnabled,
         [AllowNull()][object]$EffectiveStopAtDurationEnd
@@ -1839,12 +2075,37 @@ function Test-AuraCleanupTaskPrePr43Xml {
         ) { return $false }
         $argumentNodes[0].InnerText = Get-AuraCleanupTaskArguments `
             -CleanupScript $CleanupScript
-        return Test-AuraCleanupTaskXml -Xml $document.OuterXml `
-            -PowerShellPath $PowerShellPath -CleanupScript $CleanupScript `
-            -RepositoryRoot $RepositoryRoot -Enabled $false `
-            -EffectiveRunLevel $EffectiveRunLevel `
-            -EffectiveStartWhenAvailable $EffectiveStartWhenAvailable `
-            -EffectiveEnabled $EffectiveEnabled
+        if (
+            $PSBoundParameters.ContainsKey(
+                'EffectiveUseUnifiedSchedulingEngine'
+            ) -and (Test-AuraCleanupTaskPreUnifiedEngineXml `
+                -Xml $document.OuterXml -PowerShellPath $PowerShellPath `
+                -CleanupScript $CleanupScript -RepositoryRoot $RepositoryRoot `
+                -Enabled $false -EffectiveRunLevel $EffectiveRunLevel `
+                -EffectiveStartWhenAvailable $EffectiveStartWhenAvailable `
+                -EffectiveUseUnifiedSchedulingEngine `
+                    $EffectiveUseUnifiedSchedulingEngine `
+                -EffectiveEnabled $EffectiveEnabled `
+                -EffectiveTriggerEnabled $EffectiveTriggerEnabled `
+                -EffectiveStopAtDurationEnd $EffectiveStopAtDurationEnd)
+        ) { return $true }
+        $currentParameters = @{
+            Xml = $document.OuterXml
+            PowerShellPath = $PowerShellPath
+            CleanupScript = $CleanupScript
+            RepositoryRoot = $RepositoryRoot
+            Enabled = $false
+            EffectiveRunLevel = $EffectiveRunLevel
+            EffectiveStartWhenAvailable = $EffectiveStartWhenAvailable
+            EffectiveEnabled = $EffectiveEnabled
+        }
+        if ($PSBoundParameters.ContainsKey(
+            'EffectiveUseUnifiedSchedulingEngine'
+        )) {
+            $currentParameters.EffectiveUseUnifiedSchedulingEngine = `
+                $EffectiveUseUnifiedSchedulingEngine
+        }
+        return Test-AuraCleanupTaskXml @currentParameters
     } catch { return $false }
 }
 
@@ -1879,6 +2140,9 @@ function Get-AuraCleanupTaskPrePr43Snapshot {
     }
     $task = $tasks[0]
     $xml = [string](Export-ScheduledTask -TaskName $TaskName -ErrorAction Stop)
+    $effectiveUseUnifiedSchedulingEngine = `
+        Get-AuraCleanupTaskEffectiveUseUnifiedSchedulingEngine `
+            -TaskName $TaskName -Task $task
     $disabled = (
         [string]$task.State -ceq 'Disabled' `
         -and $task.Settings.Enabled -is [bool] `
@@ -1896,6 +2160,8 @@ function Get-AuraCleanupTaskPrePr43Snapshot {
             -EffectiveRunLevel $task.Principal.RunLevel `
             -EffectiveStartWhenAvailable `
                 $task.Settings.StartWhenAvailable `
+            -EffectiveUseUnifiedSchedulingEngine `
+                $effectiveUseUnifiedSchedulingEngine `
             -EffectiveEnabled $task.Settings.Enabled `
             -EffectiveTriggerEnabled $task.Triggers[0].Enabled `
             -EffectiveStopAtDurationEnd `
@@ -1906,6 +2172,7 @@ function Get-AuraCleanupTaskPrePr43Snapshot {
         Disabled = $disabled
         DefinitionMatches = $matches
         Xml = $xml
+        DefinitionVersion = 'pre-pr43'
     }
 }
 
@@ -1944,9 +2211,33 @@ function Assert-AuraCleanupTaskUpgradeHostSafe {
     }
 }
 
-function Restore-AuraCleanupTaskPrePr43 {
+function Get-AuraCleanupTaskUpgradeSourceSnapshot {
+    param(
+        [string]$TaskName = 'AURA Demo Cleanup',
+        [Parameter(Mandatory)][string]$PowerShellPath,
+        [Parameter(Mandatory)][string]$CleanupScript,
+        [Parameter(Mandatory)][string]$RepositoryRoot
+    )
+    $preUnified = Get-AuraCleanupTaskPreUnifiedEngineSnapshot `
+        -TaskName $TaskName -PowerShellPath $PowerShellPath `
+        -CleanupScript $CleanupScript -RepositoryRoot $RepositoryRoot
+    if ($null -ne $preUnified -and $preUnified.DefinitionMatches) {
+        return $preUnified
+    }
+    $prePr43 = Get-AuraCleanupTaskPrePr43Snapshot -TaskName $TaskName `
+        -PowerShellPath $PowerShellPath -CleanupScript $CleanupScript `
+        -RepositoryRoot $RepositoryRoot
+    if ($null -ne $prePr43 -and $prePr43.DefinitionMatches) {
+        return $prePr43
+    }
+    return $preUnified
+}
+
+function Restore-AuraCleanupTaskUpgradeSource {
     param(
         [Parameter(Mandatory)][string]$OldXml,
+        [Parameter(Mandatory)][ValidateSet('pre-pr43', 'pre-unified-engine-fix')]
+        [string]$DefinitionVersion,
         [Parameter(Mandatory)][string]$PowerShellPath,
         [Parameter(Mandatory)][string]$CleanupScript,
         [Parameter(Mandatory)][string]$RepositoryRoot,
@@ -1955,13 +2246,16 @@ function Restore-AuraCleanupTaskPrePr43 {
     try {
         Register-ScheduledTask -TaskName $TaskName -Xml $OldXml -Force `
             -ErrorAction Stop | Out-Null
-        $restored = Get-AuraCleanupTaskPrePr43Snapshot -TaskName $TaskName `
+        $restored = Get-AuraCleanupTaskUpgradeSourceSnapshot `
+            -TaskName $TaskName `
             -PowerShellPath $PowerShellPath -CleanupScript $CleanupScript `
             -RepositoryRoot $RepositoryRoot
         $marker = Read-AuraCleanupActivationMarker -Profile production
         if (
             $null -eq $restored -or -not $restored.Disabled `
-            -or -not $restored.DefinitionMatches -or $null -ne $marker
+            -or -not $restored.DefinitionMatches `
+            -or $restored.DefinitionVersion -cne $DefinitionVersion `
+            -or $null -ne $marker
         ) { throw 'AURA_CLEANUP_TASK_UPGRADE_ROLLBACK_VALIDATION_FAILED' }
     } catch {
         throw 'AURA_CLEANUP_TASK_UPGRADE_ROLLBACK_FAILED'
@@ -2001,7 +2295,7 @@ function Upgrade-AuraCleanupTaskVersioned {
     if ($null -ne $marker) {
         throw 'AURA_CLEANUP_TASK_UPGRADE_MARKER_PRESENT'
     }
-    $old = Get-AuraCleanupTaskPrePr43Snapshot -TaskName $TaskName `
+    $old = Get-AuraCleanupTaskUpgradeSourceSnapshot -TaskName $TaskName `
         -PowerShellPath $PowerShellPath -CleanupScript $CleanupScript `
         -RepositoryRoot $RepositoryRoot
     if (
@@ -2009,13 +2303,14 @@ function Upgrade-AuraCleanupTaskVersioned {
         -or -not $old.DefinitionMatches
     ) { throw 'AURA_CLEANUP_TASK_DEFINITION_MISMATCH' }
 
-    $captured = Get-AuraCleanupTaskPrePr43Snapshot -TaskName $TaskName `
+    $captured = Get-AuraCleanupTaskUpgradeSourceSnapshot -TaskName $TaskName `
         -PowerShellPath $PowerShellPath -CleanupScript $CleanupScript `
         -RepositoryRoot $RepositoryRoot
     Assert-AuraCleanupTaskUpgradeHostSafe -CleanupScript $CleanupScript
     if (
         $null -eq $captured -or -not $captured.Disabled `
         -or -not $captured.DefinitionMatches `
+        -or $captured.DefinitionVersion -cne $old.DefinitionVersion `
         -or $captured.Xml -cne $old.Xml `
         -or $null -ne (Read-AuraCleanupActivationMarker -Profile production) `
         -or (Test-AuraCleanupProcessActive -CleanupScript $CleanupScript)
@@ -2026,8 +2321,8 @@ function Upgrade-AuraCleanupTaskVersioned {
         -Enabled $false
     $registered = $false
     try {
-        Register-ScheduledTask -TaskName $TaskName -Xml $newXml -Force `
-            -ErrorAction Stop | Out-Null
+        Register-AuraCleanupTaskDefinition -TaskName $TaskName `
+            -Xml $newXml -Force
         $registered = $true
         $upgraded = Get-AuraCleanupTaskSnapshot -TaskName $TaskName `
             -PowerShellPath $PowerShellPath -CleanupScript $CleanupScript `
@@ -2043,7 +2338,8 @@ function Upgrade-AuraCleanupTaskVersioned {
         $failureCode = if ($registered) {
             'AURA_CLEANUP_TASK_UPGRADE_VALIDATION_FAILED'
         } else { 'AURA_CLEANUP_TASK_UPGRADE_REGISTRATION_FAILED' }
-        Restore-AuraCleanupTaskPrePr43 -OldXml $oldXml `
+        Restore-AuraCleanupTaskUpgradeSource -OldXml $oldXml `
+            -DefinitionVersion $captured.DefinitionVersion `
             -PowerShellPath $PowerShellPath -CleanupScript $CleanupScript `
             -RepositoryRoot $RepositoryRoot -TaskName $TaskName
         throw $failureCode
@@ -2103,8 +2399,7 @@ function Register-AuraCleanupTaskStaged {
         $xml = New-AuraCleanupTaskXml -PowerShellPath $PowerShellPath `
             -CleanupScript $CleanupScript -RepositoryRoot $RepositoryRoot `
             -Enabled $false
-        Register-ScheduledTask -TaskName $TaskName -Xml $xml `
-            -ErrorAction Stop | Out-Null
+        Register-AuraCleanupTaskDefinition -TaskName $TaskName -Xml $xml
         $created = $true
         $staged = Get-AuraCleanupTaskSnapshot -TaskName $TaskName `
             -PowerShellPath $PowerShellPath -CleanupScript $CleanupScript `
@@ -2131,6 +2426,9 @@ function Register-AuraCleanupTaskStaged {
                         -EffectiveRunLevel $partialTask[0].Principal.RunLevel `
                         -EffectiveStartWhenAvailable `
                             $partialTask[0].Settings.StartWhenAvailable `
+                        -EffectiveUseUnifiedSchedulingEngine `
+                            (Get-AuraCleanupTaskEffectiveUseUnifiedSchedulingEngine `
+                                -TaskName $TaskName -Task $partialTask[0]) `
                         -EffectiveEnabled $partialTask[0].Settings.Enabled
                 }
             } catch { $removeAttributedArtifact = $false }
@@ -2227,15 +2525,30 @@ function Disable-AuraCleanupTaskActivation {
     $active = Get-AuraCleanupTaskSnapshot -TaskName $TaskName `
         -PowerShellPath $PowerShellPath -CleanupScript $CleanupScript `
         -RepositoryRoot $RepositoryRoot
+    $activeIsPreUnified = $false
+    if ($null -eq $active -or -not $active.DefinitionMatches) {
+        $active = Get-AuraCleanupTaskPreUnifiedEngineSnapshot `
+            -TaskName $TaskName -PowerShellPath $PowerShellPath `
+            -CleanupScript $CleanupScript -RepositoryRoot $RepositoryRoot
+        $activeIsPreUnified = (
+            $null -ne $active -and $active.DefinitionMatches
+        )
+    }
     if ($null -eq $active -or -not $active.DefinitionMatches) {
         throw 'AURA_CLEANUP_TASK_ACTIVE_STATE_INVALID'
     }
     if (-not $active.Disabled) {
         Disable-ScheduledTask -TaskName $TaskName -ErrorAction Stop | Out-Null
     }
-    $disabled = Get-AuraCleanupTaskSnapshot -TaskName $TaskName `
-        -PowerShellPath $PowerShellPath -CleanupScript $CleanupScript `
-        -RepositoryRoot $RepositoryRoot
+    $disabled = if ($activeIsPreUnified) {
+        Get-AuraCleanupTaskPreUnifiedEngineSnapshot -TaskName $TaskName `
+            -PowerShellPath $PowerShellPath -CleanupScript $CleanupScript `
+            -RepositoryRoot $RepositoryRoot
+    } else {
+        Get-AuraCleanupTaskSnapshot -TaskName $TaskName `
+            -PowerShellPath $PowerShellPath -CleanupScript $CleanupScript `
+            -RepositoryRoot $RepositoryRoot
+    }
     if ($null -eq $disabled -or -not $disabled.Disabled -or -not $disabled.DefinitionMatches) {
         throw 'AURA_CLEANUP_TASK_DISABLE_VALIDATION_FAILED'
     }

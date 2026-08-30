@@ -41,18 +41,30 @@ five internal demo operations. The full AURA app is never the Funnel target.
    startup. The cleanup definition uses Task Scheduler XML, repeats every hour
    from the fixed local `2024-01-01T00:17:00` boundary, runs as the built-in
    SYSTEM service account, uses the verified repository root as its working
-   directory, and ignores a new invocation while one is already running.
+   directory, ignores a new invocation while one is already running, and
+   explicitly disables the Unified Scheduling Engine because it does not
+   support repetition patterns on calendar triggers. Windows 11 rewrites
+   Win7/Win8-compatible registrations to effective unified-engine `true` even
+   when their source XML says `false`. The cleanup-only registration helper
+   therefore validates that explicit source contract, projects it to Task
+   Scheduler 2.0/Vista schema 1.2 (where the unified engine is unavailable),
+   and fresh-validates the registered COM value as `false`. The hourly
+   `PT1H`/`P1D` calendar repetition is unchanged.
 
-   A host with the one exact pre-PR43 canonical cleanup task may use the
-   dedicated cleanup-only upgrade after separate authorization:
+   A host with either the exact pre-PR43 cleanup task or the exact prior task
+   whose registered definition has `UseUnifiedSchedulingEngine=true` may use
+   the dedicated cleanup-only upgrade after separate authorization:
 
    ```powershell
    .\Upgrade-AuraDemoCleanupTask.ps1 `
      -Confirmation UPGRADE_AURA_DEMO_CLEANUP_TASK
    ```
 
-   This operation accepts only that known definition while it is effectively
-   disabled and has no activation marker. It captures the registered XML,
+   This operation accepts only those known definitions while the task is
+   effectively disabled and has no activation marker. An active exact prior
+   unified-engine definition must first use the official deactivation command;
+   deactivation recognizes it only to disable and remove its marker. The
+   upgrade captures the registered XML,
    replaces the task with the current canonical definition, and fresh-validates
    that the task remains disabled. Registration or validation failure restores
    and revalidates the captured disabled version. Arbitrary drift still fails
