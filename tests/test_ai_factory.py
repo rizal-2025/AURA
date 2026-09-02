@@ -71,6 +71,42 @@ class TestAIProviderFactory(unittest.TestCase):
         self.assertEqual(result, "bounded")
         self.assertEqual(create.await_args.kwargs["max_tokens"], 300)
 
+    def test_ollama_preserves_separated_general_prompt_semantics(self):
+        provider = get_ai_provider(SimpleNamespace(
+            APP_ENV="test",
+            AI_PROVIDER="ollama",
+            OLLAMA_BASE_URL="http://localhost:11434/v1",
+            OLLAMA_MODEL="qwen2.5:3b",
+        ))
+        response = SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(content="ok"))]
+        )
+        create = AsyncMock(return_value=response)
+        provider.client = SimpleNamespace(
+            chat=SimpleNamespace(
+                completions=SimpleNamespace(create=create)
+            )
+        )
+
+        result = asyncio.run(
+            provider.chat(
+                "Untrusted conversation data",
+                instructions="Stable AURA instructions",
+            )
+        )
+
+        self.assertEqual(result, "ok")
+        create.assert_awaited_once_with(
+            model="qwen2.5:3b",
+            messages=[
+                {
+                    "role": "user",
+                    "content": "Stable AURA instructions\n\n"
+                    "Untrusted conversation data",
+                }
+            ],
+        )
+
     def test_openai_forwards_bounded_general_output_tokens(self):
         provider = get_ai_provider(SimpleNamespace(
             APP_ENV="test",
@@ -86,13 +122,18 @@ class TestAIProviderFactory(unittest.TestCase):
         )
 
         result = asyncio.run(
-            provider.chat("General prompt", max_output_tokens=300)
+            provider.chat(
+                "General input",
+                instructions="Stable AURA instructions",
+                max_output_tokens=300,
+            )
         )
 
         self.assertEqual(result, "bounded")
         create.assert_awaited_once_with(
             model="gpt-test",
-            input="General prompt",
+            input="General input",
+            instructions="Stable AURA instructions",
             max_output_tokens=300,
         )
 

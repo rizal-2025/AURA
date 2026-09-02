@@ -91,7 +91,11 @@ class TestOpenAISDKContract(unittest.TestCase):
         asyncio.run(verify_budget())
 
     @staticmethod
-    async def _exercise_provider(payload, prompt="bounded AURA prompt"):
+    async def _exercise_provider(
+        payload,
+        input_text="bounded AURA input",
+        instructions="stable AURA instructions",
+    ):
         captured = {}
 
         async def handler(request):
@@ -118,7 +122,8 @@ class TestOpenAISDKContract(unittest.TestCase):
         )
         try:
             result = await provider.chat(
-                prompt,
+                input_text,
+                instructions=instructions,
                 max_output_tokens=300,
             )
         finally:
@@ -127,7 +132,8 @@ class TestOpenAISDKContract(unittest.TestCase):
         return result, captured
 
     def test_real_sdk_accepts_gpt41_mini_request_shape_without_tools(self):
-        prompt = GeneralConversationService.build_prompt(
+        instructions = GeneralConversationService.build_instructions()
+        input_text = GeneralConversationService.build_input(
             "What can AURA do?",
             [{"role": "user", "content": "Hello"}],
         )
@@ -147,7 +153,11 @@ class TestOpenAISDKContract(unittest.TestCase):
         )
 
         result, captured = asyncio.run(
-            self._exercise_provider(payload, prompt=prompt)
+            self._exercise_provider(
+                payload,
+                input_text=input_text,
+                instructions=instructions,
+            )
         )
 
         self.assertEqual(result, "AURA response")
@@ -157,13 +167,16 @@ class TestOpenAISDKContract(unittest.TestCase):
             captured["body"],
             {
                 "model": "gpt-4.1-mini",
-                "input": prompt,
+                "instructions": instructions,
+                "input": input_text,
                 "max_output_tokens": 300,
             },
         )
         self.assertNotIn("tools", captured["body"])
         self.assertNotIn("tool_choice", captured["body"])
-        self.assertIn("Produce text only", captured["body"]["input"])
+        self.assertNotIn("reasoning", captured["body"])
+        self.assertIn("Produce text only", captured["body"]["instructions"])
+        self.assertNotIn("Produce text only", captured["body"]["input"])
         self.assertIn(
             "untrusted conversation data",
             captured["body"]["input"].lower(),
@@ -236,7 +249,12 @@ class TestOpenAISDKContract(unittest.TestCase):
                 self.assertEqual(result, expected)
                 self.assertEqual(
                     set(captured["body"]),
-                    {"model", "input", "max_output_tokens"},
+                    {
+                        "model",
+                        "instructions",
+                        "input",
+                        "max_output_tokens",
+                    },
                 )
 
 

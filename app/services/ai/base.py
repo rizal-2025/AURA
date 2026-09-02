@@ -7,6 +7,7 @@ class AIProvider(ABC):
         self,
         message: str,
         *,
+        instructions: str | None = None,
         max_output_tokens: int | None = None,
     ) -> str:
         pass
