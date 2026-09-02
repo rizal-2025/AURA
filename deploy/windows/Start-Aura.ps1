@@ -8,6 +8,7 @@ param(
 . (Join-Path $PSScriptRoot 'AuraWindows.Common.ps1')
 Assert-AuraProfile -Profile $Profile
 Initialize-AuraDataDirectories
+$providerRuntimeEventLog = Initialize-AuraProviderRuntimeEventSink
 $port = Get-AuraProfilePort -Profile $Profile
 $ownership = Get-AuraOwnedProcessState -Kind aura -Profile $Profile `
     -RepairStaleMetadata
@@ -47,6 +48,10 @@ $internalPrevious = @{
     )
     AURA_BIND_HOST = [Environment]::GetEnvironmentVariable('AURA_BIND_HOST', 'Process')
     AURA_PORT = [Environment]::GetEnvironmentVariable('AURA_PORT', 'Process')
+    AURA_PROVIDER_RUNTIME_EVENT_LOG_PATH = `
+        [Environment]::GetEnvironmentVariable(
+            'AURA_PROVIDER_RUNTIME_EVENT_LOG_PATH', 'Process'
+        )
 }
 $process = $null
 $ownershipPath = Get-AuraOwnershipPath -Kind aura -Profile $Profile
@@ -62,6 +67,7 @@ try {
     $env:AURA_DISABLE_DOTENV = '1'
     $env:AURA_BIND_HOST = '127.0.0.1'
     $env:AURA_PORT = [string]$port
+    $env:AURA_PROVIDER_RUNTIME_EVENT_LOG_PATH = $providerRuntimeEventLog
     if ($env:AURA_LOG_RETENTION_DAYS -match '^[1-9][0-9]{0,2}$') {
         $retention = [int]$env:AURA_LOG_RETENTION_DAYS
     }
