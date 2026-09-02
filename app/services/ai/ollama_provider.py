@@ -21,7 +21,11 @@ class OllamaProvider(AIProvider):
         *,
         instructions: str | None = None,
         max_output_tokens: int | None = None,
+        request_id: str | None = None,
     ) -> str:
+        # Accepted for interface compatibility; OpenAI-only rollout
+        # observability does not change the Ollama request contract.
+        del request_id
         if instructions is not None:
             message = f"{instructions}\n\n{message}"
         request = {

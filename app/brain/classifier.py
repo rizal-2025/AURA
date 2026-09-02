@@ -138,7 +138,12 @@ class IntentClassifier:
         self.ai = provider or get_ai_provider()
         self.entity_extractor = ReservationEntityExtractor(clock=clock)
 
-    async def classify(self, message: str) -> dict[str, Any]:
+    async def classify(
+        self,
+        message: str,
+        *,
+        request_id: str | None = None,
+    ) -> dict[str, Any]:
         deterministic_fields = await self.entity_extractor.extract(message)
         rule_based_intent = self.detect_reservation_intent(message)
         if rule_based_intent is not None:
@@ -158,7 +163,10 @@ class IntentClassifier:
 
         prompt = self._build_prompt(message)
         try:
-            response = await self.ai.chat(prompt)
+            provider_kwargs = {}
+            if request_id is not None:
+                provider_kwargs["request_id"] = request_id
+            response = await self.ai.chat(prompt, **provider_kwargs)
         except Exception as error:
             logger.error(
                 "AI PROVIDER FAILURE: operation=classify exception=%s",

@@ -422,10 +422,11 @@ class DemoChatService:
         *,
         memory_key: str | None = None,
         conversation_history=None,
+        request_id: str | None = None,
     ):
         if self.core_factory is not None:
             return self.core_factory(demo_session_id)
-        agent = AgentOrchestrator()
+        agent = AgentOrchestrator(provider_request_id=request_id)
         agent.handoff_service = DemoSimulatedHandoffService(
             agent.memory_manager,
             demo_session_id=demo_session_id,
@@ -632,6 +633,7 @@ class DemoChatService:
             demo_session_id,
             memory_key=memory_key,
             conversation_history=conversation_history,
+            request_id=str(request_id),
         )
         try:
             async with asyncio.timeout(self.provider_timeout_seconds):
