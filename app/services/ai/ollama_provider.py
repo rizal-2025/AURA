@@ -19,8 +19,11 @@ class OllamaProvider(AIProvider):
         self,
         message: str,
         *,
+        instructions: str | None = None,
         max_output_tokens: int | None = None,
     ) -> str:
+        if instructions is not None:
+            message = f"{instructions}\n\n{message}"
         request = {
             "model": self.config.OLLAMA_MODEL,
             "messages": [

@@ -18,12 +18,15 @@ class OpenAIProvider(AIProvider):
         self,
         message: str,
         *,
+        instructions: str | None = None,
         max_output_tokens: int | None = None,
     ) -> str:
         request = {
             "model": self.config.OPENAI_MODEL,
             "input": message,
         }
+        if instructions is not None:
+            request["instructions"] = instructions
         if max_output_tokens is not None:
             request["max_output_tokens"] = max_output_tokens
 
