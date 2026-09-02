@@ -9,5 +9,6 @@ class AIProvider(ABC):
         *,
         instructions: str | None = None,
         max_output_tokens: int | None = None,
+        request_id: str | None = None,
     ) -> str:
         pass

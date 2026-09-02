@@ -156,20 +156,45 @@ Untrusted conversation data (JSON):
         self,
         message: str,
         history: Sequence[object] | None = None,
+        *,
+        request_id: str | None = None,
     ) -> str:
         started = perf_counter()
         locale = current_locale().value
         bounded_history = self.bounded_history(history)
+        fallback_reason = "UNKNOWN_ERROR"
         try:
-            response = await self.provider.chat(
-                self.build_input(message, bounded_history),
-                instructions=self.build_instructions(),
-                max_output_tokens=GENERAL_CONVERSATION_MAX_OUTPUT_TOKENS,
-            )
+            provider_kwargs = {
+                "instructions": self.build_instructions(),
+                "max_output_tokens": GENERAL_CONVERSATION_MAX_OUTPUT_TOKENS,
+            }
+            if request_id is not None:
+                provider_kwargs["request_id"] = request_id
+            try:
+                response = await self.provider.chat(
+                    self.build_input(message, bounded_history),
+                    **provider_kwargs,
+                )
+            except Exception as error:
+                categorizer = getattr(self.provider, "categorize_error", None)
+                if callable(categorizer):
+                    fallback_reason = categorizer(error)
+                raise
+            fallback_reason = "CLIENT_ERROR"
             response = normalize_chat_message(response).strip()
             if len(response) > GENERAL_CONVERSATION_MAX_RESPONSE_CODEPOINTS:
                 raise ValueError("GENERAL_RESPONSE_TOO_LONG")
         except Exception as error:
+            fallback_emitter = getattr(self.provider, "emit_fallback", None)
+            if callable(fallback_emitter):
+                try:
+                    fallback_emitter(
+                        request_id=request_id,
+                        reason=fallback_reason,
+                        locale=locale,
+                    )
+                except Exception:  # noqa: BLE001
+                    pass
             elapsed_ms = int((perf_counter() - started) * 1000)
             logger.warning(
                 "GENERAL CONVERSATION: status=failure locale=%s elapsed_ms=%d "

@@ -35,8 +35,14 @@ from app.services.handoff import HandoffDetector, HandoffService
 
 class AgentOrchestrator:
 
-    def __init__(self, *, ai_provider=None):
+    def __init__(
+        self,
+        *,
+        ai_provider=None,
+        provider_request_id: str | None = None,
+    ):
         self._ai = ai_provider or get_ai_provider()
+        self.provider_request_id = provider_request_id
         # Keep classification and response generation on the same approved
         # provider configuration while retaining their separate client
         # boundaries and prompts.
@@ -389,8 +395,36 @@ class AgentOrchestrator:
                 return tr("unknown_request")
 
             try:
-                intent_result = await self.intent_classifier.classify(message)
+                classifier_kwargs = {}
+                provider_request_id = getattr(
+                    self,
+                    "provider_request_id",
+                    None,
+                )
+                if provider_request_id is not None:
+                    classifier_kwargs["request_id"] = provider_request_id
+                intent_result = await self.intent_classifier.classify(
+                    message,
+                    **classifier_kwargs,
+                )
             except Exception as error:
+                try:
+                    provider = getattr(self.intent_classifier, "ai", None) or self._ai
+                    fallback_emitter = getattr(provider, "emit_fallback", None)
+                    categorizer = getattr(provider, "categorize_error", None)
+                    if callable(fallback_emitter):
+                        reason = (
+                            categorizer(error)
+                            if callable(categorizer)
+                            else "UNKNOWN_ERROR"
+                        )
+                        fallback_emitter(
+                            request_id=provider_request_id,
+                            reason=reason,
+                            locale=current_locale().value,
+                        )
+                except Exception:  # noqa: BLE001
+                    pass
                 logger.warning(
                     "GENERAL CONVERSATION: status=classification_failure "
                     "locale=%s exception=%s",
@@ -559,9 +593,14 @@ class AgentOrchestrator:
     ) -> str:
         session = self.memory_manager.get_session(session_id)
         history = session.get("general_conversation_history")
+        response_kwargs = {}
+        provider_request_id = getattr(self, "provider_request_id", None)
+        if provider_request_id is not None:
+            response_kwargs["request_id"] = provider_request_id
         reply = await self.general_conversation_service.respond(
             message,
             history,
+            **response_kwargs,
         )
         session["general_conversation_history"] = (
             self.general_conversation_service.append_exchange(
