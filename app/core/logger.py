@@ -2,6 +2,11 @@ import logging
 import os
 import re
 
+from app.core.provider_runtime_events import (
+    ProviderRuntimeEventFileHandler,
+    configure_provider_runtime_event_logging,
+)
+
 
 _BOT_URL_PATTERN = re.compile(r"/bot[^/\s]+/", re.IGNORECASE)
 _BEARER_PATTERN = re.compile(r"\bBearer\s+[^\s,;]+", re.IGNORECASE)
@@ -71,7 +76,10 @@ def configure_safe_logging() -> None:
         "telegram.ext.Updater",
     ):
         target_logger = logging.getLogger(logger_name)
-        if not any(isinstance(item, SensitiveDataFilter) for item in target_logger.filters):
+        if not any(
+            isinstance(item, SensitiveDataFilter)
+            for item in target_logger.filters
+        ):
             target_logger.addFilter(redaction_filter)
 
     for logger_name in (
@@ -87,6 +95,8 @@ def configure_safe_logging() -> None:
 
     for handler in logging.getLogger().handlers:
         handler.setFormatter(RedactingFormatter(LOG_FORMAT))
+
+    configure_provider_runtime_event_logging(logger)
 
 
 configure_safe_logging()

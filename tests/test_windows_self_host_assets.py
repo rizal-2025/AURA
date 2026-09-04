@@ -17,6 +17,7 @@ EXPECTED_SCRIPTS = {
     "Test-TailscaleFunnel.ps1",
     "Test-PublicDemoReadiness.ps1",
     "Get-AuraPublicDemoStatus.ps1",
+    "Get-AuraProviderRuntimeEvents.ps1",
     "Invoke-AuraProductionBackup.ps1",
     "Test-AuraReadiness.ps1",
     "Run-DemoCleanup.ps1",

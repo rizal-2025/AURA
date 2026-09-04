@@ -6,6 +6,10 @@ $script:AuraSecretRoot = 'C:\ProgramData\AURA\secrets'
 $script:AuraLogRoot = 'C:\ProgramData\AURA\logs'
 $script:AuraBackupRoot = 'C:\ProgramData\AURA\backups'
 $script:AuraRunRoot = 'C:\ProgramData\AURA\run'
+$script:AuraProviderRuntimeEventLog = Join-Path `
+    $script:AuraLogRoot 'provider-runtime-events.jsonl'
+$script:AuraProviderRuntimeEventLock = Join-Path `
+    $script:AuraLogRoot 'provider-runtime-events.lock'
 
 function Get-AuraRepositoryRoot {
     $root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
@@ -575,6 +579,252 @@ function Assert-AuraOperatorRuntimeContainerAcl {
             throw 'AURA_RUNTIME_ACL_REQUIRED_IDENTITY_MISSING'
         }
     }
+}
+
+function Get-AuraProviderRuntimeEventLogPath {
+    return $script:AuraProviderRuntimeEventLog
+}
+
+function Get-AuraProviderRuntimeEventLockPath {
+    return $script:AuraProviderRuntimeEventLock
+}
+
+function Initialize-AuraProviderRuntimeEventFile {
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [switch]$LockFile
+    )
+
+    $path = Assert-AuraPathWithin -Path $Path -Root $script:AuraLogRoot
+    $created = $false
+    if (-not (Test-Path -LiteralPath $path)) {
+        $stream = $null
+        try {
+            $stream = [IO.File]::Open(
+                $path,
+                [IO.FileMode]::CreateNew,
+                [IO.FileAccess]::ReadWrite,
+                [IO.FileShare]::ReadWrite
+            )
+            if ($LockFile) { $stream.WriteByte(0) }
+            $stream.Flush($true)
+            $created = $true
+        } catch [IO.IOException] {
+            if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw }
+        } finally {
+            if ($null -ne $stream) { $stream.Dispose() }
+        }
+    }
+    $item = Get-Item -LiteralPath $path -Force
+    if (
+        $item.PSIsContainer `
+        -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0
+    ) { throw 'AURA_PROVIDER_RUNTIME_EVENT_PATH_INVALID' }
+    try {
+        if ($created) { Set-AuraOperatorProtectedAcl -Path $path }
+        Assert-AuraOperatorSecretAcl -Path $path
+        if ($LockFile -and (Get-Item -LiteralPath $path -Force).Length -lt 1) {
+            throw 'AURA_PROVIDER_RUNTIME_EVENT_LOCK_PATH_INVALID'
+        }
+    } catch {
+        if ($created) {
+            Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
+        }
+        throw 'AURA_PROVIDER_RUNTIME_EVENT_ACL_INVALID'
+    }
+    return $path
+}
+
+function Initialize-AuraProviderRuntimeEventSink {
+    Initialize-AuraDataDirectories
+    Assert-AuraOperatorRuntimeContainerAcl -Path $script:AuraLogRoot
+    $eventPath = Initialize-AuraProviderRuntimeEventFile `
+        -Path $script:AuraProviderRuntimeEventLog
+    $lockPath = Initialize-AuraProviderRuntimeEventFile `
+        -Path $script:AuraProviderRuntimeEventLock -LockFile
+    return [PSCustomObject]@{
+        EventPath = $eventPath
+        LockPath = $lockPath
+    }
+}
+
+function ConvertFrom-AuraProviderRuntimeEventLines {
+    param(
+        [Parameter(Mandatory)][AllowEmptyCollection()][string[]]$Lines,
+        [Parameter(Mandatory)][string]$RequestId,
+        [Parameter(Mandatory)][string]$NotBeforeUtc,
+        [ValidateRange(1, 64)][int]$MaxRecords = 32
+    )
+
+    $requestGuid = [Guid]::Empty
+    if (
+        -not [Guid]::TryParseExact($RequestId, 'D', [ref]$requestGuid) `
+        -or $RequestId -cne $requestGuid.ToString('D')
+    ) { throw 'AURA_PROVIDER_RUNTIME_REQUEST_ID_INVALID' }
+    if ($NotBeforeUtc -cnotmatch `
+        '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$') {
+        throw 'AURA_PROVIDER_RUNTIME_TIMESTAMP_INVALID'
+    }
+    $notBefore = [DateTimeOffset]::MinValue
+    if (-not [DateTimeOffset]::TryParseExact(
+        $NotBeforeUtc,
+        'yyyy-MM-ddTHH:mm:ss.fffZ',
+        [Globalization.CultureInfo]::InvariantCulture,
+        [Globalization.DateTimeStyles]::AssumeUniversal,
+        [ref]$notBefore
+    )) { throw 'AURA_PROVIDER_RUNTIME_TIMESTAMP_INVALID' }
+
+    $commonProperties = @(
+        'event', 'model', 'operation', 'provider', 'request_id', 'timestamp'
+    )
+    $outcomes = @(
+        'AUTH', 'BILLING', 'CLIENT_ERROR', 'PROVIDER_ERROR', 'RATE_LIMIT',
+        'SUCCESS', 'TIMEOUT', 'UNKNOWN_ERROR'
+    )
+    $records = [System.Collections.Generic.List[object]]::new()
+    foreach ($line in $Lines) {
+        if ([string]::IsNullOrWhiteSpace($line) -or $line.Length -gt 2048) {
+            throw 'AURA_PROVIDER_RUNTIME_EVENT_RECORD_INVALID'
+        }
+        try { $record = $line | ConvertFrom-Json } catch {
+            throw 'AURA_PROVIDER_RUNTIME_EVENT_RECORD_INVALID'
+        }
+        if ($null -eq $record -or $record -is [array]) {
+            throw 'AURA_PROVIDER_RUNTIME_EVENT_RECORD_INVALID'
+        }
+
+        $eventType = [string]$record.event
+        $expectedProperties = switch ($eventType) {
+            'AI_PROVIDER_ATTEMPT' { $commonProperties }
+            'AI_PROVIDER_OUTCOME' {
+                $commonProperties + @('elapsed_ms', 'outcome')
+            }
+            'AI_PROVIDER_FALLBACK' {
+                $commonProperties + @('locale', 'reason')
+            }
+            default { throw 'AURA_PROVIDER_RUNTIME_EVENT_RECORD_INVALID' }
+        }
+        $actualProperties = @($record.PSObject.Properties.Name | Sort-Object)
+        $expectedProperties = @($expectedProperties | Sort-Object)
+        if (
+            $actualProperties.Count -ne $expectedProperties.Count `
+            -or @(Compare-Object $actualProperties $expectedProperties `
+                -CaseSensitive).Count -ne 0
+        ) { throw 'AURA_PROVIDER_RUNTIME_EVENT_RECORD_INVALID' }
+
+        $recordGuid = [Guid]::Empty
+        $recordRequestId = [string]$record.request_id
+        $timestamp = [DateTimeOffset]::MinValue
+        if (
+            -not [Guid]::TryParseExact($recordRequestId, 'D', [ref]$recordGuid) `
+            -or $recordRequestId -cne $recordGuid.ToString('D') `
+            -or [string]$record.provider -cne 'openai' `
+            -or [string]$record.operation -cne 'responses.create' `
+            -or [string]$record.model -cnotmatch `
+                '^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$' `
+            -or [string]$record.timestamp -cnotmatch `
+                '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$' `
+            -or -not [DateTimeOffset]::TryParseExact(
+                [string]$record.timestamp,
+                'yyyy-MM-ddTHH:mm:ss.fffZ',
+                [Globalization.CultureInfo]::InvariantCulture,
+                [Globalization.DateTimeStyles]::AssumeUniversal,
+                [ref]$timestamp
+            )
+        ) { throw 'AURA_PROVIDER_RUNTIME_EVENT_RECORD_INVALID' }
+
+        if ($eventType -eq 'AI_PROVIDER_OUTCOME') {
+            if (
+                ($record.elapsed_ms -isnot [int] `
+                    -and $record.elapsed_ms -isnot [long]) `
+                -or [long]$record.elapsed_ms -lt 0 `
+                -or [long]$record.elapsed_ms -gt 3600000 `
+                -or [string]$record.outcome -cnotin $outcomes
+            ) { throw 'AURA_PROVIDER_RUNTIME_EVENT_RECORD_INVALID' }
+        } elseif ($eventType -eq 'AI_PROVIDER_FALLBACK') {
+            if (
+                [string]$record.locale -cnotin @('en-US', 'id-ID') `
+                -or [string]$record.reason -ceq 'SUCCESS' `
+                -or [string]$record.reason -cnotin $outcomes
+            ) { throw 'AURA_PROVIDER_RUNTIME_EVENT_RECORD_INVALID' }
+        }
+
+        if (
+            $recordRequestId -ceq $RequestId `
+            -and $timestamp -ge $notBefore
+        ) {
+            if ($records.Count -ge $MaxRecords) {
+                throw 'AURA_PROVIDER_RUNTIME_EVENT_RESULT_LIMIT_EXCEEDED'
+            }
+            $records.Add($record)
+        }
+    }
+    return @($records)
+}
+
+function Get-AuraProviderRuntimeEvents {
+    param(
+        [Parameter(Mandatory)][string]$RequestId,
+        [Parameter(Mandatory)][string]$NotBeforeUtc,
+        [ValidateRange(1, 64)][int]$MaxRecords = 32
+    )
+
+    $eventPath = Assert-AuraPathWithin `
+        -Path $script:AuraProviderRuntimeEventLog -Root $script:AuraLogRoot
+    $lockPath = Assert-AuraPathWithin `
+        -Path $script:AuraProviderRuntimeEventLock -Root $script:AuraLogRoot
+    foreach ($path in @($eventPath, $lockPath)) {
+        if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+            throw 'AURA_PROVIDER_RUNTIME_EVENT_LOG_MISSING'
+        }
+        $item = Get-Item -LiteralPath $path -Force
+        if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+            throw 'AURA_PROVIDER_RUNTIME_EVENT_PATH_INVALID'
+        }
+        Assert-AuraOperatorSecretAcl -Path $path
+    }
+    Assert-AuraOperatorRuntimeContainerAcl -Path $script:AuraLogRoot
+    if ((Get-Item -LiteralPath $lockPath -Force).Length -lt 1) {
+        throw 'AURA_PROVIDER_RUNTIME_EVENT_LOCK_PATH_INVALID'
+    }
+    if ((Get-Item -LiteralPath $eventPath -Force).Length -gt 67108864) {
+        throw 'AURA_PROVIDER_RUNTIME_EVENT_LOG_TOO_LARGE'
+    }
+
+    $lockStream = $null
+    $locked = $false
+    $deadline = [DateTime]::UtcNow.AddSeconds(5)
+    while (-not $locked -and [DateTime]::UtcNow -lt $deadline) {
+        try {
+            $lockStream = [IO.File]::Open(
+                $lockPath,
+                [IO.FileMode]::Open,
+                [IO.FileAccess]::ReadWrite,
+                [IO.FileShare]::ReadWrite
+            )
+            $lockStream.Lock(0, 1)
+            $locked = $true
+        } catch [IO.IOException] {
+            if ($null -ne $lockStream) { $lockStream.Dispose() }
+            $lockStream = $null
+            Start-Sleep -Milliseconds 10
+        }
+    }
+    if (-not $locked) {
+        throw 'AURA_PROVIDER_RUNTIME_EVENT_LOCK_TIMEOUT'
+    }
+    try {
+        if ((Get-Item -LiteralPath $eventPath -Force).Length -gt 67108864) {
+            throw 'AURA_PROVIDER_RUNTIME_EVENT_LOG_TOO_LARGE'
+        }
+        $lines = @([IO.File]::ReadAllLines($eventPath, [Text.Encoding]::UTF8))
+    } finally {
+        $lockStream.Unlock(0, 1)
+        $lockStream.Dispose()
+    }
+    return @(ConvertFrom-AuraProviderRuntimeEventLines `
+        -Lines $lines -RequestId $RequestId -NotBeforeUtc $NotBeforeUtc `
+        -MaxRecords $MaxRecords)
 }
 
 function Import-AuraConfiguration {
