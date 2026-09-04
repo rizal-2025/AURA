@@ -517,7 +517,46 @@ $eventPath = Join-Path $testRoot 'provider-runtime-events.jsonl'
 $lockPath = Join-Path $testRoot 'provider-runtime-events.lock'
 try {{
     [void](New-Item -ItemType Directory -Path $testRoot)
-    Set-AuraOperatorProtectedAcl -Path $testRoot -Container
+    $testRootAcl = [Security.AccessControl.DirectorySecurity]::new()
+    $testRootAcl.SetAccessRuleProtection($true, $false)
+    $inheritance = (
+        [Security.AccessControl.InheritanceFlags]::ContainerInherit -bor
+        [Security.AccessControl.InheritanceFlags]::ObjectInherit
+    )
+    $propagation = [Security.AccessControl.PropagationFlags]::None
+    $allow = [Security.AccessControl.AccessControlType]::Allow
+    $currentOperatorSid = [Security.Principal.WindowsIdentity]::GetCurrent().User
+    [void]$testRootAcl.AddAccessRule(
+        [Security.AccessControl.FileSystemAccessRule]::new(
+            $currentOperatorSid,
+            (
+                [Security.AccessControl.FileSystemRights]::Modify -bor
+                [Security.AccessControl.FileSystemRights]::Synchronize
+            ),
+            $inheritance,
+            $propagation,
+            $allow
+        )
+    )
+    [void]$testRootAcl.AddAccessRule(
+        [Security.AccessControl.FileSystemAccessRule]::new(
+            [Security.Principal.SecurityIdentifier]::new('S-1-5-18'),
+            [Security.AccessControl.FileSystemRights]::FullControl,
+            $inheritance,
+            $propagation,
+            $allow
+        )
+    )
+    [void]$testRootAcl.AddAccessRule(
+        [Security.AccessControl.FileSystemAccessRule]::new(
+            [Security.Principal.SecurityIdentifier]::new('S-1-5-32-544'),
+            [Security.AccessControl.FileSystemRights]::FullControl,
+            $inheritance,
+            $propagation,
+            $allow
+        )
+    )
+    [IO.Directory]::SetAccessControl($testRoot, $testRootAcl)
     $script:AuraLogRoot = $testRoot
     $script:AuraProviderRuntimeEventLog = $eventPath
     $script:AuraProviderRuntimeEventLock = $lockPath
