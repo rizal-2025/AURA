@@ -26,11 +26,16 @@ empat WinError2 direproduksi pada worktree tanpa `.venv` lokal.
 
 ## Coverage dan batas hitungan
 
-- 100 curated dialogue contracts: 68 awal dan 32 corrective contracts. Yang awal
+- 114 curated dialogue contracts: 68 awal, 32 corrective, dan 14 year/temporal
+  contracts dari kasus Victor. Yang awal
   mencakup 64 field/value/locale recovery, Jessica,
   pembanding clock 10:00, invalid-calendar partial recovery, inline correction.
   Corrective: 12 invalid-date recovery, 5 combined create, 10 English time updates,
   5 date-only combined input updates dengan non-target time preservation.
+  Tambahan Victor: 1 alur asli dengan clock 5 September 2026 22:24 Jakarta,
+  2 combined-date/time locale cases, 4 confirmation-year-edit cases,
+  1 date-with-collected-time case, dan 6 temporal confirmation-edit cases.
+  Semuanya memakai shared SQLite/PostgreSQL contracts dan restore durable tiap turn.
 - 556 generated parser cases unik: 412 time surface forms setelah deduplication,
   144 kalender termasuk leap years. Ekspektasi dari tabel semantik/stdlib date.
 - 8612 unique property-style parser inputs di test_demo_blocker_fix:

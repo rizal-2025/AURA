@@ -87,7 +87,7 @@ def main():
               "skip_reasons": [reason for _, reason in result.skipped],
               "failure_ids": [test.id() for test, _ in result.failures + result.errors],
               "seconds": round(time.monotonic() - started, 3), "source_root": str(root),
-              "curated_dialogues": 100, "stateful_traces_per_seed": 100,
+              "curated_dialogues": 114, "stateful_traces_per_seed": 100,
               "forced_interleaving_repetitions": 80 if is_postgresql else 0}
     with args.report.open("x", encoding="utf-8") as stream:
         json.dump(report, stream, indent=2)

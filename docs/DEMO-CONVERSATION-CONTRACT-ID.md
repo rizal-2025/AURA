@@ -30,9 +30,13 @@ Nama/jumlah/tanggal/referensi bukan sumber jam hanya karena berisi angka.
 
 Tahun eksplisit tidak diubah. Domain menolak tanggal lampau. Parser historis
 tetap memilih kejadian tahun berikutnya untuk tanggal bernama tanpa tahun yang
-sudah lewat. Pada create, tanggal/tahun lengkap tampil dalam konfirmasi sebelum
-commit. Pada update, inferensi lintas tahun sekarang harus dilengkapi pengguna
-dengan tanggal bertahun eksplisit sebelum mutasi; `ya` saja bukan input tanggal.
+sudah lewat. Pada create maupun update, inferensi lintas tahun harus dilengkapi
+pengguna dengan tanggal bertahun eksplisit sebelum lanjut ke konfirmasi/mutasi;
+`ya` saja bukan input tanggal. Ini juga berlaku untuk edit tanggal pada tahap
+konfirmasi create. Nama/jumlah/jam yang sudah valid tetap dipertahankan.
+Contoh pada 5 September 2026: `2 Agustus` meminta tanggal, bulan, dan tahun;
+tidak otomatis menjadi 2 Agustus 2027. `2 Agustus 2026` tetap ditolak sebagai
+tanggal lampau; `2 Agustus 2027` diterima bila pengguna menyatakannya eksplisit.
 Angka empat digit pada catatan lain bukan otorisasi tahun tanggal.
 
 Tahun numerik/alphanumeric yang melekat pada tanggal harus utuh empat digit
@@ -52,6 +56,13 @@ tidak diperluas. `bulan depan` tetap membutuhkan tanggal lengkap.
 AM/PM hanya qualifier jika melekat pada ekspresi jam: "I am booking at 11 pm"
 berarti 23:00; "I am Dani" tidak berisi jam. Dua clock/qualifier yang bertentangan
 tetap meminta klarifikasi. Locale request tidak diganti berdasarkan kata "am".
+Jawaban angka jam saja saat create (misalnya `4`) meminta periode waktu atau
+format 24 jam; tidak ditebak menjadi 04.00 atau 16.00. `jam 4 sore` = 16.00.
+Tanggal baru divalidasi bersama jam yang sudah terkumpul sebelum konfirmasi.
+Jika jam itu sudah lewat untuk tanggal baru, hanya jam yang dikosongkan dan
+diminta ulang. Edit tanggal/jam pada konfirmasi (langsung maupun dua langkah)
+juga memvalidasi pasangan tanggal-jam sebelum mengganti draft; input invalid
+mempertahankan nilai lama dan gate editing, sehingga `ya` tidak melewati koreksi.
 
 ## Partial date dan lifecycle
 

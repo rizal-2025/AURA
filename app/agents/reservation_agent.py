@@ -48,7 +48,7 @@ from app.services.reservation.public_reference import (
 )
 from app.services.reservation.service import ReservationService
 from app.utils.datetime_parser import DatetimeParser
-from app.utils.reservation_date_input import PENDING_DAY, continue_date
+from app.utils.reservation_date_input import PENDING_DAY, continue_date, inferred_year
 
 
 CONFIRM = "CONFIRM"
@@ -133,6 +133,7 @@ class ReservationAgent:
 
         updates = {}
         invalid_fields = set()
+        inferred_create_year = inferred_year(user_message, clock=self.clock)
         past_date_invalid = False
         past_time_invalid = False
         for key, value in candidates.items():
@@ -143,6 +144,9 @@ class ReservationAgent:
                 invalid_fields.add(key)
                 continue
             if key == "date":
+                if inferred_create_year is not None:
+                    invalid_fields.add(key)
+                    continue
                 try:
                     self.reservation_service.validate_new_reservation_date(
                         normalized_value
@@ -214,6 +218,21 @@ class ReservationAgent:
 
         action = step.get("action")
         if action == "collect_missing_fields":
+            if inferred_create_year is not None:
+                return self._request_explicit_create_year(
+                    current_session_id, inferred_create_year,
+                )
+            # A newly supplied date can make an already collected time past.
+            # Validate the pair before presenting it as ready to confirm.
+            if session_state.get("date") and session_state.get("time"):
+                try:
+                    self.reservation_service.validate_new_reservation_datetime(
+                        session_state["date"], session_state["time"],
+                    )
+                except PastReservationDateError:
+                    past_date_invalid = True
+                except PastReservationTimeError:
+                    past_time_invalid = True
             if past_date_invalid:
                 self.memory_manager.remove_session_keys(
                     current_session_id,
@@ -245,6 +264,7 @@ class ReservationAgent:
                         "time": None,
                         "awaiting_confirmation": False,
                         "editing_field": None,
+                        "asked_fields": list(self.conversation_state_manager.REQUIRED_FIELDS),
                     },
                 )
                 return {
@@ -339,37 +359,14 @@ class ReservationAgent:
         if editing_field in self.EDITABLE_FIELDS:
             if editing_field == "date":
                 user_message = continue_date(user_message, session, clock=self.clock)
+                year = inferred_year(user_message, clock=self.clock)
+                if year is not None:
+                    return self._request_explicit_create_year(session_id, year, confirmation=True)
             value = self._infer_value_for_field(editing_field, user_message)
             if value is not None:
-                if editing_field == "date":
-                    try:
-                        self.reservation_service.validate_new_reservation_date(
-                            value
-                        )
-                    except PastReservationDateError:
-                        return {
-                            "status": "awaiting_confirmation",
-                            "response": tr("past_reservation_date"),
-                            "invalid_input": True,
-                        }
-                if editing_field == "time" and session.get("date"):
-                    try:
-                        self.reservation_service.validate_new_reservation_datetime(
-                            session["date"],
-                            value,
-                        )
-                    except PastReservationDateError:
-                        return {
-                            "status": "awaiting_confirmation",
-                            "response": tr("past_reservation_date"),
-                            "invalid_input": True,
-                        }
-                    except PastReservationTimeError:
-                        return {
-                            "status": "awaiting_confirmation",
-                            "response": tr("past_reservation_time"),
-                            "invalid_input": True,
-                        }
+                rejection = self._validate_confirmation_datetime_edit(session_id, editing_field, value)
+                if rejection is not None:
+                    return rejection
                 updated_session = self._apply_confirmation_edit(
                     session_id,
                     editing_field,
@@ -541,8 +538,14 @@ class ReservationAgent:
         if intent == EDIT_FIELD and field:
             if field == "date":
                 user_message = continue_date(user_message, session, clock=self.clock)
+                year = inferred_year(user_message, clock=self.clock)
+                if year is not None:
+                    return self._request_explicit_create_year(session_id, year, confirmation=True)
             value = await self._extract_direct_edit_value(field, user_message)
             if value is not None:
+                rejection = self._validate_confirmation_datetime_edit(session_id, field, value)
+                if rejection is not None:
+                    return rejection
                 updated_session = self._apply_confirmation_edit(session_id, field, value)
                 return self._confirmation_response(updated_session)
 
@@ -650,6 +653,51 @@ class ReservationAgent:
         updated_session["awaiting_confirmation"] = True
         return updated_session
 
+    def _validate_confirmation_datetime_edit(
+        self, session_id: str, field: str, value: Any,
+    ) -> dict[str, Any] | None:
+        if field not in {"date", "time"}:
+            return None
+        session = self.memory_manager.get_session(session_id)
+        candidate = {**session, field: value}
+        try:
+            if candidate.get("date") and candidate.get("time"):
+                self.reservation_service.validate_new_reservation_datetime(candidate["date"], candidate["time"])
+            elif candidate.get("date"):
+                self.reservation_service.validate_new_reservation_date(candidate["date"])
+            return None
+        except PastReservationDateError:
+            response = tr("past_reservation_date")
+        except PastReservationTimeError:
+            response = tr("past_reservation_time")
+        self.memory_manager.update_session(session_id, {
+            "awaiting_confirmation": True, "editing_field": field,
+        })
+        return {"status": "awaiting_confirmation", "response": response, "invalid_input": True}
+
+    def _request_explicit_create_year(
+        self, session_id: str, year: int, *, confirmation: bool = False,
+    ) -> dict[str, Any]:
+        # Keep other collected fields, but never promote a parser-inferred year
+        # to an accepted date. An edit keeps its old date until clarified; its
+        # editing gate prevents a bare "yes" from committing that old value.
+        if confirmation:
+            self.memory_manager.update_session(session_id, {
+                "awaiting_confirmation": True, "editing_field": "date",
+            })
+        else:
+            state = dict(self.memory_manager.get_session(session_id))
+            state.update(date=None, awaiting_confirmation=False, editing_field=None)
+            state = self.conversation_state_manager.record_question(state, "date")
+            self.memory_manager.update_session(session_id, state)
+        return {
+            "status": "awaiting_confirmation" if confirmation else "awaiting_input",
+            "response": tr("clarify_create_year", year=year),
+            "field": "date",
+            "next_action": "ask_date",
+            "invalid_input": True,
+        }
+
     def _confirmation_response(self, session_state: dict[str, Any]) -> dict[str, Any]:
         return {
             "status": "awaiting_confirmation",
@@ -720,6 +768,10 @@ class ReservationAgent:
         return tr(questions.get(field_name, "complete_reservation_details"))
 
     def _clarification_for_field(self, field_name: str, user_message: str) -> str:
+        if field_name == "time":
+            bare_hour = re.fullmatch(r"\s*([1-9]|1[0-2])\s*[.!?]?\s*", user_message)
+            if bare_hour:
+                return tr("clarify_bare_hour", hour=bare_hour[1])
         if (
             field_name == "date"
             and DatetimeParser.date_ambiguity(user_message) == "missing_month_year"

@@ -317,5 +317,116 @@ class DialogueContract:
                 self.assertEqual(after[:3] + after[4:], before[:3] + before[4:])
                 self.assertNotIn("pending_reservation_day", self.state)
 
+    def test_victor_create_requires_explicit_year_and_time_period(self):
+        self.new_scope(create=True, now=datetime(2026, 9, 5, 15, 24, tzinfo=timezone.utc))
+        self.create_prompt()
+        opening = self.turn("Hai saya mau reservasi 9 orang atas nama Victor", create=True)
+        self.assertEqual(opening["next_action"], "ask_date")
+        result = self.turn("2 agustus", create=True)
+        self.assertEqual(result["status"], "awaiting_input")
+        self.assertEqual(result["next_action"], "ask_date")
+        self.assertIn("tahun", result["response"])
+        self.assertIsNone(self.state.get("date"))
+        self.assertEqual((self.state["name"], self.state["people"]), ("Victor", 9))
+        self.assertEqual(self.rows(), [])
+        self.turn("ya", create=True)
+        self.assertIsNone(self.state.get("date"))
+        self.assertEqual(self.rows(), [])
+        self.assertTrue(self.turn("2 Agustus 2026", create=True)["invalid_input"])
+        self.assertEqual(self.turn("2 Agustus 2027", create=True)["next_action"], "ask_time")
+        ambiguous_time = self.turn("4", create=True)
+        self.assertEqual(ambiguous_time["next_action"], "ask_time")
+        self.assertIn("pagi", ambiguous_time["response"])
+        self.assertIsNone(self.state.get("time"))
+        confirmation = self.turn("jam 4 sore", create=True)
+        self.assertEqual(confirmation["status"], "awaiting_confirmation")
+        self.assertIn("2 Agustus 2027", confirmation["response"])
+        self.assertEqual((self.state["date"], self.state["time"]), ("2027-08-02", "16:00"))
+        self.assertEqual(self.rows(), [])
+        self.assertEqual(self.turn("ya", create=True)["status"], "completed")
+        self.assertEqual(self.rows()[0][1:5], ("Victor", 9, "2027-08-02", "16:00"))
+
+    def test_create_year_clarification_preserves_combined_time_and_locale(self):
+        for locale, text, year_word in (
+            (SupportedLocale.ID_ID, "2 Agustus jam 4 sore", "tahun"),
+            (SupportedLocale.EN_US, "August 2 at 4 pm", "year"),
+        ):
+            with self.subTest(locale=locale):
+                self.new_scope(create=True)
+                self.create_prompt(name="Victor", people=9, asked_fields=["date"])
+                result = self.turn(text, create=True, locale=locale)
+                self.assertEqual(result["next_action"], "ask_date")
+                self.assertIn(year_word, result["response"])
+                self.assertIsNone(self.state.get("date"))
+                self.assertEqual(self.state["time"], "16:00")
+                self.assertEqual(self.rows(), [])
+                self.assertEqual(self.turn("6 September 2026", create=True, locale=locale)["status"], "awaiting_confirmation")
+                self.assertEqual((self.state["name"], self.state["people"], self.state["date"], self.state["time"]),
+                                 ("Victor", 9, "2026-09-06", "16:00"))
+
+    def test_confirmation_date_edits_cannot_silently_advance_year(self):
+        for inline in (False, True):
+            for locale in (SupportedLocale.ID_ID, SupportedLocale.EN_US):
+                with self.subTest(inline=inline, locale=locale):
+                    self.new_scope(create=True)
+                    self.create_prompt(name="Victor", people=9, date="2026-09-06", time="16:00",
+                                       awaiting_confirmation=True)
+                    if not inline:
+                        self.turn("ubah tanggal", create=True, locale=locale)
+                    result = self.turn("ubah tanggal 2 Agustus" if inline else "2 Agustus",
+                                       create=True, locale=locale)
+                    self.assertTrue(result.get("invalid_input"))
+                    self.assertEqual(self.state["date"], "2026-09-06")
+                    self.assertEqual(self.state["editing_field"], "date")
+                    self.assertEqual(self.rows(), [])
+                    self.turn("ya", create=True, locale=locale)
+                    self.assertEqual(self.rows(), [])
+                    corrected = self.turn("2 Agustus 2027", create=True, locale=locale)
+                    self.assertEqual(corrected["status"], "awaiting_confirmation")
+                    self.assertIsNone(self.state.get("editing_field"))
+                    self.assertEqual((self.state["date"], self.state["time"]), ("2027-08-02", "16:00"))
+                    self.assertEqual(self.rows(), [])
+                    self.assertEqual(self.turn("ya", create=True, locale=locale)["status"], "completed")
+                    self.assertEqual(self.rows()[0][1:5], ("Victor", 9, "2027-08-02", "16:00"))
+
+    def test_create_new_date_revalidates_collected_time_before_confirmation(self):
+        self.new_scope(create=True, now=datetime(2026, 9, 5, 15, 24, tzinfo=timezone.utc))
+        self.create_prompt(name="Victor", people=9, time="16:00", asked_fields=["date"])
+        result = self.turn("5 September 2026", create=True)
+        self.assertEqual(result["status"], "awaiting_input")
+        self.assertEqual(result["next_action"], "ask_time")
+        self.assertTrue(result["invalid_input"])
+        self.assertEqual((self.state["name"], self.state["people"], self.state["date"]),
+                         ("Victor", 9, "2026-09-05"))
+        self.assertIsNone(self.state.get("time"))
+        self.assertEqual(self.rows(), [])
+        self.assertEqual(self.turn("23:00", create=True)["status"], "awaiting_confirmation")
+        self.assertEqual(self.turn("ya", create=True)["status"], "completed")
+        self.assertEqual(self.rows()[0][1:5], ("Victor", 9, "2026-09-05", "23:00"))
+
+    def test_confirmation_edit_revalidates_full_date_time_candidate(self):
+        for field, value in (("date", "2 Agustus 2026"), ("date", "5 September 2026"), ("time", "07:00")):
+            for inline in (False, True):
+                with self.subTest(field=field, value=value, inline=inline):
+                    self.new_scope(create=True, now=datetime(2026, 9, 5, 15, 24, tzinfo=timezone.utc))
+                    initial_date, initial_time = ("2026-09-06", "16:00") if field == "date" else ("2026-09-05", "23:00")
+                    self.create_prompt(name="Victor", people=9, date=initial_date, time=initial_time,
+                                       awaiting_confirmation=True)
+                    label = "tanggal" if field == "date" else "jam"
+                    if not inline:
+                        self.turn("ubah " + label, create=True)
+                    result = self.turn("ubah " + label + " " + value if inline else value, create=True)
+                    self.assertTrue(result.get("invalid_input"))
+                    self.assertEqual((self.state["date"], self.state["time"]), (initial_date, initial_time))
+                    self.assertEqual(self.state["editing_field"], field)
+                    self.turn("ya", create=True)
+                    self.assertEqual(self.rows(), [])
+                    valid = "7 September 2026" if field == "date" else "23:30"
+                    self.assertEqual(self.turn(valid, create=True)["status"], "awaiting_confirmation")
+                    self.assertEqual(self.turn("ya", create=True)["status"], "completed")
+                    self.assertEqual(self.rows()[0][1:5], ("Victor", 9,
+                        "2026-09-07" if field == "date" else initial_date,
+                        "23:30" if field == "time" else initial_time))
+
 class LocalDialogueTests(DialogueContract, unittest.TestCase):
     setUp = fixture.PersistedReservationUpdateTests.setUp

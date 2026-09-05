@@ -348,6 +348,14 @@ _TEXT: dict[str, dict[SupportedLocale, str]] = {
         SupportedLocale.ID_ID: "Tanpa tahun, tanggal itu akan ditafsirkan sebagai tahun {year}. Sebutkan tanggal lengkap beserta tahun sebelum reservasi diperbarui.",
         SupportedLocale.EN_US: "Without a year, that date would mean {year}. Please provide the full date including the year before updating the reservation.",
     },
+    "clarify_create_year": {
+        SupportedLocale.ID_ID: "Tanggal tersebut sudah lewat pada tahun ini. Saya tidak akan otomatis memilih tahun {year}. Mohon sebutkan tanggal, bulan, dan tahun yang Anda maksud.",
+        SupportedLocale.EN_US: "That date has already passed this year. I will not automatically choose {year}. Please specify the day, month, and year you mean.",
+    },
+    "clarify_bare_hour": {
+        SupportedLocale.ID_ID: "Maksudnya jam {hour} pagi atau sore/malam? Mohon sebutkan periode waktunya atau gunakan format 24 jam (HH:MM).",
+        SupportedLocale.EN_US: "Do you mean {hour} AM or PM? Please specify AM/PM or use 24-hour time (HH:MM).",
+    },
     "clarify_date_parts": {
         SupportedLocale.ID_ID: "Tanggal {day} bulan dan tahun berapa?",
         SupportedLocale.EN_US: "Which month and year should I use for the {day}th?",
