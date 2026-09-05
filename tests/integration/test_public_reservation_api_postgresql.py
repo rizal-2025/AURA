@@ -17,9 +17,11 @@ from app.api import reservation as reservation_api
 from app.core.customer_identity import AuthenticatedCustomer
 from app.db.database import get_db
 from app.db.models.customer import Customer
+from app.db.models.conversation_workflow_state import ConversationWorkflowState
 from app.db.models.reservation import Reservation
 from app.main import create_app
 from tests.integration.disposable_schema import DisposableSchemaResources
+from tests.test_persisted_reservation_update import PersistedUpdateContract
 
 
 def _skip_reason():
@@ -42,7 +44,7 @@ FROZEN_NOW = datetime(2026, 9, 5, 5, 53, tzinfo=timezone.utc)
 
 
 @unittest.skipIf(SKIP_REASON is not None, SKIP_REASON or "")
-class PublicReservationAPIPostgreSQLTests(unittest.TestCase):
+class PublicReservationAPIPostgreSQLTests(PersistedUpdateContract, unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.admin = create_engine(os.environ["TEST_DATABASE_URL"])
@@ -71,6 +73,7 @@ class PublicReservationAPIPostgreSQLTests(unittest.TestCase):
         cls.resources.track_engine(cls.engine)
         Customer.__table__.create(cls.engine)
         Reservation.__table__.create(cls.engine)
+        ConversationWorkflowState.__table__.create(cls.engine)
         cls.Session = sessionmaker(bind=cls.engine, expire_on_commit=False)
 
     def setUp(self):

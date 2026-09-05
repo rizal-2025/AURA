@@ -291,9 +291,10 @@ class ReservationService:
         require_owner_customer_id(owner_customer_id)
         new_value = validate_reservation_field(field_name, new_value)
         try:
-            with UnitOfWork(db) as unit:
-                current = None
-                if field_name in {"date", "time"}:
+            if field_name in {"date", "time"}:
+                # Finish the read/validation transaction before the callback:
+                # workflow persistence owns a separate durable marker commit.
+                with UnitOfWork(db) as unit:
                     current = self.repository.get_active_by_public_reference(
                         db,
                         public_reference,
@@ -310,22 +311,25 @@ class ReservationService:
                             candidate_date,
                             candidate_time,
                         )
+                    unit.commit()
+                if current is None:
+                    return None
 
-                if field_name in {"date", "time"} and current is None:
-                    result = None
-                else:
-                    if before_mutation is not None:
-                        before_mutation()
-                    persisted = (
-                        self.repository.update_reservation_field_by_public_reference(
-                            db,
-                            public_reference,
-                            field_name,
-                            new_value,
-                            owner_customer_id,
-                        )
+            # Like create, persist the recovery marker before opening the
+            # mutation UoW. It must survive a later rollback or process loss.
+            if before_mutation is not None:
+                before_mutation()
+            with UnitOfWork(db) as unit:
+                persisted = (
+                    self.repository.update_reservation_field_by_public_reference(
+                        db,
+                        public_reference,
+                        field_name,
+                        new_value,
+                        owner_customer_id,
                     )
-                    result = self._dto(persisted)
+                )
+                result = self._dto(persisted)
                 unit.commit()
             return result
         except PersistenceOperationError as error:
