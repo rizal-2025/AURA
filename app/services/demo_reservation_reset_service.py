@@ -9,6 +9,7 @@ from app.core.conversation_lock_manager import (
     ConversationBusyError,
     ConversationLockManager,
 )
+from app.core.conversation_memory import build_authenticated_memory_key
 from app.core.transaction_errors import (
     PersistenceOperationError,
     PersistenceOutcomeUnknownError,
@@ -76,8 +77,11 @@ class DemoReservationResetService:
         return validate_utc_datetime(self.clock())
 
     @staticmethod
-    def _memory_key(demo_session_id: int) -> str:
-        return f"demo-session-{demo_session_id}"
+    def _memory_key(owner_customer_id, demo_session_id: int) -> str:
+        return build_authenticated_memory_key(
+            owner_customer_id,
+            f"demo-session-{demo_session_id}",
+        )
 
     @classmethod
     def _process_lock_key(cls, demo_session_id: int) -> str:
@@ -200,7 +204,7 @@ class DemoReservationResetService:
             if session is not None and owner is not None:
                 workflow_hash = (
                     ConversationWorkflowStateService.hash_session_reference(
-                        self._memory_key(expected_session_id)
+                        self._memory_key(owner.id, expected_session_id)
                     )
                 )
                 self.messages.delete_by_demo_session(

@@ -8,7 +8,10 @@ from uuid import uuid4
 from sqlalchemy import create_engine, event, func, select
 from sqlalchemy.orm import sessionmaker
 
+from app.agents.reservation_agent import ReservationAgent
+from app.brain.memory_manager import MemoryManager
 from app.core.conversation_lock_manager import ConversationLockManager
+from app.core.conversation_memory import build_authenticated_memory_key
 from app.db.models.conversation_workflow_state import (
     ConversationWorkflowState,
 )
@@ -208,7 +211,10 @@ class DemoReservationResetServiceTests(unittest.TestCase):
                 owner_customer_id=self.owner_a.id,
                 session_reference_hash=(
                     ConversationWorkflowStateService.hash_session_reference(
-                        f"demo-session-{self.session_a.id}"
+                        build_authenticated_memory_key(
+                            self.owner_a.id,
+                            f"demo-session-{self.session_a.id}",
+                        )
                     )
                 ),
                 schema_version=1,
@@ -463,6 +469,143 @@ class DemoReservationResetServiceTests(unittest.TestCase):
         self.assertEqual(remaining_scopes, {"session", "ip", "global"})
         self.assertEqual(len(lock.acquired), 2)
         self.assertEqual(len(lock.released), 2)
+
+    def test_reset_clears_real_workflow_scope_before_exact_follow_up(self):
+        session_id_before = self.session_a.id
+        memory_key = build_authenticated_memory_key(
+            self.owner_a.id,
+            f"demo-session-{session_id_before}",
+        )
+        self.db.add(
+            ConversationWorkflowState(
+                owner_customer_id=self.owner_a.id,
+                session_reference_hash=(
+                    ConversationWorkflowStateService.hash_session_reference(
+                        memory_key
+                    )
+                ),
+                schema_version=2,
+                payload={
+                    "intent": "reservation",
+                    "name": "Fadli",
+                    "people": 7,
+                    "date": "2026-09-05",
+                    "time": "08:00",
+                    "completed": False,
+                    "awaiting_confirmation": True,
+                    "editing_field": None,
+                    "asked_fields": ["name", "people", "date", "time"],
+                },
+                is_active=True,
+                revision=1,
+                created_at=self.now,
+                updated_at=self.now,
+            )
+        )
+        self.db.commit()
+
+        result = asyncio.run(
+            self.service().reset(self.db, raw_session_token=TOKEN_A)
+        )
+
+        retained_session = self._session(TOKEN_A)
+        self.assertEqual(retained_session.id, session_id_before)
+        self.assertEqual(result.session.message_count, 0)
+        memory = MemoryManager()
+        workflow = ConversationWorkflowStateService(memory)
+        outcome = workflow.restore(
+            self.db,
+            owner_customer_id=self.owner_a.id,
+            memory_key=memory_key,
+        )
+        self.assertEqual(outcome.value, "empty")
+
+        agent = ReservationAgent(memory_manager=memory, clock=lambda: self.now)
+        follow_up = asyncio.run(
+            agent.run(
+                [{"action": "collect_missing_fields"}],
+                memory.get_session(memory_key),
+                "Hai, aku mau reservasi atas nama Dani 5 orang",
+                session_id=memory_key,
+                owner_customer_id=self.owner_a.id,
+                db=self.db,
+            )
+        )
+        state = memory.get_session(memory_key)
+        self.assertEqual(state["name"], "Dani")
+        self.assertEqual(state["people"], 5)
+        self.assertIsNone(state["date"])
+        self.assertIsNone(state["time"])
+        self.assertEqual(follow_up["next_action"], "ask_date")
+        self.assertEqual(follow_up["field"], "date")
+        self.assertIn("tanggal", follow_up["response"].lower())
+        self.assertNotEqual(follow_up["status"], "awaiting_confirmation")
+        for stale_value in ("7 orang", "5 September 2026", "08.00"):
+            self.assertNotIn(stale_value, follow_up["response"])
+
+    def test_new_demo_session_cannot_restore_another_session_draft(self):
+        session_a_key = build_authenticated_memory_key(
+            self.owner_a.id,
+            f"demo-session-{self.session_a.id}",
+        )
+        self.db.add(
+            ConversationWorkflowState(
+                owner_customer_id=self.owner_a.id,
+                session_reference_hash=(
+                    ConversationWorkflowStateService.hash_session_reference(
+                        session_a_key
+                    )
+                ),
+                schema_version=2,
+                payload={
+                    "intent": "reservation",
+                    "name": "Fadli",
+                    "people": 7,
+                    "date": "2026-09-05",
+                    "time": "08:00",
+                    "completed": False,
+                    "awaiting_confirmation": True,
+                    "editing_field": None,
+                    "asked_fields": ["name", "people", "date", "time"],
+                },
+                is_active=True,
+                revision=1,
+                created_at=self.now,
+                updated_at=self.now,
+            )
+        )
+        self.db.commit()
+
+        session_b_key = build_authenticated_memory_key(
+            self.owner_b.id,
+            f"demo-session-{self.session_b.id}",
+        )
+        memory = MemoryManager()
+        workflow = ConversationWorkflowStateService(memory)
+        outcome = workflow.restore(
+            self.db,
+            owner_customer_id=self.owner_b.id,
+            memory_key=session_b_key,
+        )
+        self.assertEqual(outcome.value, "empty")
+
+        agent = ReservationAgent(memory_manager=memory, clock=lambda: self.now)
+        follow_up = asyncio.run(
+            agent.run(
+                [{"action": "collect_missing_fields"}],
+                memory.get_session(session_b_key),
+                "Reservasi atas nama Dani 5 orang",
+                session_id=session_b_key,
+                owner_customer_id=self.owner_b.id,
+                db=self.db,
+            )
+        )
+        state = memory.get_session(session_b_key)
+        self.assertEqual(state["name"], "Dani")
+        self.assertEqual(state["people"], 5)
+        self.assertIsNone(state["date"])
+        self.assertIsNone(state["time"])
+        self.assertEqual(follow_up["next_action"], "ask_date")
 
     def test_reset_failure_rolls_back_every_delete(self):
         self.seed_reset_data()

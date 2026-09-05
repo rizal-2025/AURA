@@ -1,8 +1,10 @@
 """Reference-only direct reservation API against guarded PostgreSQL."""
 
 import os
+from datetime import datetime, timezone
 from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 from uuid import uuid4
 
 from fastapi.testclient import TestClient
@@ -11,6 +13,7 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.orm import sessionmaker
 
 from app.api.dependencies import get_current_customer
+from app.api import reservation as reservation_api
 from app.core.customer_identity import AuthenticatedCustomer
 from app.db.database import get_db
 from app.db.models.customer import Customer
@@ -35,6 +38,7 @@ def _skip_reason():
 
 
 SKIP_REASON = _skip_reason()
+FROZEN_NOW = datetime(2026, 8, 1, 12, 0, tzinfo=timezone.utc)
 
 
 @unittest.skipIf(SKIP_REASON is not None, SKIP_REASON or "")
@@ -70,6 +74,13 @@ class PublicReservationAPIPostgreSQLTests(unittest.TestCase):
         cls.Session = sessionmaker(bind=cls.engine, expire_on_commit=False)
 
     def setUp(self):
+        self.clock_patch = patch.object(
+            reservation_api.service,
+            "clock",
+            lambda: FROZEN_NOW,
+        )
+        self.clock_patch.start()
+        self.addCleanup(self.clock_patch.stop)
         with self.Session() as db:
             db.execute(text(f'TRUNCATE TABLE "{self.schema}"."reservations" CASCADE'))
             db.execute(text(f'TRUNCATE TABLE "{self.schema}"."customers" CASCADE'))

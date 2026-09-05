@@ -20,6 +20,7 @@ _NAME_FIELD_TRANSITION = re.compile(
     r"\s*(?:,\s*|\s+)(?="
     r"(?:"
     r"untuk|tanggal|pada\s+tanggal|"
+    r"[0-9]+\s+(?:orang|people|persons|guests)|"
     r"hari\s+(?:ini|senin|selasa|rabu|kamis|jumat|sabtu|minggu)|"
     r"besok|lusa|jam|pukul|waktu|jumlah\s+orang|"
     r"for|on|date|time|people|party\s+size"

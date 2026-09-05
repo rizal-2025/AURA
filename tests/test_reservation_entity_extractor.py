@@ -210,6 +210,21 @@ class TestReservationEntityExtractor(unittest.TestCase):
         self.assertEqual(result["name"], "Rizal")
         self.assertEqual(result["people"], 4)
 
+    def test_name_before_direct_party_size_does_not_overlap(self):
+        extractor = ReservationEntityExtractor()
+        cases = (
+            ("Atas nama Dani 5 orang", "Dani"),
+            ("Atas nama Dani untuk 5 orang", "Dani"),
+            ("Atas nama Dani, 5 orang", "Dani"),
+            ("Atas nama Dani Saputra 5 orang", "Dani Saputra"),
+        )
+
+        for message, expected_name in cases:
+            with self.subTest(message=message):
+                result = asyncio.run(extractor.extract(message))
+                self.assertEqual(result["name"], expected_name)
+                self.assertEqual(result["people"], 5)
+
     def test_multiword_name_before_date_and_time_clause(self):
         extractor = ReservationEntityExtractor()
         result = asyncio.run(

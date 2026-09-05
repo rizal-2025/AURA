@@ -28,6 +28,7 @@ from app.api.internal_demo_reservation_reset import (
 )
 from app.core.config import get_demo_settings
 from app.core.conversation_lock_manager import ConversationLockManager
+from app.core.conversation_memory import build_authenticated_memory_key
 from app.db.database import get_db
 from app.db.models.conversation_workflow_state import (
     ConversationWorkflowState,
@@ -442,7 +443,9 @@ class DemoReservationResetPostgreSQLTests(unittest.TestCase):
     def seed_owner_data(self, db, token, *, other=False):
         session = self.session_row(db, token)
         owner = db.get(Customer, session.owner_customer_id)
-        reservation = ReservationService().create_reservation(
+        reservation = ReservationService(
+            clock=lambda: self.now
+        ).create_reservation(
             db,
             ReservationCreate(
                 name="Other" if other else "Rizal",
@@ -498,7 +501,10 @@ class DemoReservationResetPostgreSQLTests(unittest.TestCase):
                     owner_customer_id=owner.id,
                     session_reference_hash=(
                         ConversationWorkflowStateService.hash_session_reference(
-                            f"demo-session-{session.id}"
+                            build_authenticated_memory_key(
+                                owner.id,
+                                f"demo-session-{session.id}",
+                            )
                         )
                     ),
                     schema_version=1,
@@ -672,6 +678,17 @@ class DemoReservationResetPostgreSQLTests(unittest.TestCase):
                 ),
                 1,
             )
+            self.assertEqual(
+                db.scalar(
+                    select(func.count())
+                    .select_from(ConversationWorkflowState)
+                    .where(
+                        ConversationWorkflowState.owner_customer_id
+                        == owner_a_id
+                    )
+                ),
+                1,
+            )
 
             first = asyncio.run(
                 self.service().reset(db, raw_session_token=TOKEN_A)
@@ -717,6 +734,17 @@ class DemoReservationResetPostgreSQLTests(unittest.TestCase):
             self.assertEqual(
                 db.scalar(
                     select(func.count())
+                    .select_from(ConversationWorkflowState)
+                    .where(
+                        ConversationWorkflowState.owner_customer_id
+                        == owner_a_id
+                    )
+                ),
+                0,
+            )
+            self.assertEqual(
+                db.scalar(
+                    select(func.count())
                     .select_from(DemoChatMessage)
                     .where(DemoChatMessage.demo_session_id == session_b_id)
                 ),
@@ -738,6 +766,17 @@ class DemoReservationResetPostgreSQLTests(unittest.TestCase):
                     select(func.count())
                     .select_from(Reservation)
                     .where(Reservation.owner_customer_id == owner_b_id)
+                ),
+                1,
+            )
+            self.assertEqual(
+                db.scalar(
+                    select(func.count())
+                    .select_from(ConversationWorkflowState)
+                    .where(
+                        ConversationWorkflowState.owner_customer_id
+                        == owner_b_id
+                    )
                 ),
                 1,
             )
