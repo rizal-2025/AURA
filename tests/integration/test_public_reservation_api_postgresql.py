@@ -38,7 +38,7 @@ def _skip_reason():
 
 
 SKIP_REASON = _skip_reason()
-FROZEN_NOW = datetime(2026, 8, 1, 12, 0, tzinfo=timezone.utc)
+FROZEN_NOW = datetime(2026, 9, 5, 5, 53, tzinfo=timezone.utc)
 
 
 @unittest.skipIf(SKIP_REASON is not None, SKIP_REASON or "")
@@ -124,8 +124,8 @@ class PublicReservationAPIPostgreSQLTests(unittest.TestCase):
         return {
             "name": name,
             "people": 2,
-            "date": "2026-08-18",
-            "time": "19:00",
+            "date": "2026-09-05",
+            "time": "12:57",
         }
 
     def assert_reference_only(self, response, *, database_id):
@@ -176,6 +176,83 @@ class PublicReservationAPIPostgreSQLTests(unittest.TestCase):
         missing = self.client.get("/reservation/RSV_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee")
         self.assertEqual(cross_owner.status_code, 404)
         self.assertEqual(cross_owner.json(), missing.json())
+
+    def test_past_date_update_is_rejected_without_changing_the_row(self):
+        created = self.client.post(
+            "/reservation/",
+            json=self.body("Sherly"),
+        )
+        self.assertEqual(created.status_code, 200)
+        reference = created.json()["reference"]
+
+        rejected = self.client.patch(
+            f"/reservation/{reference}",
+            json={"date": "2025-07-12"},
+        )
+
+        self.assertEqual(rejected.status_code, 422)
+        self.assertEqual(rejected.json()["code"], "PAST_RESERVATION_DATE")
+        with self.Session() as db:
+            row = db.scalar(
+                select(Reservation).where(
+                    Reservation.public_reference == reference
+                )
+            )
+            self.assertEqual(
+                (row.name, row.people, row.date, row.time),
+                ("Sherly", 2, "2026-09-05", "12:57"),
+            )
+
+    def test_future_date_update_preserves_existing_time(self):
+        created = self.client.post(
+            "/reservation/",
+            json=self.body("Sherly"),
+        )
+        self.assertEqual(created.status_code, 200)
+        reference = created.json()["reference"]
+
+        updated = self.client.patch(
+            f"/reservation/{reference}",
+            json={"date": "2026-09-06"},
+        )
+
+        self.assertEqual(updated.status_code, 200)
+        self.assertEqual(updated.json()["date"], "2026-09-06")
+        self.assertEqual(updated.json()["time"], "12:57")
+        with self.Session() as db:
+            row = db.scalar(
+                select(Reservation).where(
+                    Reservation.public_reference == reference
+                )
+            )
+            self.assertEqual(row.date, "2026-09-06")
+            self.assertEqual(row.time, "12:57")
+
+    def test_same_day_past_time_update_is_rejected_without_changing_the_row(self):
+        created = self.client.post(
+            "/reservation/",
+            json=self.body("Sherly"),
+        )
+        self.assertEqual(created.status_code, 200)
+        reference = created.json()["reference"]
+
+        rejected = self.client.patch(
+            f"/reservation/{reference}",
+            json={"time": "12:30"},
+        )
+
+        self.assertEqual(rejected.status_code, 422)
+        self.assertEqual(rejected.json()["code"], "PAST_RESERVATION_TIME")
+        with self.Session() as db:
+            row = db.scalar(
+                select(Reservation).where(
+                    Reservation.public_reference == reference
+                )
+            )
+            self.assertEqual(
+                (row.name, row.people, row.date, row.time),
+                ("Sherly", 2, "2026-09-05", "12:57"),
+            )
 
 
 if __name__ == "__main__":

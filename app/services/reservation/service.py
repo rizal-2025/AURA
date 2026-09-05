@@ -8,6 +8,7 @@ from app.core.input_validation import (
     validate_reservation_date,
     validate_reservation_field,
 )
+from app.core.transaction_errors import PersistenceOperationError
 from app.db.repositories.reservation_repository import ReservationRepository
 from app.schemas.reservation import ReservationCreate
 from app.core.unit_of_work import UnitOfWork
@@ -284,22 +285,56 @@ class ReservationService:
         field_name: str,
         new_value,
         owner_customer_id,
+        *,
+        before_mutation: Callable[[], None] | None = None,
     ):
         require_owner_customer_id(owner_customer_id)
         new_value = validate_reservation_field(field_name, new_value)
-        with UnitOfWork(db) as unit:
-            persisted = (
-                self.repository.update_reservation_field_by_public_reference(
-                    db,
-                    public_reference,
-                    field_name,
-                    new_value,
-                    owner_customer_id,
-                )
-            )
-            result = self._dto(persisted)
-            unit.commit()
-        return result
+        try:
+            with UnitOfWork(db) as unit:
+                current = None
+                if field_name in {"date", "time"}:
+                    current = self.repository.get_active_by_public_reference(
+                        db,
+                        public_reference,
+                        owner_customer_id,
+                    )
+                    if current is not None:
+                        candidate_date = (
+                            new_value if field_name == "date" else current.date
+                        )
+                        candidate_time = (
+                            new_value if field_name == "time" else current.time
+                        )
+                        self.validate_new_reservation_datetime(
+                            candidate_date,
+                            candidate_time,
+                        )
+
+                if field_name in {"date", "time"} and current is None:
+                    result = None
+                else:
+                    if before_mutation is not None:
+                        before_mutation()
+                    persisted = (
+                        self.repository.update_reservation_field_by_public_reference(
+                            db,
+                            public_reference,
+                            field_name,
+                            new_value,
+                            owner_customer_id,
+                        )
+                    )
+                    result = self._dto(persisted)
+                unit.commit()
+            return result
+        except PersistenceOperationError as error:
+            if isinstance(
+                error.__cause__,
+                (PastReservationDateError, PastReservationTimeError),
+            ):
+                raise error.__cause__ from None
+            raise
 
     def cancel_reservation_by_reference(
         self,

@@ -1,5 +1,6 @@
 import asyncio
 import unittest
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -13,9 +14,11 @@ from app.brain.reservation_workflow_snapshot import (
 )
 from app.db.models.reservation import Reservation
 from app.db.repositories.reservation_repository import ReservationRepository
+from app.services.reservation.service import ReservationService
 
 
 SEEDED_UPDATE_RESERVATION_ID = (2**30) + 104_773
+FROZEN_UPDATE_NOW = datetime(2026, 9, 5, 5, 53, tzinfo=timezone.utc)
 
 
 def reference_for(index: int) -> str:
@@ -101,6 +104,72 @@ class FakeReservationService:
         return reservation
 
 
+class InMemoryUpdateRepository:
+    def __init__(self):
+        self.owner_customer_id = "update-domain-owner"
+        self.row = SimpleNamespace(
+            id=7,
+            public_reference=reference_for(7),
+            owner_customer_id=self.owner_customer_id,
+            name="Sherly",
+            people=2,
+            date="2026-09-05",
+            time="12:57",
+            status="pending",
+        )
+        self.update_calls = []
+
+    def list_recent(self, _db, *, owner_customer_id, limit):
+        if owner_customer_id != self.owner_customer_id:
+            return []
+        return [self.row][:limit]
+
+    def get_by_public_reference(
+        self,
+        _db,
+        public_reference,
+        owner_customer_id,
+    ):
+        if (
+            public_reference != self.row.public_reference
+            or owner_customer_id != self.owner_customer_id
+        ):
+            return None
+        return self.row
+
+    def get_active_by_public_reference(
+        self,
+        db,
+        public_reference,
+        owner_customer_id,
+    ):
+        row = self.get_by_public_reference(
+            db,
+            public_reference,
+            owner_customer_id,
+        )
+        return row if row is not None and row.status != "cancelled" else None
+
+    def update_reservation_field_by_public_reference(
+        self,
+        db,
+        public_reference,
+        field_name,
+        new_value,
+        owner_customer_id,
+    ):
+        row = self.get_active_by_public_reference(
+            db,
+            public_reference,
+            owner_customer_id,
+        )
+        if row is None:
+            return None
+        setattr(row, field_name, new_value)
+        self.update_calls.append((field_name, new_value))
+        return row
+
+
 class FakeUpdateQuery:
     def __init__(self, reservation):
         self.reservation = reservation
@@ -146,6 +215,48 @@ class TestUpdateReservation(unittest.TestCase):
     def _start_and_select_reservation(self, reservation_reference=None):
         self._send("ubah reservasi saya")
         return self._send(reservation_reference or reference_for(2))
+
+    def _domain_update_flow(self, field_name, new_value, *, workflow=None):
+        memory = MemoryManager()
+        repository = InMemoryUpdateRepository()
+        service = ReservationService(
+            repository=repository,
+            clock=lambda: FROZEN_UPDATE_NOW,
+        )
+        agent = UpdateReservationAgent(
+            memory_manager=memory,
+            reservation_service=service,
+            workflow_state_service=workflow,
+            clock=lambda: FROZEN_UPDATE_NOW,
+        )
+        db = MagicMock()
+        session_id = "update-domain-session"
+
+        def send(message):
+            return asyncio.run(
+                agent.run(
+                    db,
+                    session_id,
+                    message,
+                    repository.owner_customer_id,
+                )
+            )
+
+        send("ubah reservasi saya")
+        state = memory.get_session(session_id)
+        if (
+            state["update_reservation_stage"]
+            == UpdateReservationAgent.SELECT_RESERVATION_REFERENCE
+        ):
+            send(repository.row.public_reference)
+        if (
+            state["update_reservation_stage"]
+            == UpdateReservationAgent.CONFIRM_RESERVATION_SELECTION
+        ):
+            send("ya")
+        send(field_name)
+        result = send(new_value)
+        return result, memory.get_session(session_id), repository, db
 
     def test_successful_update(self):
         self._start_and_select_reservation()
@@ -512,6 +623,93 @@ class TestUpdateReservation(unittest.TestCase):
             (reference_for(2), "time", "20:00", self.service.OWNER_ID),
         )
         self.assertIn("Waktu: 20.00", result["response"])
+
+    def test_screenshot_past_date_update_is_rejected_and_recoverable(self):
+        workflow = MagicMock()
+        with patch(
+            "app.agents.update_reservation_agent.publish_update_success"
+        ) as publish_success:
+            result, state, repository, _db = self._domain_update_flow(
+                "date",
+                "12 juli 2025",
+                workflow=workflow,
+            )
+
+        self.assertEqual(result["status"], "awaiting_update")
+        self.assertEqual(
+            result["response"],
+            "Tanggal reservasi tersebut sudah lewat. Silakan pilih tanggal "
+            "hari ini atau tanggal setelahnya.",
+        )
+        self.assertTrue(result["invalid_input"])
+        self.assertNotIn("reservation_operation", result)
+        self.assertEqual(state["editing_field"], "date")
+        self.assertEqual(
+            state["update_reservation_stage"],
+            UpdateReservationAgent.INPUT_VALUE,
+        )
+        self.assertEqual(
+            (
+                repository.row.name,
+                repository.row.people,
+                repository.row.date,
+                repository.row.time,
+            ),
+            ("Sherly", 2, "2026-09-05", "12:57"),
+        )
+        self.assertEqual(repository.update_calls, [])
+        workflow.begin_mutation.assert_not_called()
+        publish_success.assert_not_called()
+
+    def test_future_date_update_preserves_time(self):
+        result, _state, repository, _db = self._domain_update_flow(
+            "date",
+            "6 September 2026",
+        )
+
+        self.assertEqual(result["status"], "updated")
+        self.assertEqual(repository.row.date, "2026-09-06")
+        self.assertEqual(repository.row.time, "12:57")
+        self.assertEqual(repository.row.name, "Sherly")
+        self.assertEqual(repository.row.people, 2)
+
+    def test_same_day_past_time_update_is_rejected(self):
+        result, state, repository, _db = self._domain_update_flow(
+            "time",
+            "12:30",
+        )
+
+        self.assertEqual(result["status"], "awaiting_update")
+        self.assertEqual(
+            result["response"],
+            "Jam reservasi tersebut sudah lewat. Silakan pilih jam setelah "
+            "waktu sekarang.",
+        )
+        self.assertEqual(state["editing_field"], "time")
+        self.assertEqual(repository.row.date, "2026-09-05")
+        self.assertEqual(repository.row.time, "12:57")
+        self.assertEqual(repository.update_calls, [])
+
+    def test_valid_future_time_update_preserves_date(self):
+        result, _state, repository, _db = self._domain_update_flow(
+            "time",
+            "13:30",
+        )
+
+        self.assertEqual(result["status"], "updated")
+        self.assertEqual(repository.row.date, "2026-09-05")
+        self.assertEqual(repository.row.time, "13:30")
+        self.assertEqual(repository.row.name, "Sherly")
+        self.assertEqual(repository.row.people, 2)
+
+    def test_date_target_does_not_extract_or_mutate_time(self):
+        self.assertEqual(
+            self.agent._parse_new_value("date", "12 juli 2025"),
+            "2025-07-12",
+        )
+        self.assertIsNone(
+            self.agent._parse_new_value("time", "12 juli 2025")
+        )
 
     def test_repository_updates_allowed_field_and_rejects_invalid_field(self):
         reservation = SimpleNamespace(

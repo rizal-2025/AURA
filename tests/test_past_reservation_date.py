@@ -17,6 +17,7 @@ from app.services.reservation.service import ReservationService
 
 FROZEN_NOW = datetime(2026, 9, 5, 5, 0, tzinfo=timezone.utc)
 FROZEN_TIME_NOW = datetime(2026, 9, 5, 1, 24, tzinfo=timezone.utc)
+FROZEN_UPDATE_NOW = datetime(2026, 9, 5, 5, 53, tzinfo=timezone.utc)
 OWNER_ID = uuid4()
 REFERENCE = "RSV_90909090909090909090909090909090"
 
@@ -413,6 +414,120 @@ class ReservationTimeDomainTests(unittest.TestCase):
         db.add.assert_not_called()
         db.flush.assert_not_called()
         db.commit.assert_not_called()
+
+
+class ReservationUpdateDomainTests(unittest.TestCase):
+    def setUp(self):
+        self.row = SimpleNamespace(
+            id=1,
+            name="Sherly",
+            people=2,
+            date="2026-09-05",
+            time="12:57",
+            status="pending",
+            public_reference=REFERENCE,
+        )
+        self.repository = MagicMock()
+        self.repository.get_active_by_public_reference.return_value = self.row
+
+        def persist(_db, _reference, field_name, new_value, _owner):
+            setattr(self.row, field_name, new_value)
+            return self.row
+
+        self.repository.update_reservation_field_by_public_reference.side_effect = (
+            persist
+        )
+        self.db = MagicMock()
+        self.service = ReservationService(
+            repository=self.repository,
+            clock=lambda: FROZEN_UPDATE_NOW,
+        )
+
+    def update(self, field_name, new_value, *, before_mutation=None):
+        return self.service.update_reservation_field_by_reference(
+            self.db,
+            REFERENCE,
+            field_name,
+            new_value,
+            owner_customer_id=OWNER_ID,
+            before_mutation=before_mutation,
+        )
+
+    def test_direct_past_date_update_is_rejected_before_every_mutation_boundary(self):
+        before_mutation = MagicMock()
+
+        with self.assertRaises(PastReservationDateError):
+            self.update(
+                "date",
+                "2025-07-12",
+                before_mutation=before_mutation,
+            )
+
+        self.assertEqual(
+            (self.row.name, self.row.people, self.row.date, self.row.time),
+            ("Sherly", 2, "2026-09-05", "12:57"),
+        )
+        before_mutation.assert_not_called()
+        self.repository.update_reservation_field_by_public_reference.assert_not_called()
+        self.db.flush.assert_not_called()
+        self.db.commit.assert_not_called()
+
+    def test_direct_same_day_past_time_update_is_rejected_without_mutation(self):
+        before_mutation = MagicMock()
+
+        with self.assertRaises(PastReservationTimeError):
+            self.update(
+                "time",
+                "12:30",
+                before_mutation=before_mutation,
+            )
+
+        self.assertEqual(self.row.date, "2026-09-05")
+        self.assertEqual(self.row.time, "12:57")
+        before_mutation.assert_not_called()
+        self.repository.update_reservation_field_by_public_reference.assert_not_called()
+        self.db.flush.assert_not_called()
+        self.db.commit.assert_not_called()
+
+    def test_valid_future_date_update_preserves_time(self):
+        before_mutation = MagicMock()
+
+        result = self.update(
+            "date",
+            "2026-09-06",
+            before_mutation=before_mutation,
+        )
+
+        self.assertEqual(result.date, "2026-09-06")
+        self.assertEqual(result.time, "12:57")
+        self.assertEqual(result.name, "Sherly")
+        self.assertEqual(result.people, 2)
+        before_mutation.assert_called_once_with()
+        self.repository.update_reservation_field_by_public_reference.assert_called_once()
+
+    def test_valid_future_time_update_preserves_other_fields(self):
+        result = self.update("time", "13:30")
+
+        self.assertEqual(
+            (result.name, result.people, result.date, result.time),
+            ("Sherly", 2, "2026-09-05", "13:30"),
+        )
+
+    def test_single_field_update_preservation_matrix(self):
+        cases = (
+            ("name", "Sheryl", ("Sheryl", 2, "2026-09-05", "12:57")),
+            ("people", 4, ("Sherly", 4, "2026-09-05", "12:57")),
+            ("date", "2026-09-06", ("Sherly", 2, "2026-09-06", "12:57")),
+            ("time", "13:30", ("Sherly", 2, "2026-09-05", "13:30")),
+        )
+        for field_name, new_value, expected in cases:
+            with self.subTest(field=field_name):
+                self.setUp()
+                result = self.update(field_name, new_value)
+                self.assertEqual(
+                    (result.name, result.people, result.date, result.time),
+                    expected,
+                )
 
 
 class ReservationTimeWorkflowTests(unittest.TestCase):

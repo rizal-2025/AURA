@@ -37,6 +37,10 @@ from app.core.transaction_errors import (
 )
 from app.services.reservation.service import ReservationService
 from app.services.reservation.dto import ReservationSelectionPage
+from app.services.reservation.errors import (
+    PastReservationDateError,
+    PastReservationTimeError,
+)
 from app.services.reservation.public_reference import (
     PublicReservationReferenceUnavailableError,
     require_canonical_public_reference,
@@ -75,7 +79,9 @@ class UpdateReservationAgent:
         clock: Callable[[], datetime] | None = None,
     ):
         self.memory_manager = memory_manager or MemoryManager()
-        self.reservation_service = reservation_service or ReservationService()
+        self.reservation_service = reservation_service or ReservationService(
+            clock=clock
+        )
         self.workflow_state_service = workflow_state_service
         self.clock = clock
 
@@ -433,13 +439,17 @@ class UpdateReservationAgent:
         if current_reservation is None:
             return self._restart_after_stale(db, session, owner_customer_id)
 
+        update_kwargs = {"owner_customer_id": owner_customer_id}
         if self.workflow_state_service is not None:
-            self.workflow_state_service.begin_mutation(
-                db,
-                owner_customer_id=owner_customer_id,
-                memory_key=session_id,
-                operation="update",
-            )
+            def mark_mutation() -> None:
+                self.workflow_state_service.begin_mutation(
+                    db,
+                    owner_customer_id=owner_customer_id,
+                    memory_key=session_id,
+                    operation="update",
+                )
+
+            update_kwargs["before_mutation"] = mark_mutation
         try:
             updated_reservation = (
                 self.reservation_service.update_reservation_field_by_reference(
@@ -447,9 +457,21 @@ class UpdateReservationAgent:
                     reservation_reference,
                     field_name,
                     new_value,
-                    owner_customer_id=owner_customer_id,
+                    **update_kwargs,
                 )
             )
+        except PastReservationDateError:
+            return {
+                "status": "awaiting_update",
+                "response": tr("past_reservation_date"),
+                "invalid_input": True,
+            }
+        except PastReservationTimeError:
+            return {
+                "status": "awaiting_update",
+                "response": tr("past_reservation_time"),
+                "invalid_input": True,
+            }
         except PublicReservationReferenceUnavailableError:
             self.memory_manager.replace_conversation(session_id, snapshot)
             return {
