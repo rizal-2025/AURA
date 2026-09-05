@@ -48,6 +48,7 @@ from app.services.demo_chat_errors import (
 from app.services.demo_rate_limit_service import DemoRateLimitExceededError
 from app.services.reservation.errors import (
     PastReservationDateError,
+    PastReservationTimeError,
     PublicReservationContractError,
     ReservationNotFoundError,
     ReservationReferenceRequestError,
@@ -65,6 +66,11 @@ _PUBLIC_RESERVATION_DETAILS = {
         422,
         "PAST_RESERVATION_DATE",
         "That reservation date has already passed. Please choose today or a future date.",
+    ),
+    PastReservationTimeError: (
+        422,
+        "PAST_RESERVATION_TIME",
+        "That reservation time has already passed. Please choose a later time.",
     ),
     ReservationReferenceRequestError: (
         422,
@@ -241,6 +247,7 @@ async def public_reservation_exception_handler(
     _request: Request,
     error: (
         PastReservationDateError
+        | PastReservationTimeError
         | ReservationReferenceRequestError
         | ReservationNotFoundError
         | PublicReservationContractError

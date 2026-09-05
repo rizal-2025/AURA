@@ -27,3 +27,10 @@ class PastReservationDateError(ValueError):
 
     def __init__(self) -> None:
         super().__init__(self.code)
+
+
+class PastReservationTimeError(ValueError):
+    code = "PAST_RESERVATION_TIME"
+
+    def __init__(self) -> None:
+        super().__init__(self.code)

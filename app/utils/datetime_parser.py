@@ -69,16 +69,25 @@ NUMBER_MINUTES = {
 JAKARTA_TIMEZONE = ZoneInfo("Asia/Jakarta")
 
 
+def current_local_datetime(
+    *,
+    clock: Callable[[], datetime] | None = None,
+) -> datetime:
+    """Return the authoritative application time in Jakarta."""
+
+    now = clock() if clock is not None else datetime.now(JAKARTA_TIMEZONE)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=JAKARTA_TIMEZONE)
+    return now.astimezone(JAKARTA_TIMEZONE)
+
+
 def current_local_date(
     *,
     clock: Callable[[], datetime] | None = None,
 ) -> date:
     """Return the authoritative application calendar date in Jakarta."""
 
-    now = clock() if clock is not None else datetime.now(JAKARTA_TIMEZONE)
-    if now.tzinfo is None:
-        now = now.replace(tzinfo=JAKARTA_TIMEZONE)
-    return now.astimezone(JAKARTA_TIMEZONE).date()
+    return current_local_datetime(clock=clock).date()
 
 
 class DatetimeParser:
@@ -226,6 +235,21 @@ class DatetimeParser:
             base_hour = 11 if stated_hour == 12 else stated_hour - 1
             converted = DatetimeParser._qualify_hour(base_hour, qualifier)
             return f"{converted:02d}:30" if converted is not None else None
+
+        bare_qualified_match = re.search(
+            rf"(?<![0-9])({half_pattern}|[0-9]{{1,2}})\s+"
+            r"(pagi|siang|sore|malam)\b",
+            normalized,
+        )
+        if bare_qualified_match:
+            hour = DatetimeParser._hour_value(bare_qualified_match.group(1))
+            if hour is None:
+                return None
+            converted = DatetimeParser._qualify_hour(
+                hour,
+                bare_qualified_match.group(2),
+            )
+            return f"{converted:02d}:00" if converted is not None else None
 
         clock_match = re.search(
             rf"\b(?:jam(?:nya)?|pukul)\s+(?:jadi\s+)?({half_pattern}|[0-9]{{1,2}})\b",

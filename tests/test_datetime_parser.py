@@ -44,6 +44,33 @@ class TestDatetimeParser(unittest.TestCase):
     def test_time_12_malam(self):
         self.assertEqual(DatetimeParser.parse_time("jam 12 malam"), "00:00")
 
+    def test_qualified_times_do_not_require_clock_prefix(self):
+        for value, expected in (
+            ("8 pagi", "08:00"),
+            ("10 pagi", "10:00"),
+            ("jam 8 pagi", "08:00"),
+            ("jam 10 pagi", "10:00"),
+            ("2 siang", "14:00"),
+            ("3 sore", "15:00"),
+            ("7 malam", "19:00"),
+            ("12 siang", "12:00"),
+            ("12 malam", "00:00"),
+        ):
+            with self.subTest(value=value):
+                self.assertEqual(DatetimeParser.parse_time(value), expected)
+
+    def test_existing_explicit_and_ambiguous_boundaries_remain(self):
+        for value, expected in (
+            ("08:00", "08:00"),
+            ("8:00", "08:00"),
+            ("8.00", "08:00"),
+            ("00:00", "00:00"),
+        ):
+            with self.subTest(value=value):
+                self.assertEqual(DatetimeParser.parse_time(value), expected)
+        self.assertIsNone(DatetimeParser.parse_time("24:00"))
+        self.assertIsNone(DatetimeParser.parse_time("jam 8"))
+
 
 if __name__ == "__main__":
     unittest.main()

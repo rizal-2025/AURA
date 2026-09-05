@@ -13,7 +13,10 @@ from app.core.transaction_errors import PersistenceOperationError
 from app.db.database import get_db
 from app.main import create_app
 from app.services.reservation.dto import PersistedReservationDTO
-from app.services.reservation.errors import PastReservationDateError
+from app.services.reservation.errors import (
+    PastReservationDateError,
+    PastReservationTimeError,
+)
 
 
 REFERENCE = "RSV_12121212121212121212121212121212"
@@ -110,6 +113,28 @@ class PublicReservationAPITests(unittest.TestCase):
                 "detail": (
                     "That reservation date has already passed. Please choose "
                     "today or a future date."
+                ),
+            },
+        )
+
+    def test_create_past_time_uses_safe_domain_error(self):
+        with patch(
+            "app.api.reservation.service.create_reservation",
+            side_effect=PastReservationTimeError(),
+        ):
+            response = self.client.post(
+                "/reservation/",
+                json=self.create_body(),
+            )
+
+        self.assertEqual(response.status_code, 422)
+        self.assertEqual(
+            response.json(),
+            {
+                "code": "PAST_RESERVATION_TIME",
+                "detail": (
+                    "That reservation time has already passed. Please choose "
+                    "a later time."
                 ),
             },
         )

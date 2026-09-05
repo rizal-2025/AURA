@@ -38,7 +38,10 @@ from app.core.transaction_errors import (
 )
 from app.memory.long_term_memory import LongTermMemoryManager
 from app.schemas.reservation import ReservationCreate
-from app.services.reservation.errors import PastReservationDateError
+from app.services.reservation.errors import (
+    PastReservationDateError,
+    PastReservationTimeError,
+)
 from app.services.reservation.public_reference import (
     PublicReservationReferenceUnavailableError,
     require_canonical_public_reference,
@@ -124,6 +127,7 @@ class ReservationAgent:
         updates = {}
         invalid_fields = set()
         past_date_invalid = False
+        past_time_invalid = False
         for key, value in candidates.items():
             if key not in self.EDITABLE_FIELDS or value is None:
                 continue
@@ -140,6 +144,24 @@ class ReservationAgent:
                     invalid_fields.add(key)
                     past_date_invalid = True
                     continue
+            if key == "time":
+                reservation_date = updates.get("date") or session_state.get(
+                    "date"
+                )
+                if reservation_date is not None:
+                    try:
+                        self.reservation_service.validate_new_reservation_datetime(
+                            reservation_date,
+                            normalized_value,
+                        )
+                    except PastReservationDateError:
+                        invalid_fields.add("date")
+                        past_date_invalid = True
+                        continue
+                    except PastReservationTimeError:
+                        invalid_fields.add(key)
+                        past_time_invalid = True
+                        continue
             updates[key] = normalized_value
         if updates:
             session_state = dict(session_state)
@@ -203,6 +225,26 @@ class ReservationAgent:
                     "response": tr("past_reservation_date"),
                     "field": "date",
                     "next_action": "ask_date",
+                    "invalid_input": True,
+                }
+            if past_time_invalid:
+                self.memory_manager.remove_session_keys(
+                    current_session_id,
+                    ("time",),
+                )
+                self.memory_manager.update_session(
+                    current_session_id,
+                    {
+                        "time": None,
+                        "awaiting_confirmation": False,
+                        "editing_field": None,
+                    },
+                )
+                return {
+                    "status": "awaiting_input",
+                    "response": tr("past_reservation_time"),
+                    "field": "time",
+                    "next_action": "ask_time",
                     "invalid_input": True,
                 }
             if pending_field and (
@@ -301,6 +343,24 @@ class ReservationAgent:
                             "response": tr("past_reservation_date"),
                             "invalid_input": True,
                         }
+                if editing_field == "time" and session.get("date"):
+                    try:
+                        self.reservation_service.validate_new_reservation_datetime(
+                            session["date"],
+                            value,
+                        )
+                    except PastReservationDateError:
+                        return {
+                            "status": "awaiting_confirmation",
+                            "response": tr("past_reservation_date"),
+                            "invalid_input": True,
+                        }
+                    except PastReservationTimeError:
+                        return {
+                            "status": "awaiting_confirmation",
+                            "response": tr("past_reservation_time"),
+                            "invalid_input": True,
+                        }
                 updated_session = self._apply_confirmation_edit(
                     session_id,
                     editing_field,
@@ -384,6 +444,21 @@ class ReservationAgent:
                 return {
                     "status": "awaiting_confirmation",
                     "response": tr("past_reservation_date"),
+                    "invalid_input": True,
+                }
+            except PastReservationTimeError:
+                self.memory_manager.remove_session_keys(session_id, ("time",))
+                self.memory_manager.update_session(
+                    session_id,
+                    {
+                        "time": None,
+                        "awaiting_confirmation": True,
+                        "editing_field": "time",
+                    },
+                )
+                return {
+                    "status": "awaiting_confirmation",
+                    "response": tr("past_reservation_time"),
                     "invalid_input": True,
                 }
             except PublicReservationReferenceUnavailableError:

@@ -1,5 +1,5 @@
 from collections.abc import Callable
-from datetime import date, datetime
+from datetime import date, datetime, time
 
 from sqlalchemy.orm import Session
 
@@ -15,11 +15,17 @@ from app.services.reservation.dto import (
     PersistedReservationDTO,
     ReservationSelectionPage,
 )
-from app.services.reservation.errors import PastReservationDateError
+from app.services.reservation.errors import (
+    PastReservationDateError,
+    PastReservationTimeError,
+)
 from app.services.reservation.public_reference import (
     require_canonical_public_reference,
 )
-from app.utils.datetime_parser import current_local_date
+from app.utils.datetime_parser import (
+    current_local_date,
+    current_local_datetime,
+)
 
 
 class ReservationService:
@@ -69,7 +75,10 @@ class ReservationService:
     ):
         require_owner_customer_id(owner_customer_id)
         validated_data = self._fresh_create_data(data)
-        self.validate_new_reservation_date(validated_data.date)
+        self.validate_new_reservation_datetime(
+            validated_data.date,
+            validated_data.time,
+        )
         if before_mutation is not None:
             before_mutation()
         with UnitOfWork(db) as unit:
@@ -87,6 +96,27 @@ class ReservationService:
         if date.fromisoformat(canonical) < current_local_date(clock=self.clock):
             raise PastReservationDateError()
         return canonical
+
+    def validate_new_reservation_datetime(
+        self,
+        date_value: str,
+        time_value: str,
+    ) -> tuple[str, str]:
+        canonical_date = validate_reservation_date(date_value)
+        canonical_time = validate_reservation_field("time", time_value)
+        requested_date = date.fromisoformat(canonical_date)
+        requested_time = time.fromisoformat(canonical_time)
+        now = current_local_datetime(clock=self.clock)
+        if requested_date < now.date():
+            raise PastReservationDateError()
+        current_minute = now.time().replace(
+            second=0,
+            microsecond=0,
+            tzinfo=None,
+        )
+        if requested_date == now.date() and requested_time < current_minute:
+            raise PastReservationTimeError()
+        return canonical_date, canonical_time
 
     def list_recent_reservations(
         self,
