@@ -280,6 +280,10 @@ _TEXT: dict[str, dict[SupportedLocale, str]] = {
         SupportedLocale.ID_ID: "Tanggal belum jelas. Sebutkan tanggal lengkap, misalnya 30 Juli 2026.",
         SupportedLocale.EN_US: "The date isn't clear. Please provide a complete date, for example August 30, 2026.",
     },
+    "past_reservation_date": {
+        SupportedLocale.ID_ID: "Tanggal reservasi tersebut sudah lewat. Silakan pilih tanggal hari ini atau tanggal setelahnya.",
+        SupportedLocale.EN_US: "That reservation date has already passed. Please choose today or a future date.",
+    },
     "unclear_time": {
         SupportedLocale.ID_ID: "Waktu belum jelas. Sebutkan jam, misalnya 19.30.",
         SupportedLocale.EN_US: "The time isn't clear. Please provide a time, for example 7:30 PM.",

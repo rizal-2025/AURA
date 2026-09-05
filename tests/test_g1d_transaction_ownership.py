@@ -1,5 +1,6 @@
 import asyncio
 import unittest
+from datetime import datetime, timezone
 from contextlib import nullcontext
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -33,6 +34,13 @@ from app.services.handoff.owner_ticket_service import OwnerTicketService
 from app.services.handoff.ticket_service import TicketService
 from app.services.reservation.service import ReservationService
 from app.services.reservation.dto import PersistedReservationDTO
+
+
+FROZEN_NOW = datetime(2026, 7, 1, 0, 0, tzinfo=timezone.utc)
+
+
+def frozen_clock():
+    return FROZEN_NOW
 
 
 class SpySession:
@@ -263,7 +271,10 @@ class ReservationTransactionTests(unittest.TestCase):
     def test_service_commits_once_and_returns_immutable_dto(self):
         repository = MagicMock()
         repository.create.return_value = reservation_value()
-        service = ReservationService(repository=repository)
+        service = ReservationService(
+            repository=repository,
+            clock=frozen_clock,
+        )
         db = SpySession()
         result = service.create_reservation(
             db,
@@ -284,7 +295,10 @@ class ReservationTransactionTests(unittest.TestCase):
 
     def test_invalid_input_never_enters_repository_or_transaction(self):
         repository = MagicMock()
-        service = ReservationService(repository=repository)
+        service = ReservationService(
+            repository=repository,
+            clock=frozen_clock,
+        )
         db = SpySession()
         with self.assertRaises(Exception):
             service.update_reservation_field_by_reference(
@@ -301,7 +315,10 @@ class ReservationTransactionTests(unittest.TestCase):
     def test_precommit_repository_failure_rolls_back_once(self):
         repository = MagicMock()
         repository.create.side_effect = RuntimeError("private insert failure")
-        service = ReservationService(repository=repository)
+        service = ReservationService(
+            repository=repository,
+            clock=frozen_clock,
+        )
         db = SpySession()
         with self.assertRaises(PersistenceOperationError):
             service.create_reservation(
@@ -320,7 +337,7 @@ class ReservationTransactionTests(unittest.TestCase):
 class ChatReservationTransactionTests(unittest.TestCase):
     def test_conversational_create_uses_ingress_session_and_public_reference(self):
         memory = MemoryManager()
-        agent = ReservationAgent(memory_manager=memory)
+        agent = ReservationAgent(memory_manager=memory, clock=frozen_clock)
         owner = uuid4()
         db = object()
         memory.update_session(

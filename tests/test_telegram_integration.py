@@ -7,6 +7,7 @@ import os
 import re
 import subprocess
 import sys
+from datetime import datetime, timezone
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
@@ -48,6 +49,11 @@ IDENTITY_SECRET = "telegram-identity-secret-that-is-long-enough"
 VALID_TOKEN = "123456789:abcdefghijklmnopqrstuvwxyzABCDE"
 SEEDED_TELEGRAM_RESERVATION_ID = (2**30) + 104_803
 TELEGRAM_REFERENCE = "RSV_" + "d2" * 16
+FROZEN_NOW = datetime(2026, 7, 1, 0, 0, tzinfo=timezone.utc)
+
+
+def frozen_clock():
+    return FROZEN_NOW
 
 
 class FakeDb:
@@ -294,6 +300,9 @@ class TelegramHandlerTests(unittest.TestCase):
             session_reference,
         )
         orchestrator = AgentOrchestrator()
+        orchestrator.workflow._agents[
+            "reservation"
+        ].reservation_service.clock = frozen_clock
         orchestrator.memory_manager.update_session(
             memory_key,
             {

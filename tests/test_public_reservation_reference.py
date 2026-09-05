@@ -1,5 +1,6 @@
 import sqlite3
 import unittest
+from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 from uuid import uuid4
 
@@ -30,6 +31,11 @@ from app.services.reservation.service import ReservationService
 
 REFERENCE_A = "RSV_" + ("a" * 32)
 REFERENCE_B = "RSV_" + ("b" * 32)
+FROZEN_NOW = datetime(2026, 7, 1, 0, 0, tzinfo=timezone.utc)
+
+
+def frozen_clock():
+    return FROZEN_NOW
 
 
 def reservation_data(**overrides):
@@ -134,7 +140,8 @@ class TestPublicReservationReferenceFoundation(unittest.TestCase):
 
     def _create(self, owner=None):
         with self.Session() as db:
-            return ReservationService().create_reservation(
+            service = ReservationService(clock=frozen_clock)
+            return service.create_reservation(
                 db,
                 reservation_data(),
                 owner_customer_id=owner or self.owner_a,
@@ -174,7 +181,7 @@ class TestPublicReservationReferenceFoundation(unittest.TestCase):
 
     def test_reference_lookup_is_owner_scoped_and_canonicalized(self):
         created = self._create()
-        service = ReservationService()
+        service = ReservationService(clock=frozen_clock)
         mixed_case = created.reference.upper()
 
         with self.Session() as db:
@@ -235,7 +242,7 @@ class TestPublicReservationReferenceFoundation(unittest.TestCase):
 
     def test_reference_is_immutable_across_reference_update_and_cancel(self):
         created = self._create()
-        service = ReservationService()
+        service = ReservationService(clock=frozen_clock)
 
         with self.Session() as db:
             updated = service.update_reservation_field_by_reference(
@@ -266,7 +273,7 @@ class TestPublicReservationReferenceFoundation(unittest.TestCase):
     def test_numeric_lookup_is_converter_only_and_existing_list_order_remains(self):
         first = self._create()
         second = self._create()
-        service = ReservationService()
+        service = ReservationService(clock=frozen_clock)
 
         with self.Session() as db:
             numeric = ReservationRepository().get_by_id_for_workflow_v1_conversion(
@@ -301,7 +308,9 @@ class TestPublicReservationReferenceFoundation(unittest.TestCase):
 
         with self.Session() as db:
             with self.assertRaises(PublicReservationReferenceUnavailableError):
-                ReservationService().list_recent_reservations(
+                ReservationService(
+                    clock=frozen_clock
+                ).list_recent_reservations(
                     db,
                     self.owner_a,
                 )
@@ -469,7 +478,7 @@ class TestPublicReservationReferenceFoundation(unittest.TestCase):
             with self.assertRaises(
                 PublicReservationReferenceCollisionError
             ) as captured:
-                ReservationService().create_reservation(
+                ReservationService(clock=frozen_clock).create_reservation(
                     db,
                     reservation_data(),
                     self.owner_b,

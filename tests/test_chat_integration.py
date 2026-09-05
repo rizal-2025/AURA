@@ -1,5 +1,6 @@
 import asyncio
 import unittest
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
@@ -20,6 +21,11 @@ from app.services.reservation.dto import PersistedReservationDTO
 
 SEEDED_HTTP_RESERVATION_ID = (2**30) + 104_801
 HTTP_REFERENCE = "RSV_" + "d1" * 16
+FROZEN_NOW = datetime(2026, 7, 1, 0, 0, tzinfo=timezone.utc)
+
+
+def frozen_clock():
+    return FROZEN_NOW
 
 
 class DummyDB:
@@ -70,6 +76,9 @@ class TestChatIntegration(unittest.TestCase):
             session_reference,
         )
         orchestrator = AgentOrchestrator()
+        orchestrator.workflow._agents[
+            "reservation"
+        ].reservation_service.clock = frozen_clock
         orchestrator.memory_manager.update_session(
             memory_key,
             {

@@ -38,11 +38,12 @@ from app.core.transaction_errors import (
 )
 from app.memory.long_term_memory import LongTermMemoryManager
 from app.schemas.reservation import ReservationCreate
-from app.services.reservation.service import ReservationService
+from app.services.reservation.errors import PastReservationDateError
 from app.services.reservation.public_reference import (
     PublicReservationReferenceUnavailableError,
     require_canonical_public_reference,
 )
+from app.services.reservation.service import ReservationService
 from app.utils.datetime_parser import DatetimeParser
 
 
@@ -65,7 +66,7 @@ class ReservationAgent:
         self.workflow_state_service = workflow_state_service
         self.clock = clock
         self.entity_extractor = ReservationEntityExtractor(clock=clock)
-        self.reservation_service = ReservationService()
+        self.reservation_service = ReservationService(clock=clock)
         self.conversation_state_manager = ConversationStateManager()
         self.context_resolver = ContextResolver()
         self.long_term_memory = LongTermMemoryManager()
@@ -122,6 +123,7 @@ class ReservationAgent:
 
         updates = {}
         invalid_fields = set()
+        past_date_invalid = False
         for key, value in candidates.items():
             if key not in self.EDITABLE_FIELDS or value is None:
                 continue
@@ -129,6 +131,15 @@ class ReservationAgent:
             if normalized_value is None:
                 invalid_fields.add(key)
                 continue
+            if key == "date":
+                try:
+                    self.reservation_service.validate_new_reservation_date(
+                        normalized_value
+                    )
+                except PastReservationDateError:
+                    invalid_fields.add(key)
+                    past_date_invalid = True
+                    continue
             updates[key] = normalized_value
         if updates:
             session_state = dict(session_state)
@@ -174,6 +185,26 @@ class ReservationAgent:
 
         action = step.get("action")
         if action == "collect_missing_fields":
+            if past_date_invalid:
+                self.memory_manager.remove_session_keys(
+                    current_session_id,
+                    ("date",),
+                )
+                self.memory_manager.update_session(
+                    current_session_id,
+                    {
+                        "date": None,
+                        "awaiting_confirmation": False,
+                        "editing_field": None,
+                    },
+                )
+                return {
+                    "status": "awaiting_input",
+                    "response": tr("past_reservation_date"),
+                    "field": "date",
+                    "next_action": "ask_date",
+                    "invalid_input": True,
+                }
             if pending_field and (
                 pending_value_invalid or pending_field in invalid_fields
             ):
@@ -259,6 +290,17 @@ class ReservationAgent:
         if editing_field in self.EDITABLE_FIELDS:
             value = self._infer_value_for_field(editing_field, user_message)
             if value is not None:
+                if editing_field == "date":
+                    try:
+                        self.reservation_service.validate_new_reservation_date(
+                            value
+                        )
+                    except PastReservationDateError:
+                        return {
+                            "status": "awaiting_confirmation",
+                            "response": tr("past_reservation_date"),
+                            "invalid_input": True,
+                        }
                 updated_session = self._apply_confirmation_edit(
                     session_id,
                     editing_field,
@@ -307,22 +349,43 @@ class ReservationAgent:
                     }
                 canonical_values[field_name] = canonical_value
             reservation_data = ReservationCreate(**canonical_values)
-            if self.workflow_state_service is not None:
-                self.workflow_state_service.begin_mutation(
-                    db,
-                    owner_customer_id=owner_customer_id,
-                    memory_key=session_id,
-                    operation="create",
-                )
+            if self.workflow_state_service is None:
+                before_mutation = None
+            else:
+                def mark_mutation():
+                    self.workflow_state_service.begin_mutation(
+                        db,
+                        owner_customer_id=owner_customer_id,
+                        memory_key=session_id,
+                        operation="create",
+                    )
+
+                before_mutation = mark_mutation
             try:
+                create_kwargs = {"owner_customer_id": owner_customer_id}
+                if before_mutation is not None:
+                    create_kwargs["before_mutation"] = before_mutation
                 reservation = self.reservation_service.create_reservation(
-                    db,
-                    reservation_data,
-                    owner_customer_id=owner_customer_id,
+                    db, reservation_data, **create_kwargs
                 )
                 reservation_reference = require_canonical_public_reference(
                     reservation.reference
                 )
+            except PastReservationDateError:
+                self.memory_manager.remove_session_keys(session_id, ("date",))
+                self.memory_manager.update_session(
+                    session_id,
+                    {
+                        "date": None,
+                        "awaiting_confirmation": True,
+                        "editing_field": "date",
+                    },
+                )
+                return {
+                    "status": "awaiting_confirmation",
+                    "response": tr("past_reservation_date"),
+                    "invalid_input": True,
+                }
             except PublicReservationReferenceUnavailableError:
                 self.memory_manager.replace_conversation(session_id, snapshot)
                 return {

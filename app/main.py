@@ -37,6 +37,7 @@ from app.services.demo_chat_errors import (
 )
 from app.services.demo_rate_limit_service import DemoRateLimitExceededError
 from app.services.reservation.errors import (
+    PastReservationDateError,
     PublicReservationContractError,
     ReservationNotFoundError,
     ReservationReferenceRequestError,
@@ -101,6 +102,7 @@ def create_app(application_settings=None) -> FastAPI:
         demo_rate_limit_exception_handler,
     )
     for public_reservation_error in (
+        PastReservationDateError,
         ReservationReferenceRequestError,
         ReservationNotFoundError,
         PublicReservationContractError,

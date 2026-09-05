@@ -20,3 +20,10 @@ class PublicReservationContractError(RuntimeError):
 
     def __init__(self) -> None:
         super().__init__(self.code)
+
+
+class PastReservationDateError(ValueError):
+    code = "PAST_RESERVATION_DATE"
+
+    def __init__(self) -> None:
+        super().__init__(self.code)

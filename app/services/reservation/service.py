@@ -1,7 +1,13 @@
+from collections.abc import Callable
+from datetime import date, datetime
+
 from sqlalchemy.orm import Session
 
 from app.core.ownership import require_owner_customer_id
-from app.core.input_validation import validate_reservation_field
+from app.core.input_validation import (
+    validate_reservation_date,
+    validate_reservation_field,
+)
 from app.db.repositories.reservation_repository import ReservationRepository
 from app.schemas.reservation import ReservationCreate
 from app.core.unit_of_work import UnitOfWork
@@ -9,17 +15,25 @@ from app.services.reservation.dto import (
     PersistedReservationDTO,
     ReservationSelectionPage,
 )
+from app.services.reservation.errors import PastReservationDateError
 from app.services.reservation.public_reference import (
     require_canonical_public_reference,
 )
+from app.utils.datetime_parser import current_local_date
 
 
 class ReservationService:
 
     CREATE_FIELDS = ("name", "people", "date", "time")
 
-    def __init__(self, repository=None):
+    def __init__(
+        self,
+        repository=None,
+        *,
+        clock: Callable[[], datetime] | None = None,
+    ):
         self.repository = repository or ReservationRepository()
+        self.clock = clock
 
     @staticmethod
     def _dto(value) -> PersistedReservationDTO | None:
@@ -50,9 +64,14 @@ class ReservationService:
         db: Session,
         data: ReservationCreate,
         owner_customer_id,
+        *,
+        before_mutation: Callable[[], None] | None = None,
     ):
         require_owner_customer_id(owner_customer_id)
         validated_data = self._fresh_create_data(data)
+        self.validate_new_reservation_date(validated_data.date)
+        if before_mutation is not None:
+            before_mutation()
         with UnitOfWork(db) as unit:
             persisted = self.repository.create(
                 db,
@@ -62,6 +81,12 @@ class ReservationService:
             result = self._dto(persisted)
             unit.commit()
         return result
+
+    def validate_new_reservation_date(self, value: str) -> str:
+        canonical = validate_reservation_date(value)
+        if date.fromisoformat(canonical) < current_local_date(clock=self.clock):
+            raise PastReservationDateError()
+        return canonical
 
     def list_recent_reservations(
         self,

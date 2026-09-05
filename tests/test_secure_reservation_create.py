@@ -1,5 +1,6 @@
 import os
 import unittest
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 from uuid import uuid4
@@ -14,6 +15,13 @@ from app.core.security import JWT_ALGORITHM, create_customer_access_token
 from app.db.database import get_db
 from app.main import app
 from app.services.reservation.dto import PersistedReservationDTO
+
+
+FROZEN_NOW = datetime(2026, 7, 1, 0, 0, tzinfo=timezone.utc)
+
+
+def frozen_clock():
+    return FROZEN_NOW
 
 
 def persisted(identifier):
@@ -52,6 +60,11 @@ class FakeCustomerDB:
 
 class TestSecureReservationCreate(unittest.TestCase):
     def setUp(self):
+        reservation_agent = chat_agent.workflow._agents["reservation"]
+        self.previous_reservation_clock = (
+            reservation_agent.reservation_service.clock
+        )
+        reservation_agent.reservation_service.clock = frozen_clock
         self.auth_environment = patch.dict(
             os.environ,
             {
@@ -89,6 +102,9 @@ class TestSecureReservationCreate(unittest.TestCase):
         self.client = TestClient(app)
 
     def tearDown(self):
+        chat_agent.workflow._agents[
+            "reservation"
+        ].reservation_service.clock = self.previous_reservation_clock
         app.dependency_overrides.clear()
         self.auth_environment.stop()
         clear_settings_cache()

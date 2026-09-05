@@ -69,6 +69,18 @@ NUMBER_MINUTES = {
 JAKARTA_TIMEZONE = ZoneInfo("Asia/Jakarta")
 
 
+def current_local_date(
+    *,
+    clock: Callable[[], datetime] | None = None,
+) -> date:
+    """Return the authoritative application calendar date in Jakarta."""
+
+    now = clock() if clock is not None else datetime.now(JAKARTA_TIMEZONE)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=JAKARTA_TIMEZONE)
+    return now.astimezone(JAKARTA_TIMEZONE).date()
+
+
 class DatetimeParser:
 
     @staticmethod
@@ -81,10 +93,7 @@ class DatetimeParser:
         if not isinstance(text, str):
             return None
         normalized = " ".join(text.casefold().strip().split())
-        now = clock() if clock is not None else datetime.now(JAKARTA_TIMEZONE)
-        if now.tzinfo is None:
-            now = now.replace(tzinfo=JAKARTA_TIMEZONE)
-        today = reference_date or now.astimezone(JAKARTA_TIMEZONE).date()
+        today = reference_date or current_local_date(clock=clock)
 
         for day_name, weekday in WEEKDAYS.items():
             day_match = re.search(

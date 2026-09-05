@@ -1,5 +1,6 @@
 import asyncio
 import unittest
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 from uuid import uuid4
@@ -15,6 +16,11 @@ from app.services.reservation.dto import PersistedReservationDTO
 
 
 SEEDED_CREATE_RESERVATION_ID = (2**30) + 104_729
+FROZEN_NOW = datetime(2026, 7, 1, 0, 0, tzinfo=timezone.utc)
+
+
+def frozen_clock():
+    return FROZEN_NOW
 
 
 def persisted(identifier, *, people=4):
@@ -66,7 +72,7 @@ class TestReservationConfirmationFlow(unittest.TestCase):
 
     def test_confirmation_success_flow(self):
         memory = MemoryManager()
-        agent = ReservationAgent(memory_manager=memory)
+        agent = ReservationAgent(memory_manager=memory, clock=frozen_clock)
         state = {
             "intent": "reservation",
             "name": "Rizal",
@@ -133,7 +139,7 @@ class TestReservationConfirmationFlow(unittest.TestCase):
 
     def test_create_with_missing_public_reference_fails_closed(self):
         memory = MemoryManager()
-        agent = ReservationAgent(memory_manager=memory)
+        agent = ReservationAgent(memory_manager=memory, clock=frozen_clock)
         self._seed_confirmation_state(memory, "missing-reference")
         unsafe = PersistedReservationDTO(
             id=987654,
@@ -188,7 +194,10 @@ class TestReservationConfirmationFlow(unittest.TestCase):
                 memory = MemoryManager()
                 session_id = f"positive-phrase-{index}"
                 self._seed_confirmation_state(memory, session_id)
-                agent = ReservationAgent(memory_manager=memory)
+                agent = ReservationAgent(
+                    memory_manager=memory,
+                    clock=frozen_clock,
+                )
                 with patch.object(
                     agent.reservation_service,
                     "create_reservation",
@@ -237,7 +246,10 @@ class TestReservationConfirmationFlow(unittest.TestCase):
                 memory = MemoryManager()
                 session_id = f"negative-phrase-{index}"
                 self._seed_confirmation_state(memory, session_id)
-                agent = ReservationAgent(memory_manager=memory)
+                agent = ReservationAgent(
+                    memory_manager=memory,
+                    clock=frozen_clock,
+                )
                 with patch.object(
                     agent.reservation_service,
                     "create_reservation",
@@ -266,7 +278,7 @@ class TestReservationConfirmationFlow(unittest.TestCase):
 
     def test_rejection_clears_all_pending_create_state(self):
         memory = MemoryManager()
-        agent = ReservationAgent(memory_manager=memory)
+        agent = ReservationAgent(memory_manager=memory, clock=frozen_clock)
         self._seed_confirmation_state(memory, "s1")
         memory.update_session("s1", {"editing_field": None})
 
@@ -290,7 +302,7 @@ class TestReservationConfirmationFlow(unittest.TestCase):
 
     def test_rejection_calls_no_reservation_mutation_method(self):
         memory = MemoryManager()
-        agent = ReservationAgent(memory_manager=memory)
+        agent = ReservationAgent(memory_manager=memory, clock=frozen_clock)
         self._seed_confirmation_state(memory, "s1")
 
         with (
@@ -320,7 +332,7 @@ class TestReservationConfirmationFlow(unittest.TestCase):
 
     def test_new_create_after_rejection_starts_from_clean_state(self):
         memory = MemoryManager()
-        agent = ReservationAgent(memory_manager=memory)
+        agent = ReservationAgent(memory_manager=memory, clock=frozen_clock)
         self._seed_confirmation_state(memory, "s1")
         asyncio.run(agent.handle_confirmation("tidak usah", "s1"))
 
@@ -341,7 +353,7 @@ class TestReservationConfirmationFlow(unittest.TestCase):
 
     def test_memory_state_updates(self):
         memory = MemoryManager()
-        agent = ReservationAgent(memory_manager=memory)
+        agent = ReservationAgent(memory_manager=memory, clock=frozen_clock)
         state = {"name": "Rizal", "people": 4, "date": "2026-07-19", "time": "19:00", "completed": False, "awaiting_confirmation": False}
         memory.update_session("s1", state)
 
@@ -366,6 +378,9 @@ class TestReservationConfirmationFlow(unittest.TestCase):
 
     def test_orchestrator_accepts_confirmation_and_completes_reservation(self):
         orchestrator = AgentOrchestrator()
+        orchestrator.workflow._agents[
+            "reservation"
+        ].reservation_service.clock = frozen_clock
 
         class DummyClassifier:
             async def classify(self, message):
@@ -409,6 +424,9 @@ class TestReservationConfirmationFlow(unittest.TestCase):
 
     def test_orchestrator_rejection_terminates_without_handoff(self):
         orchestrator = AgentOrchestrator()
+        orchestrator.workflow._agents[
+            "reservation"
+        ].reservation_service.clock = frozen_clock
 
         class DummyClassifier:
             async def classify(self, message):
@@ -456,7 +474,7 @@ class TestReservationConfirmationFlow(unittest.TestCase):
 
     def test_edit_people(self):
         memory = MemoryManager()
-        agent = ReservationAgent(memory_manager=memory)
+        agent = ReservationAgent(memory_manager=memory, clock=frozen_clock)
         self._seed_confirmation_state(memory)
 
         selection = self._send_confirmation_message(
@@ -480,7 +498,7 @@ class TestReservationConfirmationFlow(unittest.TestCase):
 
     def test_edit_name(self):
         memory = MemoryManager()
-        agent = ReservationAgent(memory_manager=memory)
+        agent = ReservationAgent(memory_manager=memory, clock=frozen_clock)
         self._seed_confirmation_state(memory)
 
         self._send_confirmation_message(agent, memory, "s-edit", "Saya ingin mengubah nama")
@@ -493,7 +511,7 @@ class TestReservationConfirmationFlow(unittest.TestCase):
 
     def test_batal_aja_remains_valid_while_explicitly_editing_name(self):
         memory = MemoryManager()
-        agent = ReservationAgent(memory_manager=memory)
+        agent = ReservationAgent(memory_manager=memory, clock=frozen_clock)
         self._seed_confirmation_state(memory)
 
         self._send_confirmation_message(
@@ -517,7 +535,7 @@ class TestReservationConfirmationFlow(unittest.TestCase):
 
     def test_natural_create_and_confirmation_edit_share_canonical_name(self):
         memory = MemoryManager()
-        agent = ReservationAgent(memory_manager=memory)
+        agent = ReservationAgent(memory_manager=memory, clock=frozen_clock)
         self._seed_confirmation_state(memory)
         extracted = asyncio.run(
             agent.entity_extractor.extract(
@@ -544,7 +562,7 @@ class TestReservationConfirmationFlow(unittest.TestCase):
 
     def test_invalid_confirmation_name_keeps_edit_state(self):
         memory = MemoryManager()
-        agent = ReservationAgent(memory_manager=memory)
+        agent = ReservationAgent(memory_manager=memory, clock=frozen_clock)
         self._seed_confirmation_state(memory)
         original_name = memory.get_session("s-edit")["name"]
 
@@ -569,7 +587,7 @@ class TestReservationConfirmationFlow(unittest.TestCase):
 
     def test_edit_date(self):
         memory = MemoryManager()
-        agent = ReservationAgent(memory_manager=memory)
+        agent = ReservationAgent(memory_manager=memory, clock=frozen_clock)
         self._seed_confirmation_state(memory)
 
         self._send_confirmation_message(agent, memory, "s-edit", "Saya ingin mengubah tanggal")
@@ -582,7 +600,7 @@ class TestReservationConfirmationFlow(unittest.TestCase):
 
     def test_edit_time(self):
         memory = MemoryManager()
-        agent = ReservationAgent(memory_manager=memory)
+        agent = ReservationAgent(memory_manager=memory, clock=frozen_clock)
         self._seed_confirmation_state(memory)
 
         self._send_confirmation_message(agent, memory, "s-edit", "Saya ingin mengubah jam")
@@ -595,7 +613,7 @@ class TestReservationConfirmationFlow(unittest.TestCase):
 
     def test_direct_edit(self):
         memory = MemoryManager()
-        agent = ReservationAgent(memory_manager=memory)
+        agent = ReservationAgent(memory_manager=memory, clock=frozen_clock)
         self._seed_confirmation_state(memory)
 
         result = self._send_confirmation_message(
@@ -614,7 +632,7 @@ class TestReservationConfirmationFlow(unittest.TestCase):
 
     def test_edit_then_confirm(self):
         memory = MemoryManager()
-        agent = ReservationAgent(memory_manager=memory)
+        agent = ReservationAgent(memory_manager=memory, clock=frozen_clock)
         self._seed_confirmation_state(memory)
 
         self._send_confirmation_message(agent, memory, "s-edit", "Saya ingin mengubah jumlah orang")
@@ -650,7 +668,7 @@ class TestReservationConfirmationFlow(unittest.TestCase):
 
     def test_explicit_correction_then_confirm_saves_updated_value(self):
         memory = MemoryManager()
-        agent = ReservationAgent(memory_manager=memory)
+        agent = ReservationAgent(memory_manager=memory, clock=frozen_clock)
         session_id = "s-explicit-edit"
 
         normal = self._send_confirmation_message(
