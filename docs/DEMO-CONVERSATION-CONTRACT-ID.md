@@ -35,10 +35,23 @@ commit. Pada update, inferensi lintas tahun sekarang harus dilengkapi pengguna
 dengan tanggal bertahun eksplisit sebelum mutasi; `ya` saja bukan input tanggal.
 Angka empat digit pada catatan lain bukan otorisasi tahun tanggal.
 
-Tahun salah ketik dan tanggal alternatif/konflik relative/weekday dengan tanggal
-absolut meminta klarifikasi. Tanggal plus time/people yang tidak konflik tetap
-bisa diekstraksi. Grammar relatif yang sudah ada (hari ini/besok/lusa/weekday)
+Tahun numerik/alphanumeric yang melekat pada tanggal harus utuh empat digit
+dan valid: day-month, month-day, maupun DD/MM/YYYY dan DD-MM-YYYY tidak boleh
+membuang token seperti 20266, 20x6, atau 026 lalu menginfer tahun lain.
+Angka panjang pada catatan terpisah bukan token tahun tanggal.
+
+Tanggal alternatif/konflik relative/weekday dengan tanggal absolut meminta
+klarifikasi. Ini juga berlaku untuk dua DD-MM-YYYY, dan kalimat "6 September,
+bukan 7 September": grammar saat ini tidak memilih tanggal lewat negasi.
+Tanggal plus time/people yang tidak konflik tetap bisa diekstraksi, termasuk
+"6 September 20:00". Pada create kedua komponen dikumpulkan; pada update date
+hanya date berubah dan time persisted tetap, walaupun pesan menyebut jam lain.
+Grammar relatif yang sudah ada (hari ini/besok/lusa/weekday)
 tidak diperluas. `bulan depan` tetap membutuhkan tanggal lengkap.
+
+AM/PM hanya qualifier jika melekat pada ekspresi jam: "I am booking at 11 pm"
+berarti 23:00; "I am Dani" tidak berisi jam. Dua clock/qualifier yang bertentangan
+tetap meminta klarifikasi. Locale request tidak diganti berdasarkan kata "am".
 
 ## Partial date dan lifecycle
 

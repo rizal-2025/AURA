@@ -68,6 +68,7 @@ from app.services.demo_chat_errors import DemoHistoryResetRequiredError
 from migrations.add_demo_chat_content_safety import migrate as migrate_content_safety
 from migrations.add_demo_persistence import migrate as migrate_demo
 from tests.integration.disposable_schema import DisposableSchemaResources
+from tests.integration.reservation_clock import install_reservation_clock
 
 
 TOKEN_A = "P" * 43
@@ -302,6 +303,7 @@ class DemoChatPostgreSQLTests(unittest.TestCase):
                 )
             )
         self.now = datetime(2026, 8, 1, 12, 0, tzinfo=timezone.utc)
+        install_reservation_clock(self, clock=lambda: self.now)
         self.create_session(TOKEN_A)
 
     def create_session(self, token):

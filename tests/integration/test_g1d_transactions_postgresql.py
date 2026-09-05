@@ -17,6 +17,7 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.orm import sessionmaker
 
 from app.core.config import settings
+from tests.integration.reservation_clock import install_reservation_clock
 from app.core.transaction_errors import (
     PersistenceOperationError,
     PersistenceOutcomeUnknownError,
@@ -73,6 +74,7 @@ class TestG1DTransactionsPostgreSQL(unittest.TestCase):
         cls.admin = create_engine(os.environ["TEST_DATABASE_URL"], pool_pre_ping=True)
 
     def setUp(self):
+        install_reservation_clock(self)
         self.schema = f"aura_g1d_a1_{uuid4().hex[:12]}"
         self.engine = None
         with self.admin.begin() as connection:

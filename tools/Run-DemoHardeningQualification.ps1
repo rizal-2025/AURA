@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)][string]$PythonPath,
-    [Parameter(Mandatory)][ValidateSet('broad','postgresql','critical')][string]$Suite,
+    [Parameter(Mandatory)][ValidateSet('broad','postgresql','postgresql-full','critical')][string]$Suite,
     [Parameter(Mandatory)][int]$Seed,
     [Parameter(Mandatory)][string]$Report
 )

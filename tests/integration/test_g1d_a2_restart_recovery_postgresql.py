@@ -45,6 +45,7 @@ from migrations.allow_public_reference_workflow_schema_v2 import (
     migrate as migrate_workflow_v2,
 )
 from tests.integration.disposable_schema import DisposableSchemaResources
+from tests.integration.reservation_clock import install_reservation_clock
 
 
 def _identity(url):
@@ -80,6 +81,9 @@ SKIP_REASON = _skip_reason()
 
 @unittest.skipIf(SKIP_REASON is not None, SKIP_REASON or "")
 class TestG1DA2RestartRecoveryPostgreSQL(unittest.TestCase):
+    def setUp(self):
+        install_reservation_clock(self)
+
     @classmethod
     def setUpClass(cls):
         cls.admin = create_engine(

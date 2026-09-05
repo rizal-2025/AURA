@@ -104,23 +104,25 @@ class DatetimeParser:
         normalized = " ".join(text.casefold().strip().split())
         today = reference_date or current_local_date(clock=clock)
 
+        for numeric in re.finditer(
+            r"(?<![0-9])([0-9]{1,2})([/\-])[0-9]{1,2}\2([0-9][a-z0-9]*)\b", normalized
+        ):
+            if not (len(numeric[3]) == 4 and numeric[3].isdigit() and int(numeric[3]) > 0):
+                return None
         month_names = "|".join(MONTHS)
         named_dates = list(re.finditer(
-            rf"(?<![0-9])([0-9]{{1,2}})\s+({month_names})(?:\s+([0-9]+))?\b",
+            rf"(?<![0-9])([0-9]{{1,2}})\s+({month_names})\b",
             normalized,
         ))
-        for match in named_dates:
-            if match[3] is not None and len(match[3]) != 4:
-                # A following time/party-size belongs to another field, not a
-                # malformed year. Other numeric year-like suffixes fail closed.
-                if not re.match(r"\s+(?:pagi|siang|sore|malam|am|pm|orang|people|persons|guests)\b", normalized[match.end():]):
-                    return None
+        english_dates = [match for match in re.finditer(
+            rf"\b(?:{month_names})\s+[0-9]{{1,2}}(?:st|nd|rd|th)?\b", normalized)
+            if not any(named.start() <= match.start() < named.end() for named in named_dates)]
+        for match in named_dates + english_dates:
+            if DatetimeParser._malformed_named_year(normalized[match.end():]):
+                return None
         other_dates = re.finditer(
-            rf"\b(?:[0-9]{{4}}-[0-9]{{2}}-[0-9]{{2}}|[0-9]{{1,2}}/[0-9]{{1,2}}/[0-9]{{4}}|(?:{month_names})\s+[0-9]{{1,2}}(?:st|nd|rd|th)?\b)", normalized)
-        absolute_count = len(named_dates) + sum(
-            not any(named.start() <= match.start() < named.end() for named in named_dates)
-            for match in other_dates
-        )
+            r"\b(?:[0-9]{4}-[0-9]{2}-[0-9]{2}|[0-9]{1,2}(?:/[0-9]{1,2}/|-[0-9]{1,2}-)[0-9]{4})\b", normalized)
+        absolute_count = len(named_dates) + len(english_dates) + sum(1 for _ in other_dates)
         relative = re.findall(rf"\b(?:hari ini|today|besok|tomorrow|lusa|{'|'.join(WEEKDAYS)})\b", normalized)
         if absolute_count > 1 or len(relative) > 1 or (absolute_count and relative):
             return None
@@ -212,15 +214,20 @@ class DatetimeParser:
             return None
         normalized = " ".join(text.casefold().strip().split())
         # Conflicting alternatives must not silently choose the first clock.
-        if len(re.findall(r"\b(?:pagi|siang|sore|malam|a\.?m\.?|p\.?m\.?)\b", normalized)) > 1:
+        if len(re.findall(r"\b(?:pagi|siang|sore|malam)\b", normalized)) > 1:
             return None
         if len(re.findall(r"(?<![0-9])[0-9]{1,2}[:.][0-9]{2}(?![0-9])", normalized)) > 1:
             return None
         period = r"(?:pagi|siang|sore|malam|a\.?m\.?|p\.?m\.?)"
         hours = "|".join(sorted(NUMBER_HOURS, key=len, reverse=True))
-        clocks = re.findall(
+        clocks = list(re.finditer(
             rf"(?<![0-9:.])(?:[0-9]{{1,2}}[:.][0-9]+(?:\s*{period}\b)?|(?:{hours}|[0-9]{{1,2}})\s*{period}\b)", normalized)
+        )
         if len(clocks) > 1:
+            return None
+        # English auxiliary 'am' is not a clock. Qualifiers count only when
+        # attached to a clock; a second qualifier on that clock is conflicting.
+        if clocks and re.match(rf"\s*{period}\b", normalized[clocks[0].end():]):
             return None
         numeric_clock = re.search(r"(?<![0-9])[0-9]+[:.]([0-9]+)", normalized)
         if numeric_clock and len(numeric_clock[1]) != 2:
@@ -334,6 +341,23 @@ class DatetimeParser:
             if converted is None:
                 return None
         return f"{converted:02d}:{minute:02d}"
+
+    @staticmethod
+    def _malformed_named_year(tail: str) -> bool:
+        """Inspect only the token attached to a named date, in either order.
+
+        Independent clocks/party sizes are not years. Other numeric-leading
+        tokens must be a complete four-digit year, never an inference fallback.
+        """
+        token = re.match(r",?\s+([0-9][a-z0-9]*)", tail)
+        if token is None:
+            return False
+        if re.match(r",?\s+[0-9]{1,2}[:.][0-9]{2}(?![0-9:.])", tail):
+            return False
+        if re.match(r",?\s+[0-9]+\s+(?:pagi|siang|sore|malam|am|pm|orang|people|persons|guests)\b", tail):
+            return False
+        return not (len(token[1]) == 4 and token[1].isascii()
+                    and token[1].isdigit() and int(token[1]) > 0)
 
     @staticmethod
     def date_ambiguity(text: str) -> str | None:

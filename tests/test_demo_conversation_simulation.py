@@ -256,6 +256,66 @@ class DialogueContract:
                 self.assertNotIn("pending_reservation_day", self.state)
         self.assertEqual(len(seen), 100)
 
+    def test_blocker_invalid_dates_never_mutate_and_recover(self):
+        from tests.test_demo_blocker_fix import AMBIGUOUS_DATES, MALFORMED_DATES
+        for text in AMBIGUOUS_DATES + MALFORMED_DATES:
+            with self.subTest(text=text):
+                self.new_scope()
+                self.update_prompt("date")
+                before = self.rows()
+                result = self.turn(text)
+                self.assertEqual(result["status"], "awaiting_update")
+                self.assertTrue(result["invalid_input"])
+                self.assertTrue(result["response"])
+                self.assertNotIn("reservation_operation", result)
+                self.assertEqual(self.rows(), before)
+                self.assertEqual(self.state["editing_field"], "date")
+                self.assertEqual(self.turn("8 September 2026")["status"], "updated")
+                after = self.rows()[0]
+                self.assertEqual(after[3], "2026-09-08")
+                self.assertEqual(after[:3] + after[4:], before[0][:3] + before[0][4:])
+                self.assertNotIn("pending_reservation_day", self.state)
+
+    def test_blocker_combined_create_preserves_date_and_time(self):
+        from tests.test_demo_blocker_fix import COMBINED_DATES
+        for text in COMBINED_DATES:
+            with self.subTest(text=text):
+                self.new_scope(create=True)
+                self.create_prompt(name="Dani Saputra", people=5, asked_fields=["date"])
+                result = self.turn(text, create=True)
+                self.assertEqual(result["status"], "awaiting_confirmation")
+                self.assertEqual((self.state["date"], self.state["time"]), ("2026-09-06", "20:00"))
+                self.assertEqual(self.rows(), [])
+                self.assertEqual(self.turn("ya", create=True)["status"], "completed")
+                self.assertEqual(self.rows()[0][1:5], ("Dani Saputra", 5, "2026-09-06", "20:00"))
+
+    def test_blocker_english_clocks_preserve_non_target_fields(self):
+        for prefix in ("", "at ", "booking at ", "I am booking at ", "I am reserving for "):
+            for period, expected in (("am", "11:00"), ("pm", "23:00")):
+                with self.subTest(prefix=prefix, period=period):
+                    self.new_scope(now=datetime(2026, 9, 5, 3, tzinfo=timezone.utc))
+                    self.update_prompt("time")
+                    before = self.rows()[0]
+                    result = self.turn(prefix + "11 " + period, locale=SupportedLocale.EN_US)
+                    self.assertEqual(result["status"], "updated")
+                    self.assertIn("Time:", result["response"])
+                    self.assertEqual(self.rows()[0][4], expected)
+                    self.assertEqual(self.rows()[0][:4], before[:4])
+                    self.assertIsNone(self.state.get("editing_field"))
+
+    def test_blocker_combined_date_update_does_not_change_time(self):
+        from tests.test_demo_blocker_fix import COMBINED_DATES
+        for text in COMBINED_DATES:
+            with self.subTest(text=text):
+                self.new_scope()
+                self.update_prompt("date")
+                before = self.rows()[0]
+                result = self.turn(text.replace("20:00", "21:00").replace("8 malam", "9 malam"))
+                self.assertEqual(result["status"], "updated")
+                after = self.rows()[0]
+                self.assertEqual(after[3], "2026-09-06")
+                self.assertEqual(after[:3] + after[4:], before[:3] + before[4:])
+                self.assertNotIn("pending_reservation_day", self.state)
 
 class LocalDialogueTests(DialogueContract, unittest.TestCase):
     setUp = fixture.PersistedReservationUpdateTests.setUp

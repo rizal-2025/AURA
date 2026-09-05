@@ -27,6 +27,7 @@ from migrations.add_public_reservation_reference import (
     migrate,
 )
 from tests.integration.disposable_schema import DisposableSchemaResources
+from tests.integration.reservation_clock import install_reservation_clock
 
 
 REFERENCE_A = "RSV_" + ("a" * 32)
@@ -83,6 +84,7 @@ class TestPublicReservationReferenceMigrationPostgreSQL(
         cls.admin.dispose()
 
     def setUp(self):
+        install_reservation_clock(self)
         self.schema = f"aura_res_ref_test_{uuid4().hex[:12]}"
         self.resources = DisposableSchemaResources(
             admin_engine=self.admin,

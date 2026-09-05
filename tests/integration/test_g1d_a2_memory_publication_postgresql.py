@@ -49,6 +49,7 @@ from app.services.conversation_workflow_state_service import (
     ConversationWorkflowStateService,
 )
 from tests.integration.disposable_schema import DisposableSchemaResources
+from tests.integration.reservation_clock import install_reservation_clock
 
 
 def _identity(url):
@@ -100,6 +101,7 @@ class TestG1DA2MemoryPublicationPostgreSQL(unittest.TestCase):
         cls.addClassCleanup(cls.admin.dispose)
 
     def setUp(self):
+        install_reservation_clock(self)
         self.schema = f"aura_g1d_a2_test_{uuid4().hex[:12]}"
         self.resources = DisposableSchemaResources(
             admin_engine=self.admin,
