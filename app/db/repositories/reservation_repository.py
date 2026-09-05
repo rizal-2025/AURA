@@ -190,18 +190,23 @@ class ReservationRepository:
         db: Session,
         public_reference: str,
         owner_customer_id,
+        *,
+        for_update: bool = False,
     ):
         require_owner_customer_id(owner_customer_id)
         canonical_reference = canonicalize_public_reference(public_reference)
-        return (
+        query = (
             db.query(Reservation)
+            .populate_existing()
             .filter(
                 Reservation.owner_customer_id == owner_customer_id,
                 Reservation.public_reference == canonical_reference,
                 func.lower(Reservation.status) != "cancelled",
             )
-            .first()
         )
+        if for_update:
+            query = query.with_for_update()
+        return query.first()
 
     def update_reservation_field_by_public_reference(
         self,
@@ -225,6 +230,7 @@ class ReservationRepository:
             )
             .values({field_name: new_value})
             .returning(Reservation)
+            .execution_options(populate_existing=True)
         )
         return db.execute(statement).scalar_one_or_none()
 

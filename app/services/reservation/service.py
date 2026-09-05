@@ -291,9 +291,9 @@ class ReservationService:
         require_owner_customer_id(owner_customer_id)
         new_value = validate_reservation_field(field_name, new_value)
         try:
-            if field_name in {"date", "time"}:
-                # Finish the read/validation transaction before the callback:
-                # workflow persistence owns a separate durable marker commit.
+            if before_mutation is not None:
+                # Reject invalid input before writing a durable recovery marker.
+                # This preflight snapshot is not authoritative for the write.
                 with UnitOfWork(db) as unit:
                     current = self.repository.get_active_by_public_reference(
                         db,
@@ -301,16 +301,7 @@ class ReservationService:
                         owner_customer_id,
                     )
                     if current is not None:
-                        candidate_date = (
-                            new_value if field_name == "date" else current.date
-                        )
-                        candidate_time = (
-                            new_value if field_name == "time" else current.time
-                        )
-                        self.validate_new_reservation_datetime(
-                            candidate_date,
-                            candidate_time,
-                        )
+                        self._validate_update_candidate(current, field_name, new_value)
                     unit.commit()
                 if current is None:
                     return None
@@ -320,16 +311,25 @@ class ReservationService:
             if before_mutation is not None:
                 before_mutation()
             with UnitOfWork(db) as unit:
-                persisted = (
-                    self.repository.update_reservation_field_by_public_reference(
-                        db,
-                        public_reference,
-                        field_name,
-                        new_value,
-                        owner_customer_id,
-                    )
+                # The database lock spans reload, validation, UPDATE and commit.
+                # Every field uses the current date/time, including name/people.
+                current = self.repository.get_active_by_public_reference(
+                    db, public_reference, owner_customer_id, for_update=True,
                 )
-                result = self._dto(persisted)
+                if current is None:
+                    result = None
+                else:
+                    self._validate_update_candidate(current, field_name, new_value)
+                    persisted = (
+                        self.repository.update_reservation_field_by_public_reference(
+                            db,
+                            public_reference,
+                            field_name,
+                            new_value,
+                            owner_customer_id,
+                        )
+                    )
+                    result = self._dto(persisted)
                 unit.commit()
             return result
         except PersistenceOperationError as error:
@@ -339,6 +339,12 @@ class ReservationService:
             ):
                 raise error.__cause__ from None
             raise
+
+    def _validate_update_candidate(self, current, field_name, new_value):
+        self.validate_new_reservation_datetime(
+            new_value if field_name == "date" else current.date,
+            new_value if field_name == "time" else current.time,
+        )
 
     def cancel_reservation_by_reference(
         self,

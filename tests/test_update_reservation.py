@@ -142,6 +142,8 @@ class InMemoryUpdateRepository:
         db,
         public_reference,
         owner_customer_id,
+        *,
+        for_update=False,
     ):
         row = self.get_by_public_reference(
             db,

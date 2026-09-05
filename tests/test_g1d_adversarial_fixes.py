@@ -324,6 +324,7 @@ class PersistedReservationDTOTests(unittest.TestCase):
         repository = MagicMock()
         repository.list_recent.return_value = [row]
         repository.get_by_public_reference.return_value = row
+        repository.get_active_by_public_reference.return_value = row
         repository.update_reservation_field_by_public_reference.return_value = row
         repository.cancel_reservation_by_public_reference.return_value = row
         service = ReservationService(repository)
@@ -337,20 +338,24 @@ class PersistedReservationDTOTests(unittest.TestCase):
             "RSV_91919191919191919191919191919191",
             owner_customer_id=owner,
         )
-        updated = service.update_reservation_field_by_reference(
-            TransactionSpySession(),
-            "RSV_91919191919191919191919191919191",
-            "name",
-            "Nama Baru",
-            owner_customer_id=owner,
-        )
+        # Legacy rows remain readable/cancellable, but every successful update
+        # must now leave a temporally valid reservation (including name-only).
+        with self.assertRaises(PersistenceOperationError):
+            service.update_reservation_field_by_reference(
+                TransactionSpySession(),
+                "RSV_91919191919191919191919191919191",
+                "name",
+                "Nama Baru",
+                owner_customer_id=owner,
+            )
+        repository.update_reservation_field_by_public_reference.assert_not_called()
         cancelled = service.cancel_reservation_by_reference(
             TransactionSpySession(),
             "RSV_91919191919191919191919191919191",
             owner_customer_id=owner,
         )
 
-        for value in (listed, selected, updated, cancelled):
+        for value in (listed, selected, cancelled):
             self.assertIsInstance(value, PersistedReservationDTO)
             self.assertEqual(value.people, 25)
             self.assertEqual(value.date, "01/08/2026")

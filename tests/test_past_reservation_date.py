@@ -505,6 +505,30 @@ class ReservationUpdateDomainTests(unittest.TestCase):
         before_mutation.assert_called_once_with()
         self.repository.update_reservation_field_by_public_reference.assert_called_once()
 
+    def test_name_and_people_updates_cannot_leave_a_past_date(self):
+        for field, value in (("name", "Sheryl"), ("people", 4)):
+            with self.subTest(field=field):
+                self.setUp()
+                self.row.date = "2025-07-12"
+                marker = MagicMock()
+                with self.assertRaises(PastReservationDateError):
+                    self.update(field, value, before_mutation=marker)
+                marker.assert_not_called()
+                self.repository.update_reservation_field_by_public_reference.assert_not_called()
+                self.db.commit.assert_not_called()
+                self.db.flush.assert_not_called()
+
+    def test_name_and_people_updates_cannot_leave_a_past_time(self):
+        for field, value in (("name", "Sheryl"), ("people", 4)):
+            with self.subTest(field=field):
+                self.setUp()
+                self.row.time = "12:30"
+                with self.assertRaises(PastReservationTimeError):
+                    self.update(field, value)
+                self.repository.update_reservation_field_by_public_reference.assert_not_called()
+                self.db.commit.assert_not_called()
+                self.db.flush.assert_not_called()
+
     def test_valid_future_time_update_preserves_other_fields(self):
         result = self.update("time", "13:30")
 

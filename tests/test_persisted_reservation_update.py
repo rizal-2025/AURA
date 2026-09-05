@@ -121,7 +121,8 @@ class PersistedUpdateContract:
         self.assertEqual(self.nested_attempts, 0)
         self.assertEqual(self.update_spy.call_count, 1)
         self.assertEqual(self.marker_spy.call_count, 1)
-        self.assertEqual(self.validation_spy.call_count, int(field in {"date", "time"}))
+        # Preflight before the marker, then authoritative validation under lock.
+        self.assertEqual(self.validation_spy.call_count, 2)
         self.assertEqual(self.reservation_fields(), expected)
         self.assertEqual(self.durable_workflow()[2], mutation_blocker_snapshot_v2("update").materialize())
         # The authenticated request publishes completion only after domain success.
@@ -162,6 +163,51 @@ class PersistedUpdateContract:
 
     def test_persisted_past_time_rejected(self):
         self.assert_invalid_update("time", "12:30")
+
+    def test_concurrent_time_change_after_marker_rejects_stale_date_candidate(self):
+        self.prepare_update("date")
+        self.service.update_reservation_field_by_reference(
+            self.db, self.reference, "date", "2026-09-06", self.owner_id,
+        )
+        marker = self.workflow.begin_mutation
+
+        def concurrent_update(*args, **kwargs):
+            marker(*args, **kwargs)
+            with self.Session() as other_db:
+                ReservationService(clock=lambda: NOW).update_reservation_field_by_reference(
+                    other_db, self.reference, "time", "12:30", self.owner_id,
+                )
+
+        with patch.object(self.workflow, "begin_mutation", side_effect=concurrent_update):
+            with patch("app.agents.update_reservation_agent.publish_update_success") as success:
+                result = self.send_update("5 September 2026")
+        self.assertEqual(result["status"], "awaiting_update")
+        self.assertTrue(result["invalid_input"])
+        success.assert_not_called()
+        self.assertEqual(self.reservation_fields(), ("Sherly", 2, "2026-09-06", "12:30"))
+        self.assertEqual(self.durable_workflow()[2], mutation_blocker_snapshot_v2("update").materialize())
+        self.workflow.publish(self.db, owner_customer_id=self.owner_id, memory_key=self.key)
+        self.assertEqual(self.durable_workflow()[2], self.initial_workflow[2])
+        self.assertEqual(self.nested_attempts, 0)
+
+    def test_concurrent_date_change_after_marker_is_preserved_in_time_response(self):
+        self.prepare_update("time")
+        marker = self.workflow.begin_mutation
+
+        def concurrent_update(*args, **kwargs):
+            marker(*args, **kwargs)
+            with self.Session() as other_db:
+                ReservationService(clock=lambda: NOW).update_reservation_field_by_reference(
+                    other_db, self.reference, "date", "2026-09-06", self.owner_id,
+                )
+
+        with patch.object(self.workflow, "begin_mutation", side_effect=concurrent_update):
+            result = self.send_update("13:30")
+        self.assertEqual(result["status"], "updated")
+        self.assertEqual(self.reservation_fields(), ("Sherly", 2, "2026-09-06", "13:30"))
+        self.assertIn("13.30", result["response"])
+        self.assertIn("6 September 2026", result["response"])
+        self.assertEqual(self.nested_attempts, 0)
 
     def test_marker_failure_prevents_reservation_update(self):
         self.prepare_update("date")
