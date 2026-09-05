@@ -5,6 +5,7 @@ import logging
 import os
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 from types import SimpleNamespace
 import unittest
@@ -52,6 +53,8 @@ def offline_subprocess_environment(**extra: str) -> dict[str, str]:
         if name in os.environ
     }
     environment["PYTHONPATH"] = str(PROJECT_ROOT)
+    environment["APP_ENV"] = "test"
+    environment["AURA_DISABLE_DOTENV"] = "1"
     environment.update(extra)
     return environment
 
@@ -253,7 +256,8 @@ handler.close()
                 writers = [
                     subprocess.Popen(
                         [
-                            str(PROJECT_ROOT / ".venv" / "Scripts" / "python.exe"),
+                            sys.executable,
+                            "-B",
                             "-c",
                             worker,
                             str(self.event_path),
@@ -447,7 +451,8 @@ with open(sys.argv[1], "r+b", buffering=0) as lock_file:
 '''
         holder = subprocess.Popen(
             [
-                str(PROJECT_ROOT / ".venv" / "Scripts" / "python.exe"),
+                sys.executable,
+                "-B",
                 "-c",
                 holder_code,
                 str(lock_path),

@@ -633,6 +633,16 @@ class DemoReservationResetPostgreSQLTests(unittest.TestCase):
     def test_reset_deletes_only_session_owner_and_preserves_token_expiry(self):
         with self.Session() as db:
             session_a_id, owner_a_id, _ = self.seed_owner_data(db, TOKEN_A)
+            # Include newly supported partial-date state in the real reset path.
+            workflow_row = db.scalar(select(ConversationWorkflowState).where(
+                ConversationWorkflowState.owner_customer_id == owner_a_id))
+            workflow_row.payload = {
+                "intent": "reservation", "name": "Dani", "people": 5,
+                "date": None, "time": None, "completed": False,
+                "awaiting_confirmation": False, "editing_field": None,
+                "asked_fields": ["name", "people", "date"], "pending_reservation_day": 5,
+            }
+            db.commit()
             session_b_id, owner_b_id, _ = self.seed_owner_data(
                 db,
                 TOKEN_B,

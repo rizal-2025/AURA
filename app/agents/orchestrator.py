@@ -693,6 +693,7 @@ class AgentOrchestrator:
 
     @staticmethod
     def _clear_update_selection_state(session: dict) -> None:
+        session.pop("pending_reservation_day", None)
         session["update_reservation_stage"] = None
         session["update_reservation_candidate_references"] = []
         session["update_reservation_page_cursor"] = None
@@ -702,6 +703,7 @@ class AgentOrchestrator:
 
     @staticmethod
     def _clear_cancel_selection_state(session: dict) -> None:
+        session.pop("pending_reservation_day", None)
         session["cancel_reservation_stage"] = None
         session["cancel_reservation_candidate_references"] = []
         session["cancel_reservation_page_cursor"] = None

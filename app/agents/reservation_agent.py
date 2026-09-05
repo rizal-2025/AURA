@@ -48,6 +48,7 @@ from app.services.reservation.public_reference import (
 )
 from app.services.reservation.service import ReservationService
 from app.utils.datetime_parser import DatetimeParser
+from app.utils.reservation_date_input import PENDING_DAY, continue_date
 
 
 CONFIRM = "CONFIRM"
@@ -113,6 +114,12 @@ class ReservationAgent:
                 "response": tr("no_available_step"),
             }
 
+        if not session_state.get("date"):
+            user_message = continue_date(user_message, session_state, clock=self.clock)
+            if PENDING_DAY in session_state:
+                self.memory_manager.update_session(current_session_id, {PENDING_DAY: session_state[PENDING_DAY]})
+            else:
+                self.memory_manager.remove_session_keys(current_session_id, (PENDING_DAY,))
         extracted = await self.entity_extractor.extract(user_message)
         pending_field = self._infer_pending_field(session_state)
         candidates = dict(extracted or {})
@@ -330,6 +337,8 @@ class ReservationAgent:
         editing_field = session.get("editing_field")
 
         if editing_field in self.EDITABLE_FIELDS:
+            if editing_field == "date":
+                user_message = continue_date(user_message, session, clock=self.clock)
             value = self._infer_value_for_field(editing_field, user_message)
             if value is not None:
                 if editing_field == "date":
@@ -530,6 +539,8 @@ class ReservationAgent:
             }
 
         if intent == EDIT_FIELD and field:
+            if field == "date":
+                user_message = continue_date(user_message, session, clock=self.clock)
             value = await self._extract_direct_edit_value(field, user_message)
             if value is not None:
                 updated_session = self._apply_confirmation_edit(session_id, field, value)
@@ -599,24 +610,12 @@ class ReservationAgent:
             return parse_people_count(user_message)
 
         if field_name == "date":
-            match = re.search(r"\b[0-9]{4}-[0-9]{2}-[0-9]{2}\b", user_message)
-            if match:
-                return self._normalize_and_validate_field(
-                    field_name,
-                    match.group(0),
-                )
             parsed_date = DatetimeParser.parse_date(user_message, clock=self.clock)
             if parsed_date:
                 return self._normalize_and_validate_field(field_name, parsed_date)
             return None
 
         if field_name == "time":
-            match = re.search(r"\b(?:[01][0-9]|2[0-3]):[0-5][0-9]\b", user_message)
-            if match:
-                return self._normalize_and_validate_field(
-                    field_name,
-                    match.group(0),
-                )
             parsed_time = DatetimeParser.parse_time(user_message)
             if parsed_time:
                 return self._normalize_and_validate_field(field_name, parsed_time)

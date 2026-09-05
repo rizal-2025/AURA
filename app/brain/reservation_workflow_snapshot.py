@@ -524,6 +524,20 @@ def _decode_v2(
         raise _validation_error()
     _validate_payload_size(payload)
 
+    # Additive bounded v2 field; old payloads remain byte-for-byte compatible.
+    # It is meaningful only while collecting/editing a reservation date.
+    pending_day = payload.get("pending_reservation_day")
+    if "pending_reservation_day" in payload:
+        if type(pending_day) is not int or not 1 <= pending_day <= 31:
+            raise _validation_error()
+        update_date = (payload.get("update_reservation_stage") == "input_value"
+                       and payload.get("editing_field") == "date")
+        create_date = (payload.get("intent") == "reservation"
+                       and (payload.get("date") is None or payload.get("editing_field") == "date"))
+        if not (update_date or create_date):
+            raise _validation_error()
+        payload = {key: value for key, value in payload.items() if key != "pending_reservation_day"}
+
     keys = set(payload)
     if RESERVATION_PERSISTENCE_STATE in keys:
         validated = _validated_blocker(payload)
@@ -542,6 +556,8 @@ def _decode_v2(
     else:
         raise _validation_error()
 
+    if pending_day is not None:
+        validated["pending_reservation_day"] = pending_day
     _validate_payload_size(validated)
     return ReservationWorkflowSnapshot(validated)
 
@@ -663,6 +679,8 @@ def capture_reservation_workflow_snapshot_v2(
                     ),
                 }
             )
+        if state.get("pending_reservation_day") is not None:
+            update_payload["pending_reservation_day"] = state["pending_reservation_day"]
         return build_workflow_snapshot_v2(update_payload)
     if cancel_stage is not None:
         if state.get("editing_field") is not None:
@@ -704,6 +722,8 @@ def capture_reservation_workflow_snapshot_v2(
                 "awaiting_confirmation": awaiting_confirmation,
                 "editing_field": state.get("editing_field"),
                 "asked_fields": list(state.get("asked_fields") or []),
+                **({"pending_reservation_day": state["pending_reservation_day"]}
+                   if state.get("pending_reservation_day") is not None else {}),
             },
         )
     if awaiting_confirmation or state.get("editing_field") is not None:

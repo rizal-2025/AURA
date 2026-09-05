@@ -104,6 +104,27 @@ class DatetimeParser:
         normalized = " ".join(text.casefold().strip().split())
         today = reference_date or current_local_date(clock=clock)
 
+        month_names = "|".join(MONTHS)
+        named_dates = list(re.finditer(
+            rf"(?<![0-9])([0-9]{{1,2}})\s+({month_names})(?:\s+([0-9]+))?\b",
+            normalized,
+        ))
+        for match in named_dates:
+            if match[3] is not None and len(match[3]) != 4:
+                # A following time/party-size belongs to another field, not a
+                # malformed year. Other numeric year-like suffixes fail closed.
+                if not re.match(r"\s+(?:pagi|siang|sore|malam|am|pm|orang|people|persons|guests)\b", normalized[match.end():]):
+                    return None
+        other_dates = re.finditer(
+            rf"\b(?:[0-9]{{4}}-[0-9]{{2}}-[0-9]{{2}}|[0-9]{{1,2}}/[0-9]{{1,2}}/[0-9]{{4}}|(?:{month_names})\s+[0-9]{{1,2}}(?:st|nd|rd|th)?\b)", normalized)
+        absolute_count = len(named_dates) + sum(
+            not any(named.start() <= match.start() < named.end() for named in named_dates)
+            for match in other_dates
+        )
+        relative = re.findall(rf"\b(?:hari ini|today|besok|tomorrow|lusa|{'|'.join(WEEKDAYS)})\b", normalized)
+        if absolute_count > 1 or len(relative) > 1 or (absolute_count and relative):
+            return None
+
         for day_name, weekday in WEEKDAYS.items():
             day_match = re.search(
                 rf"\b(?:hari\s+)?{day_name}(?:\s+(ini|depan))?\b",
@@ -190,13 +211,40 @@ class DatetimeParser:
         if not isinstance(text, str):
             return None
         normalized = " ".join(text.casefold().strip().split())
+        # Conflicting alternatives must not silently choose the first clock.
+        if len(re.findall(r"\b(?:pagi|siang|sore|malam|a\.?m\.?|p\.?m\.?)\b", normalized)) > 1:
+            return None
+        if len(re.findall(r"(?<![0-9])[0-9]{1,2}[:.][0-9]{2}(?![0-9])", normalized)) > 1:
+            return None
+        period = r"(?:pagi|siang|sore|malam|a\.?m\.?|p\.?m\.?)"
+        hours = "|".join(sorted(NUMBER_HOURS, key=len, reverse=True))
+        clocks = re.findall(
+            rf"(?<![0-9:.])(?:[0-9]{{1,2}}[:.][0-9]+(?:\s*{period}\b)?|(?:{hours}|[0-9]{{1,2}})\s*{period}\b)", normalized)
+        if len(clocks) > 1:
+            return None
+        numeric_clock = re.search(r"(?<![0-9])[0-9]+[:.]([0-9]+)", normalized)
+        if numeric_clock and len(numeric_clock[1]) != 2:
+            return None
 
         canonical_match = re.search(
-            r"(?<![0-9])([01]?[0-9]|2[0-3])([:.])([0-5][0-9])(?![0-9])",
+            r"(?<![0-9:.])([0-9]{1,2})[:.]([0-9]{2})(?![0-9:.])"
+            r"(?:\s*(a\.?m\.?|p\.?m\.?|pagi|siang|sore|malam)\b)?",
             normalized,
         )
         if canonical_match:
-            return f"{int(canonical_match.group(1)):02d}:{canonical_match.group(3)}"
+            hour, minute = map(int, canonical_match.group(1, 2))
+            period = (canonical_match.group(3) or "").replace(".", "")
+            if hour > 23 or minute > 59:
+                return None
+            if period in {"am", "pm"}:
+                if not 1 <= hour <= 12:
+                    return None
+                hour = hour % 12 + (12 if period == "pm" else 0)
+            elif period:
+                hour = DatetimeParser._qualify_hour(hour, period)
+                if hour is None:
+                    return None
+            return f"{hour:02d}:{minute:02d}"
 
         english_clock_match = re.search(
             r"(?<![0-9])([0-9]{1,2})(?::([0-5][0-9]))?\s*(a\.?m\.?|p\.?m\.?)\b",
@@ -328,9 +376,9 @@ class DatetimeParser:
         if qualifier == "pagi":
             return 0 if hour == 12 else hour
         if qualifier == "siang":
-            if hour == 12:
-                return 12
-            return hour + 12 if 1 <= hour <= 11 else None
+            # Indonesian noon is not an alias for English PM: 11 siang is
+            # 11:00, whereas 1/2/3 siang are afternoon hours.
+            return {11: 11, 12: 12, 1: 13, 2: 14, 3: 15}.get(hour)
         if qualifier == "sore":
             return hour + 12 if 3 <= hour <= 7 else None
         if qualifier == "malam":

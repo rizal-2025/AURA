@@ -129,6 +129,7 @@ def publish_create_success(
             "reservation_reference": reference,
         }
     )
+    state.pop("pending_reservation_day", None)
     state.pop(RESERVATION_PERSISTENCE_STATE, None)
     memory_manager.replace_conversation(memory_key, state)
     memory_manager.clear_reservation_mutation_guard(memory_key)
@@ -140,6 +141,7 @@ def publish_update_success(
     snapshot: ConversationSnapshot,
 ) -> None:
     state = snapshot.materialize()
+    state.pop("pending_reservation_day", None)
     state["update_reservation_stage"] = None
     state["update_reservation_candidate_references"] = []
     state["update_reservation_page_cursor"] = None
@@ -157,6 +159,7 @@ def publish_cancel_success(
     snapshot: ConversationSnapshot,
 ) -> None:
     state = snapshot.materialize()
+    state.pop("pending_reservation_day", None)
     state["cancel_reservation_stage"] = None
     state["cancel_reservation_candidate_references"] = []
     state["cancel_reservation_page_cursor"] = None

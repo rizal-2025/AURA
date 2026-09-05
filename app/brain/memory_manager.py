@@ -50,6 +50,7 @@ _RESERVATION_GUARD_STATUSES = frozenset(
 _RESERVATION_GUARD_OPERATIONS = frozenset({"create", "update", "cancel"})
 RESERVATION_WORKFLOW_MEMORY_KEYS = frozenset(
     {
+        "pending_reservation_day",
         "intent",
         "name",
         "people",

@@ -461,7 +461,8 @@ class IndonesianTimeParsingTests(unittest.TestCase):
             ("pukul tujuh malam", "19:00"),
             ("jam 7 pagi", "07:00"),
             ("jam 7 sore", "19:00"),
-            ("jam 7 siang", "19:00"),
+            # A conflicting day period is clarified, never changed to night.
+            ("jam 7 siang", None),
         ):
             with self.subTest(message=message):
                 self.assertEqual(DatetimeParser.parse_time(message), expected)

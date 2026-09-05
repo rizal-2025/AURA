@@ -2,7 +2,7 @@
 
 import os
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from threading import Event
 from time import monotonic
 from types import SimpleNamespace
@@ -262,7 +262,7 @@ class PublicReservationAPIPostgreSQLTests(PersistedUpdateContract, unittest.Test
                 ("Sherly", 2, "2026-09-05", "12:57"),
             )
 
-    def _serialized_updates(self, initial_date, first, second):
+    def _serialized_updates(self, initial_date, first, second, *, advance_waiter_clock=False):
         """Pause A immediately before SQL UPDATE; prove B waits on A in PG."""
         created = self.client.post(
             "/reservation/", json={**self.body("Sherly"), "date": initial_date},
@@ -273,9 +273,10 @@ class PublicReservationAPIPostgreSQLTests(PersistedUpdateContract, unittest.Test
             Event(), Event(), Event(), Event()
         )
         pids = {}
+        waiter_now = [FROZEN_NOW]
 
         def run(label, change):
-            service = ReservationService(clock=lambda: FROZEN_NOW)
+            service = ReservationService(clock=lambda: waiter_now[0] if label == "B" else FROZEN_NOW)
             with self.Session() as db:
                 db.execute(text("SET LOCAL lock_timeout = '5s'"))
                 db.execute(text("SET LOCAL statement_timeout = '10s'"))
@@ -322,6 +323,8 @@ class PublicReservationAPIPostgreSQLTests(PersistedUpdateContract, unittest.Test
                         )
                     if pids["A"] in blockers:
                         blocked = True
+                        if advance_waiter_clock:
+                            waiter_now[0] = FROZEN_NOW + timedelta(minutes=10)
                         break
                     second_done.wait(0.01)
             finally:
@@ -358,6 +361,14 @@ class PublicReservationAPIPostgreSQLTests(PersistedUpdateContract, unittest.Test
         self.assertEqual(a, ("Sherly", 2, "2026-09-05", "13:30"))
         self.assertEqual(b, final)
         self.assertEqual(final, ("Sherly", 2, "2026-09-05", "14:30"))
+
+    def test_waiting_writer_uses_clock_after_lock_acquisition(self):
+        a, b, final = self._serialized_updates(
+            "2026-09-05", ("name", "Sheryl"), ("time", "13:00"), advance_waiter_clock=True,
+        )
+        self.assertEqual(b, "PAST_RESERVATION_TIME")
+        self.assertEqual(a, final)
+        self.assertEqual(final, ("Sheryl", 2, "2026-09-05", "12:57"))
 
     def test_two_session_name_then_people_preserves_non_target_fields(self):
         a, b, final = self._serialized_updates(

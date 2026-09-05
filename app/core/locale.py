@@ -344,6 +344,10 @@ _TEXT: dict[str, dict[SupportedLocale, str]] = {
         SupportedLocale.ID_ID: "Mohon lengkapi data reservasi.",
         SupportedLocale.EN_US: "Please complete the reservation details.",
     },
+    "clarify_inferred_year": {
+        SupportedLocale.ID_ID: "Tanpa tahun, tanggal itu akan ditafsirkan sebagai tahun {year}. Sebutkan tanggal lengkap beserta tahun sebelum reservasi diperbarui.",
+        SupportedLocale.EN_US: "Without a year, that date would mean {year}. Please provide the full date including the year before updating the reservation.",
+    },
     "clarify_date_parts": {
         SupportedLocale.ID_ID: "Tanggal {day} bulan dan tahun berapa?",
         SupportedLocale.EN_US: "Which month and year should I use for the {day}th?",

@@ -36,6 +36,7 @@ from app.core.transaction_errors import (
     TransactionSessionUnusableError,
 )
 from app.services.reservation.service import ReservationService
+from app.utils.reservation_date_input import PENDING_DAY, continue_date, inferred_year
 from app.services.reservation.dto import ReservationSelectionPage
 from app.services.reservation.errors import (
     PastReservationDateError,
@@ -133,6 +134,8 @@ class UpdateReservationAgent:
         if stage == self.SELECT_FIELD:
             selection = self._select_field(session, user_message)
             selected_field = session.get("editing_field")
+            if selected_field == "date":
+                continue_date(user_message, session, clock=self.clock)
             normalized_message = normalize_indonesian_text(user_message)
             if (
                 selected_field in self.EDITABLE_FIELDS
@@ -421,6 +424,15 @@ class UpdateReservationAgent:
             }
 
         snapshot = self.memory_manager.snapshot_conversation(session_id)
+        if field_name == "date":
+            user_message = continue_date(user_message, session, clock=self.clock)
+            year = inferred_year(user_message, clock=self.clock)
+            if year is not None:
+                return {
+                    "status": "awaiting_update",
+                    "response": tr("clarify_inferred_year", year=year),
+                    "invalid_input": True,
+                }
         new_value = self._parse_new_value(field_name, user_message)
         if new_value is None:
             return {
@@ -555,6 +567,7 @@ class UpdateReservationAgent:
         }
 
     def _clear_update_state(self, session: dict[str, Any]) -> None:
+        session.pop(PENDING_DAY, None)
         session["update_reservation_stage"] = None
         session["reservation_reference"] = None
         session["editing_field"] = None
